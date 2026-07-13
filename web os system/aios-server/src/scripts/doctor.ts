@@ -46,6 +46,23 @@ async function main() {
   const redisUrl = new URL(config.redisUrl);
   line(await tcpOpen(redisUrl.hostname, Number(redisUrl.port || 6379)), `Redis reachable (${redisUrl.host})`);
 
+  // Memory (Phase 1): Qdrant vector store on loopback. Soft-fail if memory is
+  // disabled or config.memory is not yet wired (older builds).
+  try {
+    const mem = (config as { memory?: { enabled?: boolean; qdrantUrl?: string } }).memory;
+    if (mem?.enabled === false) {
+      line(true, 'Qdrant reachable', 'skipped (MEMORY_ENABLED=false)');
+    } else {
+      const qUrl = new URL(mem?.qdrantUrl || process.env.QDRANT_URL || 'http://127.0.0.1:6333');
+      const host = qUrl.hostname || '127.0.0.1';
+      const port = Number(qUrl.port || 6333);
+      line(await tcpOpen(host, port), `Qdrant reachable (${host}:${port})`, 'run: docker compose up -d qdrant');
+    }
+  } catch {
+    const ok = await tcpOpen('127.0.0.1', 6333);
+    line(ok, 'Qdrant reachable (127.0.0.1:6333)', 'run: docker compose up -d qdrant');
+  }
+
   await cli(config.engines.claudePath, 'claude CLI');
   await cli(config.engines.codexPath, 'codex CLI');
 
