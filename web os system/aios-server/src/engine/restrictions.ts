@@ -15,6 +15,12 @@ export interface AgentRestrictions {
   cloudWrite: boolean;
   /** 允許執行 Shell 指令。 */
   shell: boolean;
+  /**
+   * 允許把記憶內容送到雲端 embedding API（OpenRouter / Google）建立語意索引。
+   * false 時仍寫入 memory/wiki log.md，但跳過 embed → Qdrant。
+   * 紅線 redactor（剔除密鑰／個資）一律生效，不受此旗標影響。
+   */
+  cloudEmbedding: boolean;
   /** 額外的自訂禁止事項（自由文字，逐行列出）。 */
   notes?: string;
 }
@@ -25,6 +31,7 @@ export const DEFAULT_RESTRICTIONS: AgentRestrictions = {
   sendEmail: false,
   cloudWrite: true,
   shell: true,
+  cloudEmbedding: true,
 };
 
 export function parseRestrictions(raw: unknown): AgentRestrictions {
@@ -35,6 +42,7 @@ export function parseRestrictions(raw: unknown): AgentRestrictions {
     sendEmail: r.sendEmail ?? DEFAULT_RESTRICTIONS.sendEmail,
     cloudWrite: r.cloudWrite ?? DEFAULT_RESTRICTIONS.cloudWrite,
     shell: r.shell ?? DEFAULT_RESTRICTIONS.shell,
+    cloudEmbedding: r.cloudEmbedding ?? DEFAULT_RESTRICTIONS.cloudEmbedding,
     notes: typeof r.notes === 'string' && r.notes.trim() ? r.notes.trim() : undefined,
   };
 }
@@ -47,6 +55,7 @@ export function restrictionsToRules(r: AgentRestrictions): string {
   if (!r.sendEmail) lines.push('- 禁止寄送電子郵件或任何對外訊息。');
   if (!r.cloudWrite) lines.push('- 禁止建立、修改或刪除雲端檔案（僅能讀取已指派的檔案）。');
   if (!r.shell) lines.push('- 禁止執行任何 Shell／終端機指令。');
+  if (!r.cloudEmbedding) lines.push('- 禁止將記憶內容送往雲端 embedding 服務（僅保留本地 wiki 檔案）。');
   if (r.notes) {
     for (const n of r.notes.split('\n')) {
       const t = n.trim();

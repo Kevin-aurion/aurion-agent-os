@@ -7,6 +7,7 @@ import path from 'node:path';
 import { ulid } from 'ulid';
 import { config } from '../config.js';
 import { prisma } from '../lib/db.js';
+import { parseRestrictions } from '../engine/restrictions.js';
 import { getEmbeddingProvider } from './embedding.js';
 import {
   deletePath,
@@ -156,9 +157,20 @@ function shaOf(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
+/** Load agent.cloudEmbedding restriction (default true). Redactor always applies. */
+async function agentAllowsCloudEmbedding(agentId: string): Promise<boolean> {
+  try {
+    const row = await prisma.agent.findUnique({ where: { id: agentId }, select: { restrictions: true } });
+    return parseRestrictions(row?.restrictions).cloudEmbedding;
+  } catch {
+    return true;
+  }
+}
+
 /**
  * Embed + upsert chunks for a path. Best-effort: on failure logs and returns 0
  * (caller must not fail the run). Writes/updates MemoryDoc only on success.
+ * When agent.cloudEmbedding is false: skip embed (caller still writes log.md).
  */
 async function indexText(
   agentId: string,
@@ -167,9 +179,15 @@ async function indexText(
   text: string,
   extra?: { runId?: string },
 ): Promise<number> {
+  // Redactor is always applied — never gated by cloudEmbedding.
   const redacted = redactSecrets(text);
   const pieces = chunkMarkdown(redacted);
   if (pieces.length === 0) return 0;
+
+  if (!(await agentAllowsCloudEmbedding(agentId))) {
+    log(`cloudEmbedding=false for ${agentId}; skip embed (wiki/log still written if applicable)`);
+    return 0;
+  }
 
   try {
     const provider = getEmbeddingProvider();
@@ -290,6 +308,7 @@ export async function recall(
   if (!config.memory.enabled) return '';
   const q = queryText?.trim();
   if (!q) return '';
+  if (!(await agentAllowsCloudEmbedding(agentId))) return '';
   try {
     const provider = getEmbeddingProvider();
     const [vec] = await provider.embed([redactSecrets(q)]);
@@ -312,6 +331,7 @@ export async function recallHits(
   if (!config.memory.enabled) return [];
   const q = queryText?.trim();
   if (!q) return [];
+  if (!(await agentAllowsCloudEmbedding(agentId))) return [];
   try {
     const provider = getEmbeddingProvider();
     const [vec] = await provider.embed([redactSecrets(q)]);

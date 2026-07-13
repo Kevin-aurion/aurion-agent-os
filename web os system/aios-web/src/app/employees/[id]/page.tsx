@@ -94,6 +94,7 @@ interface AgentRestrictions {
   sendEmail?: boolean;
   cloudWrite?: boolean;
   shell?: boolean;
+  cloudEmbedding?: boolean;
   notes?: string;
 }
 const DEFAULT_RESTRICTIONS: Required<Omit<AgentRestrictions, 'notes'>> & { notes: string } = {
@@ -102,6 +103,7 @@ const DEFAULT_RESTRICTIONS: Required<Omit<AgentRestrictions, 'notes'>> & { notes
   sendEmail: false,
   cloudWrite: true,
   shell: true,
+  cloudEmbedding: true,
   notes: '',
 };
 interface SkillListItem {
@@ -333,6 +335,7 @@ function OverviewTab({ agent }: { agent: AgentDetail }) {
   const [sendEmail, setSendEmail] = useState(initialRestrictions.sendEmail);
   const [cloudWrite, setCloudWrite] = useState(initialRestrictions.cloudWrite);
   const [shell, setShell] = useState(initialRestrictions.shell);
+  const [cloudEmbedding, setCloudEmbedding] = useState(initialRestrictions.cloudEmbedding);
   const [notes, setNotes] = useState(initialRestrictions.notes ?? '');
 
   const patchMutation = useMutation({
@@ -360,6 +363,7 @@ function OverviewTab({ agent }: { agent: AgentDetail }) {
     sendEmail !== initialRestrictions.sendEmail ||
     cloudWrite !== initialRestrictions.cloudWrite ||
     shell !== initialRestrictions.shell ||
+    cloudEmbedding !== initialRestrictions.cloudEmbedding ||
     notes !== (initialRestrictions.notes ?? '');
 
   return (
@@ -459,6 +463,7 @@ function OverviewTab({ agent }: { agent: AgentDetail }) {
                   sendEmail,
                   cloudWrite,
                   shell,
+                  cloudEmbedding,
                   notes: notes.trim() || undefined,
                 },
               })
@@ -507,6 +512,12 @@ function OverviewTab({ agent }: { agent: AgentDetail }) {
             onChange={setShell}
             title="執行 Shell 指令"
             description="允許此員工在工作目錄內執行終端機指令（產生文件、處理資料時通常需要）。"
+          />
+          <RestrictionToggle
+            checked={cloudEmbedding}
+            onChange={setCloudEmbedding}
+            title="雲端 Embedding（語意記憶索引）"
+            description="允許把 memory/wiki 摘要送到雲端 embedding API（OpenRouter Gemini）建立 Qdrant 語意索引。關閉後仍會寫入本地 log.md，但跳過向量化與語意召回。密鑰／個資紅線過濾一律生效。"
           />
         </div>
         <Field label="自訂禁止事項">

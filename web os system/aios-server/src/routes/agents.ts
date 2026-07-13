@@ -26,6 +26,7 @@ const RestrictionsSchema = z
     sendEmail: z.boolean().optional(),
     cloudWrite: z.boolean().optional(),
     shell: z.boolean().optional(),
+    cloudEmbedding: z.boolean().optional(),
     notes: z.string().max(2000).optional(),
   })
   .optional();
