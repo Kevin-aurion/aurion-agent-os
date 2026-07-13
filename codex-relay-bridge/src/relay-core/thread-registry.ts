@@ -24,11 +24,34 @@ export interface TaskRecord {
   lastError: string | null;
 }
 
-/** Project path allowlist (realpath prefix match). TODO(phase2): config */
-export const PROJECT_ALLOWLIST = [
-  "/Users/kevin/Documents/aurion",
-  "/Users/kevin/Documents/Codex",
-] as const;
+/**
+ * Project path allowlist (realpath prefix match).
+ * From `CODEX_BRIDGE_ALLOWLIST` (colon-separated absolute paths).
+ * Unset/empty → default `["/"]` (allow any absolute path on this machine).
+ */
+export function getProjectAllowlist(): string[] {
+  const raw = process.env.CODEX_BRIDGE_ALLOWLIST;
+  if (raw === undefined || raw === "") {
+    return ["/"];
+  }
+  return raw.split(":").filter((p) => p.length > 0);
+}
+
+/** @deprecated Prefer getProjectAllowlist(); re-exported name for public API. */
+export const PROJECT_ALLOWLIST = getProjectAllowlist;
+
+/** True if `real` (already realpath'd absolute path) matches allowlist prefix rules. */
+function isProjectAllowed(real: string, prefixes: string[]): boolean {
+  return prefixes.some((prefix) => {
+    // Strip trailing slashes so "/foo/" and "/foo" match the same.
+    // Root "/" becomes "" → treat as allow any absolute path.
+    const normalized = prefix.replace(/\/+$/, "");
+    if (normalized === "") {
+      return true;
+    }
+    return real === normalized || real.startsWith(normalized + path.sep);
+  });
+}
 
 export function normalizeAndValidateProject(project: string): string {
   if (typeof project !== "string" || project.length === 0) {
@@ -47,9 +70,7 @@ export function normalizeAndValidateProject(project: string): string {
       err,
     );
   }
-  const allowed = PROJECT_ALLOWLIST.some(
-    (prefix) => real === prefix || real.startsWith(prefix + path.sep),
-  );
+  const allowed = isProjectAllowed(real, getProjectAllowlist());
   if (!allowed) {
     throw new BridgeError(
       "invalid_input",

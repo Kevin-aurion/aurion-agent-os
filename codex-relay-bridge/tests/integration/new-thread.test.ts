@@ -23,6 +23,7 @@ describe("new-thread", () => {
     // cleanup leftover env
     delete process.env.FAKE_LOG;
     delete process.env.FAKE_SCRIPT;
+    delete process.env.CODEX_BRIDGE_ALLOWLIST;
   });
 
   it("codex_start_task handshake + thread/start + turn/start; idempotent replay; allowlist reject", async () => {
@@ -86,7 +87,12 @@ describe("new-thread", () => {
       await relay.shutdown();
     }
 
-    // Allowlist reject — fresh relay + fresh log
+    // Allowlist reject — restrict to a temp dir; paths outside (e.g. /etc) must fail.
+    // Default allowlist is "/" (open); set CODEX_BRIDGE_ALLOWLIST to verify the gate still works.
+    const prevAllowlist = process.env.CODEX_BRIDGE_ALLOWLIST;
+    const allowedDir = fs.mkdtempSync(path.join(os.tmpdir(), "crb-allow-"));
+    process.env.CODEX_BRIDGE_ALLOWLIST = allowedDir;
+
     const denyLog = path.join(os.tmpdir(), `crb-deny-${Date.now()}.log`);
     const relay2 = createTestRelay({ fakeLog: denyLog });
     try {
@@ -108,7 +114,28 @@ describe("new-thread", () => {
         const lines = await readJsonLinesAsync(denyLog);
         assert.equal(lines.length, 0, "allowlist reject must not touch app-server");
       }
+
+      // Non-existent path still returns invalid_input (realpath fails before allowlist match)
+      const missing = path.join(allowedDir, "does-not-exist-" + Date.now());
+      await assert.rejects(
+        () =>
+          relay2.startTask({
+            project: missing,
+            message: "should fail",
+            idempotency_key: "key-deny-missing",
+          }),
+        (err: unknown) => {
+          assert.ok(err instanceof BridgeError);
+          assert.equal(err.code, "invalid_input");
+          return true;
+        },
+      );
     } finally {
+      if (prevAllowlist === undefined) {
+        delete process.env.CODEX_BRIDGE_ALLOWLIST;
+      } else {
+        process.env.CODEX_BRIDGE_ALLOWLIST = prevAllowlist;
+      }
       // may not have started child — shutdown is fine
       await relay2.shutdown().catch(() => undefined);
     }
