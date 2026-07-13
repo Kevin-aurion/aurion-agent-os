@@ -27,6 +27,9 @@ web os system/
 ## 怎麼測試
 5 個端對端案例（Chrome 逐步截圖＋GIF），報告在 [`docs/test-report/index.html`](docs/test-report/index.html)。除錯守則：發現 Bug → 修復 → 從頭重測。
 
+## 開發流程（重要）
+本專案採 **Grok 開發 → Opus 4.8 審查** 迴圈：需求交由 Grok CLI 在本地實作，你（Opus）審查、指正、要求重做直到無誤才回報 Kevin。完整規範見根目錄 [`../CLAUDE.md`](../CLAUDE.md) 的「開發流程」章節。
+
 ## 啟動（重點）
 ```bash
 docker compose up -d                     # Postgres + Redis
