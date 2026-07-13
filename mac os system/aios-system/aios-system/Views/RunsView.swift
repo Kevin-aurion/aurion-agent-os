@@ -16,26 +16,58 @@ struct RunsView: View {
     @State private var expandedSteps: Set<String> = []
 
     var body: some View {
-        NavigationSplitView {
-            List(runs, selection: $selectedId) { run in
-                RunRowView(run: run).tag(run.id)
-            }
-            .navigationTitle("執行")
-            .frame(minWidth: 260)
-            .overlay {
-                if loadingList && runs.isEmpty { ProgressView() }
-                else if runs.isEmpty && !loadingList { ContentUnavailableView("尚無執行紀錄", systemImage: "play.circle") }
-            }
-            .toolbar {
-                ToolbarItem(placement: .primaryAction) {
-                    Button { Task { await loadRuns() } } label: {
-                        Image(systemName: "arrow.clockwise")
+        HSplitView {
+            // 左：執行清單
+            Group {
+                if loadingList && runs.isEmpty {
+                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if runs.isEmpty && !loadingList {
+                    ContentUnavailableView("尚無執行紀錄", systemImage: "play.circle")
+                } else {
+                    List(runs, selection: $selectedId) { run in
+                        RunRowView(run: run).tag(run.id)
                     }
-                    .disabled(loadingList)
+                    .listStyle(.sidebar)
                 }
             }
-        } detail: {
-            detailContent
+            .frame(minWidth: 260, idealWidth: 280, maxWidth: 340)
+
+            // 右：詳情
+            Group {
+                if loadingDetail && detail == nil {
+                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let detail {
+                    RunDetailContentView(
+                        detail: detail,
+                        expandedSteps: $expandedSteps
+                    )
+                } else if let errorText {
+                    ContentUnavailableView(errorText, systemImage: "exclamationmark.triangle")
+                } else {
+                    ContentUnavailableView("選擇一個執行以查看詳情", systemImage: "list.bullet.rectangle")
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .navigationTitle("執行")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { Task { await loadRuns() } } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .disabled(loadingList)
+            }
+            if let detail, detail.status.uppercased() == "RUNNING" {
+                ToolbarItem(placement: .destructiveAction) {
+                    Button(role: .destructive) {
+                        Task { await cancelRun(detail.id) }
+                    } label: {
+                        if cancelling { ProgressView().controlSize(.small) }
+                        else { Text("取消") }
+                    }
+                    .disabled(cancelling)
+                }
+            }
         }
         .task { await loadRuns() }
         .onChange(of: selectedId) { _, newValue in
@@ -48,24 +80,6 @@ struct RunsView: View {
                 await loadRuns(silent: true)
                 if let id = selectedId { await loadDetail(id: id, silent: true) }
             }
-        }
-    }
-
-    @ViewBuilder
-    private var detailContent: some View {
-        if loadingDetail && detail == nil {
-            ProgressView().navigationTitle("")
-        } else if let detail {
-            RunDetailContentView(
-                detail: detail,
-                cancelling: cancelling,
-                expandedSteps: $expandedSteps,
-                onCancel: { Task { await cancelRun(detail.id) } }
-            )
-        } else if let errorText {
-            ContentUnavailableView(errorText, systemImage: "exclamationmark.triangle")
-        } else {
-            ContentUnavailableView("選擇一個執行以查看詳情", systemImage: "list.bullet.rectangle")
         }
     }
 
@@ -133,15 +147,12 @@ private struct RunRowView: View {
             HStack {
                 StatusBadge(status: run.status)
                 Text(run.agentId).font(.subheadline).bold().lineLimit(1)
-                Spacer()
+                Spacer(minLength: 0)
             }
-            HStack(spacing: 6) {
-                Text("由 \(run.triggeredBy)")
-                Text("·")
-                Text(formatDate(run.startedAt))
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            Text("由 \(run.triggeredBy) · \(formatDate(run.startedAt))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
         }
         .padding(.vertical, 2)
     }
@@ -149,29 +160,29 @@ private struct RunRowView: View {
 
 private struct RunDetailContentView: View {
     let detail: RunDetail
-    let cancelling: Bool
     @Binding var expandedSteps: Set<String>
-    let onCancel: () -> Void
 
     var body: some View {
         List {
             Section {
-                LabeledContent("代理", value: detail.agentId)
+                labeled("代理", detail.agentId)
                 if let wf = detail.workflowId {
-                    LabeledContent("工作流程", value: wf)
+                    labeled("工作流程", wf)
                 }
-                LabeledContent("觸發者", value: detail.triggeredBy)
-                LabeledContent("開始時間", value: formatDate(detail.startedAt))
+                labeled("觸發者", detail.triggeredBy)
+                labeled("開始時間", formatDate(detail.startedAt))
                 if let finishedAt = detail.finishedAt {
-                    LabeledContent("結束時間", value: formatDate(finishedAt))
+                    labeled("結束時間", formatDate(finishedAt))
                 }
-                LabeledContent {
+                HStack(alignment: .top) {
+                    Text("狀態").foregroundStyle(.secondary)
+                    Spacer(minLength: 12)
                     StatusBadge(status: detail.status)
-                } label: {
-                    Text("狀態")
                 }
             } header: {
                 Text("執行 \(detail.id)")
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("步驟時間軸") {
@@ -188,19 +199,18 @@ private struct RunDetailContentView: View {
                 }
             }
         }
-        .navigationTitle("執行詳情")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                if detail.status.uppercased() == "RUNNING" {
-                    Button(role: .destructive) {
-                        onCancel()
-                    } label: {
-                        if cancelling { ProgressView().controlSize(.small) }
-                        else { Text("取消") }
-                    }
-                    .disabled(cancelling)
-                }
-            }
+    }
+
+    private func labeled(_ title: String, _ value: String) -> some View {
+        HStack(alignment: .top) {
+            Text(title)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: true, vertical: false)
+            Spacer(minLength: 12)
+            Text(value)
+                .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
         }
     }
 
@@ -222,15 +232,18 @@ private struct StepRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Button(action: onToggle) {
-                HStack {
+                HStack(alignment: .top) {
                     Text("第 \(step.round) 輪").font(.caption).foregroundStyle(.secondary)
-                    Text(step.stepKey).font(.body).bold()
+                    Text(step.stepKey)
+                        .font(.body).bold()
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                     StatusBadge(status: step.status)
                     if let approved = step.approved {
                         Image(systemName: approved ? "checkmark.circle.fill" : "xmark.circle")
                             .foregroundStyle(approved ? .green : .secondary)
                     }
-                    Spacer()
+                    Spacer(minLength: 0)
                     if hasDetail {
                         Image(systemName: expanded ? "chevron.up" : "chevron.down")
                             .font(.caption)
@@ -245,7 +258,10 @@ private struct StepRowView: View {
                 if let verdict = step.verdict, !verdict.isEmpty {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("判定").font(.caption).foregroundStyle(.secondary)
-                        Text(verdict).font(.callout).textSelection(.enabled)
+                        Text(verdict)
+                            .font(.callout)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
                     }
                 }
                 if let output = step.output, !output.isEmpty {
@@ -253,6 +269,7 @@ private struct StepRowView: View {
                         Text("輸出").font(.caption).foregroundStyle(.secondary)
                         Text(output)
                             .font(.system(.callout, design: .monospaced))
+                            .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                     }
                 }

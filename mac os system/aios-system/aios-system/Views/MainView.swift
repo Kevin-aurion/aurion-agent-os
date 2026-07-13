@@ -10,7 +10,7 @@ import SwiftUI
 
 /// Top-level sidebar sections of the authenticated app shell.
 enum MainSection: String, CaseIterable, Identifiable {
-    case dashboard, agents, runs, settings
+    case dashboard, agents, skills, workflows, runs, org, audit, settings
 
     var id: String { rawValue }
 
@@ -18,7 +18,11 @@ enum MainSection: String, CaseIterable, Identifiable {
         switch self {
         case .dashboard: return "總覽"
         case .agents: return "員工"
+        case .skills: return "技能"
+        case .workflows: return "工作流"
         case .runs: return "執行"
+        case .org: return "組織"
+        case .audit: return "稽核"
         case .settings: return "設定"
         }
     }
@@ -27,7 +31,11 @@ enum MainSection: String, CaseIterable, Identifiable {
         switch self {
         case .dashboard: return "square.grid.2x2"
         case .agents: return "person.2.fill"
+        case .skills: return "wrench.and.screwdriver"
+        case .workflows: return "arrow.triangle.branch"
         case .runs: return "play.circle"
+        case .org: return "building.2"
+        case .audit: return "doc.text.magnifyingglass"
         case .settings: return "gearshape"
         }
     }
@@ -59,7 +67,11 @@ struct MainView: View {
         switch selection ?? .dashboard {
         case .dashboard: DashboardPane()
         case .agents: AgentsView()
+        case .skills: SkillsView()
+        case .workflows: WorkflowsView()
         case .runs: RunsView()
+        case .org: OrgView()
+        case .audit: AuditView()
         case .settings: SettingsView()
         }
     }
@@ -101,20 +113,8 @@ private struct SidebarFooter: View {
 
 // MARK: - Dashboard
 
-/// Loose shape for GET /api/dashboard/summary — fields are optional since the
-/// exact backend payload may grow; missing keys simply render as placeholders.
-private struct DashboardSummary: Decodable {
-    let agentCount: Int?
-    let activeAgents: Int?
-    let activeRuns: Int?
-    let runsToday: Int?
-    let pendingSkillReviews: Int?
-    let integrationsConnected: Int?
-    let workflowCount: Int?
-}
-
-/// Dashboard/overview pane: quick stat tiles from the summary endpoint plus a
-/// compact live activity feed sourced from `app.activity`.
+/// Dashboard/overview pane: quick stat tiles from the nested summary endpoint
+/// plus a compact live activity feed sourced from `app.activity`.
 struct DashboardPane: View {
     @Environment(AppState.self) private var app
     @State private var summary: DashboardSummary?
@@ -152,14 +152,32 @@ struct DashboardPane: View {
         .task { await load() }
     }
 
+    private var activeAgents: Int? { summary?.agents.active }
+    private var enabledWorkflows: Int? { summary?.workflows.enabled }
+    private var runsTodayTotal: Int? {
+        guard let runs = summary?.runsToday else { return nil }
+        return runs.values.reduce(0, +)
+    }
+    private var skillsTotal: Int? {
+        guard let skills = summary?.skills else { return nil }
+        return skills.values.reduce(0, +)
+    }
+    private var pendingSkills: Int? {
+        summary?.skills["AWAITING_USER_CONFIRM"]
+    }
+    private var connectedAccountsTotal: Int? {
+        guard let accounts = summary?.connectedAccounts else { return nil }
+        return accounts.reduce(0) { $0 + $1.count }
+    }
+
     private var statGrid: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12)], spacing: 12) {
-            StatTile(title: "員工數", value: summary?.agentCount, systemImage: "person.2.fill")
-            StatTile(title: "執行中", value: summary?.activeRuns, systemImage: "play.circle.fill")
-            StatTile(title: "今日執行", value: summary?.runsToday, systemImage: "calendar")
-            StatTile(title: "待審技能", value: summary?.pendingSkillReviews, systemImage: "checkmark.seal")
-            StatTile(title: "已連線整合", value: summary?.integrationsConnected, systemImage: "link")
-            StatTile(title: "工作流程", value: summary?.workflowCount, systemImage: "flowchart")
+            StatTile(title: "活躍員工", value: activeAgents, systemImage: "person.2.fill")
+            StatTile(title: "今日執行", value: runsTodayTotal, systemImage: "calendar")
+            StatTile(title: "已啟用工作流", value: enabledWorkflows, systemImage: "arrow.triangle.branch")
+            StatTile(title: "技能總數", value: skillsTotal, systemImage: "wrench.and.screwdriver")
+            StatTile(title: "待審技能", value: pendingSkills, systemImage: "checkmark.seal")
+            StatTile(title: "已連線帳號", value: connectedAccountsTotal, systemImage: "link")
         }
     }
 
@@ -171,6 +189,7 @@ struct DashboardPane: View {
                     HStack(spacing: 16) {
                         EngineBadge(name: "Claude", engine: preflight.engines.claude)
                         EngineBadge(name: "Codex", engine: preflight.engines.codex)
+                        EngineBadge(name: "Grok", engine: preflight.engines.grok)
                     }
                 }
             }

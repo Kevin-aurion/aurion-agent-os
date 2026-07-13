@@ -18,6 +18,7 @@ struct ContentView: View {
                 MainView()
             }
         }
+        .frame(minWidth: 1000, minHeight: 700)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

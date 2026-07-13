@@ -10,9 +10,23 @@
 		0A8784823003B929008A31B9 /* aios-system.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "aios-system.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		0A8784A03003B929008A31B9 /* Exceptions for "aios-system" folder in "aios-system" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Core/CLAUDE.md,
+				Views/CLAUDE.md,
+			);
+			target = 0A8784813003B929008A31B9 /* aios-system */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		0A8784843003B929008A31B9 /* aios-system */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				0A8784A03003B929008A31B9 /* Exceptions for "aios-system" folder in "aios-system" target */,
+			);
 			path = "aios-system";
 			sourceTree = "<group>";
 		};
@@ -258,7 +272,9 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				CODE_SIGN_ENTITLEMENTS = "aios-system.entitlements";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Info.plist";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -290,7 +306,9 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
+				CODE_SIGN_ENTITLEMENTS = "aios-system.entitlements";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Info.plist";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

@@ -62,6 +62,9 @@ struct SettingsView: View {
                     LabeledContent("Codex Engine") {
                         engineValue(preflight.engines.codex)
                     }
+                    LabeledContent("Grok Engine") {
+                        engineValue(preflight.engines.grok)
+                    }
                 } else {
                     Text(loading ? "載入中…" : "尚無 Preflight 資料").foregroundStyle(.secondary)
                 }
