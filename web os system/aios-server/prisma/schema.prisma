@@ -399,3 +399,18 @@ model Lesson {
   status    String   @default("pending")
   createdAt DateTime @default(now())
 }
+
+// Tracks which wiki/summary paths have been embedded into Qdrant (index
+// metadata only — never stores wiki body text; L1 markdown remains truth).
+model MemoryDoc {
+  id         String   @id
+  agentId    String
+  sourceType String // 'wiki' | 'run_summary' | 'chat_summary'
+  path       String
+  sha256     String
+  chunkCount Int      @default(0)
+  indexedAt  DateTime @default(now())
+
+  @@unique([agentId, path])
+  @@index([agentId])
+}

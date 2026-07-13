@@ -58,6 +58,24 @@ export const config = {
     codexPath: opt('CODEX_CLI_PATH', 'codex'),
     grokPath: opt('GROK_CLI_PATH', 'grok'),
   },
+
+  // Memory (Phase 1): L1 wiki on disk is source of truth; L3 Qdrant is a
+  // rebuildable semantic index. When enabled=false every memory I/O is no-op.
+  memory: {
+    enabled: opt('MEMORY_ENABLED', 'true').toLowerCase() !== 'false',
+    qdrantUrl: opt('QDRANT_URL', 'http://127.0.0.1:6333'),
+    collection: 'aios_memory',
+    // openrouter | google — adapter interface keeps call sites provider-agnostic.
+    embeddingProvider: opt('EMBEDDING_PROVIDER', 'openrouter'),
+    openrouterBaseUrl: opt('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
+    openrouterApiKey: opt('OPENROUTER_API_KEY'),
+    // Confirmed OpenRouter model id (openrouter.ai/google/gemini-embedding-001).
+    // Default vector size 3072 (Google gemini-embedding-001 default; also supports 768/1536).
+    embeddingModel: opt('EMBEDDING_MODEL', 'google/gemini-embedding-001'),
+    embeddingDimension: Number(opt('EMBEDDING_DIMENSION', '3072')),
+    // Fallback when EMBEDDING_PROVIDER=google (direct Google Gemini embeddings API).
+    geminiApiKey: opt('GEMINI_API_KEY'),
+  },
 } as const;
 
 export const paths = {
