@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "description": "AIOS local-first agent orchestration server (API + WebSocket hub + engine + scheduler)",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
@@ -16,7 +18,9 @@
     "doctor": "tsx src/scripts/doctor.ts",
     "typecheck": "tsc --noEmit"
   },
-  "prisma": { "schema": "prisma/schema.prisma" },
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  },
   "dependencies": {
     "@azure/msal-node": "^2.16.2",
     "@fastify/cors": "^10.0.1",
@@ -24,6 +28,7 @@
     "@googleapis/drive": "^8.14.0",
     "@googleapis/gmail": "^7.0.0",
     "@prisma/client": "^5.22.0",
+    "@qdrant/js-client-rest": "^1.18.0",
     "argon2": "^0.41.1",
     "bullmq": "^5.28.1",
     "cron-parser": "^4.9.0",

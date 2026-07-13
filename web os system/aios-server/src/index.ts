@@ -40,6 +40,9 @@ async function main() {
   // ── Scheduler (BullMQ repeatable jobs) — started if present ─────────────────
   await startSchedulerIfPresent();
 
+  // ── Memory (Qdrant collection) — best-effort, never blocks startup ──────────
+  await ensureMemoryCollectionIfPresent(app);
+
   await app.listen({ host: '127.0.0.1', port: config.httpPort });
   app.log.info(`AIOS server on http://127.0.0.1:${config.httpPort}  (ws: /ws)  tz=${config.tz}`);
 
@@ -83,6 +86,18 @@ async function startSchedulerIfPresent() {
     if (m.startScheduler) await m.startScheduler();
   } catch (e: any) {
     if (e?.code !== 'ERR_MODULE_NOT_FOUND') throw e;
+  }
+}
+
+async function ensureMemoryCollectionIfPresent(app: import('fastify').FastifyInstance) {
+  try {
+    const m: any = await import('./memory/index.js');
+    if (m.ensureCollection) {
+      await m.ensureCollection();
+      app.log.info('memory: Qdrant collection ready');
+    }
+  } catch (e: any) {
+    app.log.warn({ err: e }, 'memory: ensureCollection failed (continuing without vector index)');
   }
 }
 
