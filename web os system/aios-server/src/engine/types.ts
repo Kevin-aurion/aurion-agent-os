@@ -94,6 +94,8 @@ export interface CompiledManifest {
   restrictions: import('./restrictions.js').AgentRestrictions;
   skills: CompiledSkill[];
   steps: Step[];
+  /** L1 core wiki pages (index.md + facts.md) injected into the system prompt. */
+  memoryCore: string;
 }
 
 export interface RoundRecord {
