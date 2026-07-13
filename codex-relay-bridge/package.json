@@ -1,0 +1,24 @@
+{
+  "name": "codex-relay-bridge",
+  "version": "0.1.0",
+  "description": "Codex Relay Bridge — MCP server bridging Claude Code to Codex App Server",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "dist/main.js",
+  "scripts": {
+    "gen:types": "bash scripts/generate-types.sh",
+    "build": "npm run gen:types && tsc",
+    "test": "npm run gen:types && node --import tsx --test --test-concurrency=1 tests/integration/*.test.ts",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}
