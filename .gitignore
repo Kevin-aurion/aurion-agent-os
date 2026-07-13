@@ -1,0 +1,48 @@
+# ============ AIOS (aurion-agent-os) .gitignore ============
+
+# ---- Secrets: NEVER commit real credentials ----
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.key
+id_rsa*
+*.local
+
+# ---- Node / web build artifacts ----
+node_modules/
+.next/
+dist/
+build/
+out/
+*.tsbuildinfo
+.turbo/
+npm-debug.log*
+
+# ---- Xcode / macOS build artifacts ----
+DerivedData/
+.build/
+**/xcuserdata/
+*.xcuserstate
+*.xcuserdatad
+
+# ---- OS junk ----
+.DS_Store
+*.log
+
+# ============ Not part of this repo ============
+# Runtime data (regenerated from the DB)
+/MyAgent/
+/aios-data/
+
+# Reference framework (read-only, do not develop or publish)
+/lazyoffice-system-main/
+
+# Unrelated projects
+/meeting-voice-assistant/
+/監測系統/
+
+# Local tooling / backups
+/.claude/
+/web os system/backups/

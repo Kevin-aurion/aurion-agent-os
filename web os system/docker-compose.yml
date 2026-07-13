@@ -1,0 +1,42 @@
+# AIOS local-first stores. Everything binds to 127.0.0.1 only — nothing is
+# reachable off this machine. The Node backend (aios-server) and Next.js web
+# app run on the HOST (the engine must spawn the host `claude`/`codex` CLIs and
+# open the Codex.app, which is impossible from inside a Linux container).
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: aios-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: aios
+      POSTGRES_PASSWORD: aios
+      POSTGRES_DB: aios
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - aios_pgdata:/var/lib/postgresql/data
+      - ./backups:/backups
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aios"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: aios-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy noeviction
+    ports:
+      - "127.0.0.1:6380:6379"
+    volumes:
+      - aios_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  aios_pgdata: {}
+  aios_redis: {}

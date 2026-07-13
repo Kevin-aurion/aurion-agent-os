@@ -1,0 +1,401 @@
+// AIOS local-first data model. All third-party tokens are stored ONLY in the
+// *Enc columns as AES-256-GCM ciphertext; the key lives only in .env.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Enums ────────────────────────────────────────────────────────────────────
+enum UserRole {
+  OWNER
+  TRAINER
+  MEMBER
+}
+
+enum Provider {
+  MICROSOFT
+  GOOGLE
+}
+
+enum AccountStatus {
+  CONNECTED
+  EXPIRED
+  ERROR
+  DISCONNECTED
+}
+
+enum CloudRefKind {
+  FILE
+  FOLDER
+}
+
+enum Engine {
+  CLAUDE_CODE
+  CODEX
+  GROK
+}
+
+enum AgentStatus {
+  ACTIVE
+  PAUSED
+  ARCHIVED
+}
+
+enum SkillOrigin {
+  UPLOADED
+  BUILTIN
+  CLI_GENERATED
+}
+
+enum SkillKind {
+  PROMPT_MANUAL
+  TOOL_MODULE
+  COMPUTER_CONTROL
+}
+
+enum SkillReview {
+  PENDING_UNDERSTANDING
+  AWAITING_USER_CONFIRM
+  CONFIRMED
+  REJECTED
+}
+
+// Where a skill runs: headless CLI (claude/codex exec), the desktop app (Codex
+// computer-use / record-replay), or directly as a deterministic tool.
+enum ExecutionEnv {
+  CLI
+  DESKTOP_APP
+  DIRECT
+}
+
+enum StepType {
+  DO
+  TOOL
+  AGENT
+  CONDITION
+  NOTIFY
+  COMPUTER_CONTROL
+}
+
+enum RunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  AWAITING_REVIEW
+  CANCELLED
+}
+
+enum MessageRole {
+  USER
+  AGENT
+  SYSTEM
+}
+
+enum Channel {
+  LINE
+  TELEGRAM
+  SLACK
+  DISCORD
+}
+
+enum BindingKind {
+  USER
+  GROUP
+  ROOM
+}
+
+// ── Identity & auth (local only) ─────────────────────────────────────────────
+model User {
+  id            String    @id
+  email         String    @unique
+  displayName   String
+  passwordHash  String
+  role          UserRole  @default(OWNER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  sessions          Session[]
+  connectedAccounts ConnectedAccount[]
+  agents            Agent[]
+  conversations     Conversation[]
+}
+
+model Session {
+  id        String    @id
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  client    String
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+  @@index([userId])
+}
+
+// ── Connected cloud accounts (M365 / Google) ─────────────────────────────────
+model ConnectedAccount {
+  id                 String        @id
+  userId             String
+  user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider           Provider
+  providerAccountId  String
+  email              String
+  scopes             String[]
+  accessTokenEnc     String
+  refreshTokenEnc    String
+  accessTokenExpires DateTime
+  status             AccountStatus @default(CONNECTED)
+  lastSyncAt         DateTime?
+  meta               Json?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  cloudFiles CloudFileRef[]
+  @@unique([userId, provider, providerAccountId])
+}
+
+model CloudFileRef {
+  id         String           @id
+  accountId  String
+  account    ConnectedAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  provider   Provider
+  externalId String
+  path       String
+  name       String
+  mimeType   String?
+  kind       CloudRefKind
+  webUrl     String?
+  meta       Json?
+  createdAt  DateTime         @default(now())
+
+  agentTargets AgentFileTarget[]
+  @@unique([accountId, externalId])
+}
+
+// ── Agents ("employees") ─────────────────────────────────────────────────────
+model Agent {
+  id            String      @id
+  slug          String      @unique
+  name          String
+  description   String
+  department    String      @default("未分類")
+  avatar        String?
+  rolePrompt    String
+  engineExecute Engine      @default(CLAUDE_CODE)
+  /// Verifier engine; null = auto (the opposite of engineExecute).
+  engineVerify  Engine?
+  /// Capability restrictions, enforced at prompt + CLI-flag level:
+  /// { webSearch, computerUse, sendEmail, cloudWrite, shell: boolean, notes?: string }
+  restrictions  Json?
+  maxRounds     Int         @default(5)
+  status        AgentStatus @default(ACTIVE)
+  createdBy     String
+  creator       User        @relation(fields: [createdBy], references: [id])
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  deletedAt     DateTime?
+
+  skills        AgentSkill[]
+  fileTargets   AgentFileTarget[]
+  workflows     Workflow[]
+  runs          Run[]
+  conversations Conversation[]
+}
+
+model AgentSkill {
+  agentId String
+  agent   Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  skillId String
+  skill   Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  @@id([agentId, skillId])
+}
+
+model AgentFileTarget {
+  agentId        String
+  agent          Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  cloudFileRefId String
+  cloudFileRef   CloudFileRef @relation(fields: [cloudFileRefId], references: [id], onDelete: Cascade)
+  purpose        String?
+  @@id([agentId, cloudFileRefId])
+}
+
+// ── Skills ────────────────────────────────────────────────────────────────────
+model Skill {
+  id            String      @id
+  slug          String      @unique
+  name          String
+  origin        SkillOrigin
+  kind          SkillKind
+  version       Int          @default(1)
+  contentMd     String
+  assets        Json?
+  generator     String?
+  executionEnv  ExecutionEnv @default(CLI)
+  understanding Json?
+  reviewStatus  SkillReview @default(PENDING_UNDERSTANDING)
+  confirmedBy   String?
+  confirmedAt   DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  deletedAt     DateTime?
+
+  agents AgentSkill[]
+}
+
+// ── Workflows (many per agent) ────────────────────────────────────────────────
+model Workflow {
+  id          String    @id
+  agentId     String
+  agent       Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  name        String
+  description String
+  enabled     Boolean   @default(true)
+  trigger     Json
+  inputSchema Json?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  steps     WorkflowStep[]
+  schedules Schedule[]
+  runs      Run[]
+}
+
+model WorkflowStep {
+  id           String   @id
+  workflowId   String
+  workflow     Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  position     Int
+  stepKey      String
+  type         StepType
+  config       Json
+  verifyRubric String?
+  onFail       Json?
+  @@unique([workflowId, position])
+  @@unique([workflowId, stepKey])
+}
+
+// ── Runs (audit trail) ────────────────────────────────────────────────────────
+model Run {
+  id          String    @id
+  workflowId  String?
+  workflow    Workflow? @relation(fields: [workflowId], references: [id], onDelete: SetNull)
+  agentId     String
+  agent       Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  triggeredBy String
+  status      RunStatus @default(RUNNING)
+  input       Json
+  output      Json?
+  stoppedAt   String?
+  runDir      String
+  startedAt   DateTime  @default(now())
+  finishedAt  DateTime?
+
+  steps           RunStep[]
+  computerTasks   ComputerControlTask[]
+  @@index([agentId, startedAt])
+}
+
+model RunStep {
+  id        String    @id
+  runId     String
+  run       Run       @relation(fields: [runId], references: [id], onDelete: Cascade)
+  stepKey   String
+  round     Int
+  status    String
+  output    String?
+  verdict   String?
+  approved  Boolean?
+  error     String?
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+  @@index([runId, stepKey])
+}
+
+// ── Conversations (chat with an agent) ────────────────────────────────────────
+model Conversation {
+  id        String    @id
+  agentId   String
+  agent     Agent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String?
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  messages Message[]
+}
+
+model Message {
+  id             String       @id
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           MessageRole
+  content        String
+  runId          String?
+  createdAt      DateTime     @default(now())
+  @@index([conversationId, createdAt])
+}
+
+// ── Scheduling ────────────────────────────────────────────────────────────────
+model Schedule {
+  id          String    @id
+  workflowId  String
+  workflow    Workflow  @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  cron        String
+  timezone    String    @default("Asia/Taipei")
+  enabled     Boolean   @default(true)
+  lastFiredAt DateTime?
+  nextFireAt  DateTime?
+}
+
+// ── Channels (LINE now; adapter-shaped for more later) ───────────────────────
+model ChannelBinding {
+  id         String      @id
+  channel    Channel     @default(LINE)
+  kind       BindingKind
+  externalId String
+  label      String
+  meta       Json?
+  createdAt  DateTime    @default(now())
+  @@unique([channel, externalId])
+}
+
+// ── Computer-control (Codex screen-recording skills) ─────────────────────────
+model ComputerControlTask {
+  id           String   @id
+  runId        String
+  run          Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  stepKey      String
+  skillId      String
+  status       String
+  dispatchedTo String?
+  result       Json?
+  createdAt    DateTime @default(now())
+}
+
+// ── Governance / ops ──────────────────────────────────────────────────────────
+model AuditLog {
+  id        String   @id
+  userId    String?
+  action    String
+  entity    String
+  entityId  String
+  detail    Json?
+  createdAt DateTime @default(now())
+  @@index([entity, entityId])
+}
+
+model Lesson {
+  id        String   @id
+  agentId   String
+  runId     String
+  signal    String
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+}
