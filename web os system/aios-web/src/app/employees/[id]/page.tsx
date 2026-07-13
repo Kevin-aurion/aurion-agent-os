@@ -7,6 +7,7 @@ import {
   Activity,
   AlertTriangle,
   ArrowLeft,
+  BookOpen,
   Bot,
   Check,
   CheckCircle2,
@@ -21,7 +22,9 @@ import {
   MessageSquare,
   Play,
   Plus,
+  RefreshCw,
   Save,
+  Search,
   Send,
   Settings2,
   Tag,
@@ -235,6 +238,7 @@ const TABS = [
   { key: 'workflows', label: '工作流', icon: Workflow },
   { key: 'runs', label: '執行紀錄', icon: Activity },
   { key: 'training', label: '訓練', icon: GraduationCap },
+  { key: 'memory', label: '記憶', icon: BookOpen },
   { key: 'chat', label: '對話', icon: MessageSquare },
 ] as const;
 type TabKey = typeof TABS[number]['key'];
@@ -309,6 +313,7 @@ export default function EmployeeDetailPage() {
           {tab === 'workflows' && <WorkflowsTab agent={agent} />}
           {tab === 'runs' && <RunsTab agent={agent} />}
           {tab === 'training' && <TrainingTab agent={agent} />}
+          {tab === 'memory' && <MemoryTab agentId={agent.id} />}
           {tab === 'chat' && <ChatTab agentId={agent.id} />}
         </>
       )}
@@ -2016,6 +2021,209 @@ function UnderstandingList({ title, items, icon }: { title: string; items: strin
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+// ---------- 記憶 Memory (L1 wiki + L3 semantic search) ----------
+
+interface MemoryFileEntry {
+  path: string;
+  size: number;
+  mtime: string;
+}
+interface MemorySearchHit {
+  text: string;
+  path: string;
+  score: number;
+  sourceType?: string;
+}
+
+function MemoryTab({ agentId }: { agentId: string }) {
+  const qc = useQueryClient();
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [hits, setHits] = useState<MemorySearchHit[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+
+  const { data: filesData, isLoading: filesLoading } = useQuery({
+    queryKey: ['memory-files', agentId],
+    queryFn: () => API.get<{ files: MemoryFileEntry[] }>(`/api/agents/${agentId}/memory/files`),
+  });
+  const files = filesData?.files ?? [];
+
+  const { data: fileData, isLoading: fileLoading } = useQuery({
+    queryKey: ['memory-file', agentId, selectedPath],
+    queryFn: () =>
+      API.get<{ path: string; content: string }>(
+        `/api/agents/${agentId}/memory/file?path=${encodeURIComponent(selectedPath!)}`,
+      ),
+    enabled: !!selectedPath,
+  });
+
+  const reindexMutation = useMutation({
+    mutationFn: () =>
+      API.post<{ indexed: number; skipped: number; failed: number }>(
+        `/api/agents/${agentId}/memory/reindex`,
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['memory-files', agentId] });
+      if (selectedPath) qc.invalidateQueries({ queryKey: ['memory-file', agentId, selectedPath] });
+    },
+  });
+
+  async function runSearch() {
+    const q = query.trim();
+    if (!q) return;
+    setSearching(true);
+    setSearchError(null);
+    try {
+      const res = await API.post<{ query: string; hits: MemorySearchHit[] }>(
+        `/api/agents/${agentId}/memory/search`,
+        { query: q, topK: 6 },
+      );
+      setHits(res.hits);
+    } catch (e) {
+      setHits(null);
+      setSearchError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="card space-y-3 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 font-medium">
+            <BookOpen className="h-4 w-4 text-brand" /> Wiki 檔案
+          </div>
+          <button
+            type="button"
+            className="btn-secondary inline-flex items-center gap-1.5 text-sm"
+            disabled={reindexMutation.isPending}
+            onClick={() => reindexMutation.mutate()}
+          >
+            {reindexMutation.isPending ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
+            重新索引
+          </button>
+        </div>
+        <p className="text-xs text-muted">
+          L1 真相來源：MyAgent/…/memory/wiki/。此頁唯讀；執行引擎可寫入 facts.md / log.md。語意索引（Qdrant）可重建。
+        </p>
+        {reindexMutation.isSuccess && (
+          <p className="text-xs text-muted">
+            索引完成：indexed={reindexMutation.data.indexed}，skipped={reindexMutation.data.skipped}，failed=
+            {reindexMutation.data.failed}
+            {reindexMutation.data.failed > 0 && '（若無 OPENROUTER_API_KEY，failed 屬預期）'}
+          </p>
+        )}
+        {reindexMutation.error instanceof Error && (
+          <p className="text-sm text-rose-400">{reindexMutation.error.message}</p>
+        )}
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="min-h-[220px] rounded-lg border border-border">
+            {filesLoading && (
+              <div className="flex justify-center py-10">
+                <Spinner className="h-5 w-5" />
+              </div>
+            )}
+            {!filesLoading && files.length === 0 && (
+              <EmptyState title="尚無 wiki 檔案" hint="執行一次 run 或重新 materialize 後會建立骨架。" />
+            )}
+            {!filesLoading && files.length > 0 && (
+              <ul className="divide-y divide-border">
+                {files.map((f) => (
+                  <li key={f.path}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPath(f.path)}
+                      className={cn(
+                        'flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted/40',
+                        selectedPath === f.path && 'bg-brand/10 text-brand',
+                      )}
+                    >
+                      <FileIcon className="h-3.5 w-3.5 shrink-0" />
+                      <span className="min-w-0 flex-1 truncate font-mono text-xs">{f.path}</span>
+                      <span className="shrink-0 text-xs text-muted">{f.size} B</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="min-h-[220px] rounded-lg border border-border p-3">
+            {!selectedPath && <p className="py-8 text-center text-sm text-muted">點選左側檔案檢視內容（唯讀）</p>}
+            {selectedPath && fileLoading && (
+              <div className="flex justify-center py-10">
+                <Spinner className="h-5 w-5" />
+              </div>
+            )}
+            {selectedPath && !fileLoading && fileData && (
+              <>
+                <div className="mb-2 font-mono text-xs text-muted">{fileData.path}</div>
+                <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/30 p-3 text-xs leading-relaxed">
+                  {fileData.content}
+                </pre>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="card space-y-3 p-5">
+        <div className="flex items-center gap-2 font-medium">
+          <Search className="h-4 w-4 text-brand" /> 語意搜尋
+        </div>
+        <p className="text-xs text-muted">
+          POST /memory/search — 需要 OPENROUTER_API_KEY 與 Qdrant 中的向量。無金鑰時 hits 為空屬正常。
+        </p>
+        <div className="flex gap-2">
+          <input
+            className="input flex-1"
+            placeholder="例如：報價單幣別、上次約定…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void runSearch();
+            }}
+          />
+          <button
+            type="button"
+            className="btn-primary inline-flex items-center gap-1.5"
+            disabled={searching || !query.trim()}
+            onClick={() => void runSearch()}
+          >
+            {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+            搜尋
+          </button>
+        </div>
+        {searchError && <p className="text-sm text-rose-400">{searchError}</p>}
+        {hits && hits.length === 0 && (
+          <p className="text-sm text-muted">沒有命中片段（可能尚未索引，或缺少 embedding 金鑰）。</p>
+        )}
+        {hits && hits.length > 0 && (
+          <ul className="space-y-3">
+            {hits.map((h, i) => (
+              <li key={`${h.path}-${i}`} className="rounded-lg border border-border p-3">
+                <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted">
+                  <span className="font-mono text-fg">{h.path}</span>
+                  <span>score {typeof h.score === 'number' ? h.score.toFixed(3) : h.score}</span>
+                  {h.sourceType && <StatusBadge status={h.sourceType} />}
+                </div>
+                <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed">{h.text}</pre>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
