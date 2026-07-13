@@ -10,6 +10,7 @@ import { prisma } from '../lib/db.js';
 import { paths } from '../config.js';
 import { sha256 } from '../lib/crypto.js';
 import { errors } from '../lib/http.js';
+import { ensureAgentWiki } from '../memory/memoryService.js';
 
 async function writeIfChanged(filePath: string, content: string): Promise<void> {
   try {
@@ -99,6 +100,14 @@ export async function materializeAgent(agentId: string): Promise<string> {
 
   for (const skill of confirmedSkills) {
     await writeIfChanged(path.join(agentDir, 'skills', skill.slug, 'SKILL.md'), skill.contentMd ?? '');
+  }
+
+  // L1 memory wiki skeleton (index/facts/log/decisions). create-only — never
+  // overwrites existing human/engine edits (must not use writeIfChanged).
+  try {
+    await ensureAgentWiki(agentDir);
+  } catch (e) {
+    console.warn('[materialize] ensureAgentWiki failed (non-fatal)', e instanceof Error ? e.message : e);
   }
 
   return agentDir;
