@@ -439,6 +439,7 @@ async function safeRecordCost(args: {
   engine: Engine;
   inputText: string;
   outputText: string;
+  stepKey?: string;
 }): Promise<void> {
   try {
     await recordCost(args);
@@ -502,6 +503,7 @@ async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | 
       engine: 'CODEX',
       inputText: prompt,
       outputText: res.text,
+      stepKey: step.stepKey,
     });
     return res.text;
   }
@@ -521,6 +523,7 @@ async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | 
       engine: 'GROK',
       inputText: prompt,
       outputText: res.stdout,
+      stepKey: step.stepKey,
     });
     return res.stdout;
   }
@@ -542,6 +545,7 @@ async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | 
     engine: 'CLAUDE_CODE',
     inputText: systemAppend ? `${systemAppend}\n\n${prompt}` : prompt,
     outputText: res.stdout,
+    stepKey: step.stepKey,
   });
   return res.stdout;
 }

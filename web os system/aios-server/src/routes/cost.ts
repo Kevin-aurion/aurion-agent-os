@@ -5,7 +5,7 @@ import { prisma } from '../lib/db.js';
 import { ok, errors, sendError } from '../lib/http.js';
 import { requireAuth, requireTrainer } from '../lib/guard.js';
 import { audit } from '../lib/audit.js';
-import { getSpend } from '../engine/cost.js';
+import { getSpend, getSpendByStep } from '../engine/cost.js';
 
 const costPolicySchema = z.object({
   dailyBudgetUsd: z.number().nonnegative().optional(),
@@ -24,10 +24,12 @@ export async function costRoutes(app: FastifyInstance) {
       });
       if (!agent) throw errors.notFound('Agent not found');
       const spend = await getSpend(agent.id);
+      const byStep = await getSpendByStep(agent.id);
       return ok({
         todayUsd: spend.todayUsd,
         monthUsd: spend.monthUsd,
         policy: agent.costPolicy ?? null,
+        byStep,
       });
     } catch (e) {
       return sendError(reply, e);

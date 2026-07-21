@@ -441,6 +441,8 @@ model CostLog {
   inputTokens  Int
   outputTokens Int
   costUsd      Decimal  @db.Decimal(12, 6)
+  /// 對應 workflow step，null=非步驟情境
+  stepKey      String?
   createdAt    DateTime @default(now())
   @@index([agentId, createdAt])
 }

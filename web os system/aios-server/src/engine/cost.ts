@@ -225,6 +225,8 @@ export async function recordCost(args: {
   engine: Engine;
   inputText: string;
   outputText: string;
+  /** Workflow step key; null/omit for non-step contexts (manager decision, etc.). */
+  stepKey?: string;
 }): Promise<void> {
   const inputTokens = estimateTokens(args.inputText);
   const outputTokens = estimateTokens(args.outputText);
@@ -238,6 +240,42 @@ export async function recordCost(args: {
       inputTokens,
       outputTokens,
       costUsd: new Prisma.Decimal(cost.toFixed(6)),
+      stepKey: args.stepKey ?? null,
     },
   });
+}
+
+/**
+ * Aggregate estimated spend by workflow stepKey over the last 30 days.
+ * Rows with null stepKey (non-step contexts) are included as stepKey: null.
+ */
+export async function getSpendByStep(
+  agentId: string,
+): Promise<
+  Array<{
+    stepKey: string | null;
+    costUsd: number;
+    inputTokens: number;
+    outputTokens: number;
+    calls: number;
+  }>
+> {
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const rows = await prisma.costLog.groupBy({
+    by: ['stepKey'],
+    where: { agentId, createdAt: { gte: since } },
+    _sum: {
+      costUsd: true,
+      inputTokens: true,
+      outputTokens: true,
+    },
+    _count: { _all: true },
+  });
+  return rows.map((r) => ({
+    stepKey: r.stepKey,
+    costUsd: decimalToNumber(r._sum.costUsd),
+    inputTokens: r._sum.inputTokens ?? 0,
+    outputTokens: r._sum.outputTokens ?? 0,
+    calls: r._count._all,
+  }));
 }
