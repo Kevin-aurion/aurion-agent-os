@@ -250,11 +250,32 @@ model Skill {
   reviewStatus  SkillReview @default(PENDING_UNDERSTANDING)
   confirmedBy   String?
   confirmedAt   DateTime?
+  /// Pointer to the currently promoted stable SkillVersion.id (null = none yet).
+  stableVersionId String?
+  /// Pointer to the latest canary SkillVersion.id (null = none yet).
+  canaryVersionId String?
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   deletedAt     DateTime?
 
   agents AgentSkill[]
+}
+
+// Content-addressed skill version history. Additive layer: existing Skill.contentMd
+// / Skill.version remain the live path until loaders are switched to these pointers.
+// channel: canary | stable | archived. Rollback = switch Skill.stableVersionId only.
+model SkillVersion {
+  id          String   @id
+  skillId     String
+  version     Int
+  contentHash String   // sha256(contentMd)
+  contentMd   String
+  channel     String   @default("canary") // canary | stable | archived
+  createdBy   String?
+  createdAt   DateTime @default(now())
+
+  @@unique([skillId, version])
+  @@index([skillId, channel])
 }
 
 // ── Workflows (many per agent) ────────────────────────────────────────────────
