@@ -51,15 +51,34 @@ export async function runWorkflow(
   // Dynamic import: the engine is a separate execution layer; importing it
   // lazily here keeps this module a thin adapter and avoids any load-order
   // coupling with the rest of the spine.
-  const { runAgent } = await import('../engine/index.js');
-
-  const outcome = await runAgent({
-    ...(runId ? { runId } : {}),
-    agentId: workflow.agentId,
-    workflowId: workflow.id,
-    input,
-    triggeredBy,
-  });
+  // Opt-in durable path: Workflow.durable=true → Temporal (HITL wait +
+  // runAgent activity). Requires `npm run temporal:worker` or the workflow
+  // will not progress. Non-durable stays in-process (unchanged).
+  let outcome: RunOutcome;
+  if (workflow.durable) {
+    const agent = await prisma.agent.findUnique({ where: { id: workflow.agentId } });
+    const rid = runId ?? (await import('ulid')).ulid();
+    const { startDurableWorkflowRun, getDurableRunResult } = await import('../temporal/client.js');
+    await startDurableWorkflowRun({
+      runId: rid,
+      agentId: workflow.agentId,
+      workflowId: workflow.id,
+      triggeredBy,
+      input,
+      riskTier: agent?.riskTier ?? 'medium',
+    });
+    // Temporal result is { runId, status, stoppedAt? }; status must be a RunStatus.
+    outcome = (await getDurableRunResult(rid)) as RunOutcome;
+  } else {
+    const { runAgent } = await import('../engine/index.js');
+    outcome = await runAgent({
+      ...(runId ? { runId } : {}),
+      agentId: workflow.agentId,
+      workflowId: workflow.id,
+      input,
+      triggeredBy,
+    });
+  }
 
   // Status contract: the engine must resolve to one of the RunStatus enum
   // values (never a thrown error masquerading as success, and never a bare

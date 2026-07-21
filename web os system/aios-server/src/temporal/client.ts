@@ -4,8 +4,8 @@
  */
 
 import { Client, Connection } from '@temporalio/client';
-import type { DurableRunInput } from './workflows.js';
-import { durableAgentRun, approveSignal } from './workflows.js';
+import type { DurableRunInput, DurableWorkflowInput } from './workflows.js';
+import { durableAgentRun, durableWorkflowRun, approveSignal } from './workflows.js';
 
 const TEMPORAL_ADDRESS = 'localhost:7233';
 const TASK_QUEUE = 'aios-durable';
@@ -23,6 +23,21 @@ async function getClient(): Promise<Client> {
 export async function startDurableRun(input: DurableRunInput): Promise<string> {
   const client = await getClient();
   const handle = await client.workflow.start(durableAgentRun, {
+    taskQueue: TASK_QUEUE,
+    workflowId: input.runId,
+    args: [input],
+  });
+  return handle.workflowId;
+}
+
+/**
+ * Start durableWorkflowRun (real engine via activity).
+ * Temporal workflowId = input.runId; taskQueue aios-durable.
+ * Requires worker (`npm run temporal:worker`) for progress.
+ */
+export async function startDurableWorkflowRun(input: DurableWorkflowInput): Promise<string> {
+  const client = await getClient();
+  const handle = await client.workflow.start(durableWorkflowRun, {
     taskQueue: TASK_QUEUE,
     workflowId: input.runId,
     args: [input],

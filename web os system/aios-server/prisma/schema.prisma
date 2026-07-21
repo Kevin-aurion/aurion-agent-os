@@ -265,6 +265,8 @@ model Workflow {
   name        String
   description String
   enabled     Boolean   @default(true)
+  /// opt-in 走 Temporal 耐久執行
+  durable     Boolean   @default(false)
   trigger     Json
   inputSchema Json?
   createdAt   DateTime  @default(now())

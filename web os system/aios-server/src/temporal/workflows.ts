@@ -10,6 +10,10 @@ const { executeStepActivity, finishActivity } = proxyActivities<typeof activitie
   startToCloseTimeout: '1 minute',
 });
 
+const { runAgentActivity } = proxyActivities<typeof activities>({
+  startToCloseTimeout: '30 minutes',
+});
+
 export const approveSignal = defineSignal('approve');
 
 export interface DurableRunInput {
@@ -34,4 +38,37 @@ export async function durableAgentRun(
   const step = await executeStepActivity(input.instruction);
   await finishActivity(input.runId);
   return { runId: input.runId, status: 'SUCCEEDED', step };
+}
+
+export interface DurableWorkflowInput {
+  runId: string;
+  agentId: string;
+  workflowId: string;
+  triggeredBy: string;
+  riskTier: string;
+  input: Record<string, unknown>;
+}
+
+/**
+ * Opt-in durable workflow path: high-risk waits for approveSignal, then
+ * runs the real engine via runAgentActivity.
+ * Requires temporal worker (`npm run temporal:worker`) to progress.
+ */
+export async function durableWorkflowRun(
+  input: DurableWorkflowInput,
+): Promise<{ runId: string; status: string; stoppedAt?: string | null }> {
+  if (input.riskTier === 'high') {
+    let approved = false;
+    setHandler(approveSignal, () => {
+      approved = true;
+    });
+    await condition(() => approved);
+  }
+  return await runAgentActivity({
+    runId: input.runId,
+    agentId: input.agentId,
+    workflowId: input.workflowId,
+    input: input.input,
+    triggeredBy: input.triggeredBy,
+  });
 }
