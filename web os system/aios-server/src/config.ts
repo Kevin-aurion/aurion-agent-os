@@ -59,6 +59,11 @@ export const config = {
     grokPath: opt('GROK_CLI_PATH', 'grok'),
   },
 
+  // Local Docling document-parse service (docker aios-docparse, loopback only).
+  docparse: {
+    url: opt('DOCPARSE_URL', 'http://127.0.0.1:5001'),
+  },
+
   // Memory (Phase 1): L1 wiki on disk is source of truth; L3 Qdrant is a
   // rebuildable semantic index. When enabled=false every memory I/O is no-op.
   memory: {

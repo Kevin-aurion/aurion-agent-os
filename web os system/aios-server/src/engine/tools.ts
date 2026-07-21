@@ -58,8 +58,32 @@ const uploadToCloud: ToolModule = {
   },
 };
 
+/**
+ * parse_document — parse a workspace file (PDF / scan / office) via local
+ * Docling into Markdown. Local read-only; no restriction flag required.
+ * args: { file: string } — path relative to the agent workspace.
+ */
+const parseDocument: ToolModule = {
+  meta: {
+    description: '將工作區內的 PDF／掃描件／文件解析為 Markdown（本地 Docling 服務）',
+    input: { file: '相對於工作目錄的檔案路徑' },
+  },
+  async run(args, ctx) {
+    if (!ctx) throw new Error('parse_document requires tool context');
+    const rel = typeof args.file === 'string' ? args.file : '';
+    if (!rel) throw new Error('parse_document: args.file 為空');
+    if (/\.\./.test(rel) || path.isAbsolute(rel)) throw new Error(`parse_document: 不允許的路徑 ${rel}`);
+    const abs = path.join(ctx.agentDir, rel);
+    if (!existsSync(abs)) throw new Error(`parse_document: 找不到檔案 ${rel}`);
+    const { parseDocumentFile } = await import('../lib/docparse.js');
+    const result = await parseDocumentFile(abs, path.basename(rel));
+    return { markdown: result.markdown, status: result.status };
+  },
+};
+
 const BUILTIN_TOOLS: Record<string, ToolModule> = {
   upload_to_cloud: uploadToCloud,
+  parse_document: parseDocument,
 };
 
 /** Dynamically import agentDir/tools/<name>.{js,ts}, else a built-in tool. */
