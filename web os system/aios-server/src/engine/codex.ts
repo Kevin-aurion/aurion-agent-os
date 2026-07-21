@@ -12,6 +12,8 @@ export interface RunCodexOpts {
   resumeThreadId?: string | null; // set => `codex exec resume <id>` instead of a fresh thread
   sandbox?: 'read-only' | 'workspace-write';
   onLine?: (line: string) => void; // raw --json lines, as they arrive
+  /** Opt-in L6 write sandbox profile path; forwarded to execCli (not codex --sandbox). */
+  sandboxProfilePath?: string;
 }
 
 export interface RunCodexResult {
@@ -66,6 +68,7 @@ export async function runCodex(opts: RunCodexOpts): Promise<RunCodexResult> {
     cwd: opts.cwd,
     input: opts.prompt,
     timeoutMs: opts.timeoutMs,
+    sandboxProfilePath: opts.sandboxProfilePath,
     onLine: opts.onLine ? (line, stream) => { if (stream === 'stdout') opts.onLine!(line); } : undefined,
   });
   if (timedOut) throw new Error(`codex timed out after ${opts.timeoutMs}ms`);

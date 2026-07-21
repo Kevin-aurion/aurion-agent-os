@@ -4,6 +4,8 @@
 //  2. CLI-flag level — where the engine CLI supports hard switches
 //     (claude --disallowedTools, grok --disable-web-search), and the runner
 //     refuses COMPUTER_CONTROL steps outright when computerUse is off.
+import { realpathSync } from 'node:fs';
+
 export interface AgentRestrictions {
   /** 允許網路搜尋／瀏覽網頁（WebSearch/WebFetch）。 */
   webSearch: boolean;
@@ -23,6 +25,11 @@ export interface AgentRestrictions {
   cloudEmbedding: boolean;
   /** 額外的自訂禁止事項（自由文字，逐行列出）。 */
   notes?: string;
+  /**
+   * L6 寫入沙盒（opt-in）。enabled 時，引擎在 sandbox-exec 下執行，
+   * 寫入僅限 agentDir + 系統暫存 + extraWritePaths。
+   */
+  sandbox?: { enabled?: boolean; extraWritePaths?: string[] };
 }
 
 export const DEFAULT_RESTRICTIONS: AgentRestrictions = {
@@ -42,6 +49,19 @@ export function claudeDisallowedTools(r: AgentRestrictions): string[] {
   return t;
 }
 
+function parseSandbox(raw: unknown): AgentRestrictions['sandbox'] {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const s = raw as { enabled?: unknown; extraWritePaths?: unknown };
+  const out: { enabled?: boolean; extraWritePaths?: string[] } = {};
+  if (typeof s.enabled === 'boolean') out.enabled = s.enabled;
+  if (Array.isArray(s.extraWritePaths)) {
+    const paths = s.extraWritePaths.filter((p): p is string => typeof p === 'string' && p.length > 0);
+    if (paths.length) out.extraWritePaths = paths;
+  }
+  if (out.enabled === undefined && !out.extraWritePaths) return undefined;
+  return out;
+}
+
 export function parseRestrictions(raw: unknown): AgentRestrictions {
   const r = (raw ?? {}) as Partial<AgentRestrictions>;
   return {
@@ -52,7 +72,57 @@ export function parseRestrictions(raw: unknown): AgentRestrictions {
     shell: r.shell ?? DEFAULT_RESTRICTIONS.shell,
     cloudEmbedding: r.cloudEmbedding ?? DEFAULT_RESTRICTIONS.cloudEmbedding,
     notes: typeof r.notes === 'string' && r.notes.trim() ? r.notes.trim() : undefined,
+    sandbox: parseSandbox(r.sandbox),
   };
+}
+
+/** realpath if possible; on failure (missing path, etc.) fall back to input. */
+function realpathOrSelf(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+/** Escape a path for use inside an SBPL double-quoted string. */
+function escapeSbplPath(p: string): string {
+  return p.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * 產生 SBPL profile 文字：deny default、放行讀取與 exec/network、
+ * 寫入僅限 agentDir(+系統暫存+extra)，全部用 realpath 解析。
+ */
+export function buildSandboxProfile(agentDir: string, extraWritePaths?: string[]): string {
+  const writeRoots = [
+    realpathOrSelf(agentDir),
+    '/private/tmp',
+    '/private/var/folders',
+    ...(extraWritePaths ?? []).map(realpathOrSelf),
+  ];
+  // Dedupe while preserving order (agentDir first).
+  const seen = new Set<string>();
+  const subpaths = writeRoots
+    .filter((p) => {
+      if (seen.has(p)) return false;
+      seen.add(p);
+      return true;
+    })
+    .map((p) => `(subpath "${escapeSbplPath(p)}")`)
+    .join(' ');
+
+  return [
+    '(version 1)',
+    '(deny default)',
+    '(allow process*)',
+    '(allow sysctl-read)',
+    '(allow mach-lookup)',
+    '(allow network*)',
+    '(allow file-read*)',
+    `(allow file-write* ${subpaths})`,
+    '',
+  ].join('\n');
 }
 
 /** Renders the restrictions as a system-prompt section (zh-Hant, explicit). */

@@ -17,6 +17,8 @@ export interface ExecCliOpts {
   input?: string | null;
   timeoutMs?: number;
   onLine?: (line: string, stream: 'stdout' | 'stderr') => void;
+  /** When set, wrap the CLI spawn with `sandbox-exec -f <profile> <cmd> ...`. Opt-in only. */
+  sandboxProfilePath?: string;
 }
 
 function makeLineSplitter(onLine: (line: string) => void) {
@@ -48,7 +50,13 @@ export function execCli(cmd: string, args: string[], opts: ExecCliOpts = {}): Pr
   return new Promise((resolve, reject) => {
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(cmd, args, { cwd: opts.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+      // Opt-in L6 write sandbox: only wrap when a profile path is provided.
+      // Default path (no sandboxProfilePath) is byte-identical to the original spawn.
+      const spawnCmd = opts.sandboxProfilePath ? 'sandbox-exec' : cmd;
+      const spawnArgs = opts.sandboxProfilePath
+        ? ['-f', opts.sandboxProfilePath, cmd, ...args]
+        : args;
+      child = spawn(spawnCmd, spawnArgs, { cwd: opts.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) {
       reject(e);
       return;
@@ -104,6 +112,8 @@ export interface RunClaudeOpts {
   fullPermissions?: boolean; // --dangerously-skip-permissions
   disallowedTools?: string[]; // hard tool bans, e.g. ['WebSearch','WebFetch'] (agent restrictions)
   allowedTools?: string[]; // pre-approved tools, e.g. verifier read-only web access
+  /** Opt-in L6 write sandbox profile path; forwarded to execCli. */
+  sandboxProfilePath?: string;
 }
 
 export interface RunClaudeResult {
@@ -125,6 +135,7 @@ export async function runClaude(opts: RunClaudeOpts): Promise<RunClaudeResult> {
   const { code, stdout, stderr, timedOut } = await execCli(config.engines.claudePath, buildClaudeArgs(opts), {
     cwd: opts.cwd,
     timeoutMs: opts.timeoutMs,
+    sandboxProfilePath: opts.sandboxProfilePath,
   });
   if (timedOut) throw new Error(`claude timed out after ${opts.timeoutMs}ms`);
   if (code !== 0) throw new Error(`claude exit ${code}: ${(stderr || stdout).slice(0, 2000)}`);
@@ -138,6 +149,7 @@ export async function runClaudeStream(opts: RunClaudeOpts & { onLine: (line: str
   const { code, stdout, stderr, timedOut } = await execCli(config.engines.claudePath, buildClaudeArgs(opts), {
     cwd: opts.cwd,
     timeoutMs: opts.timeoutMs,
+    sandboxProfilePath: opts.sandboxProfilePath,
     onLine: (line, stream) => {
       if (stream === 'stdout') opts.onLine(line);
     },

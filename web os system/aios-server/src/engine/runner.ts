@@ -20,7 +20,7 @@ import { materializeAgent } from './materialize.js';
 import { runClaude, runClaudeStream } from './claude.js';
 import { runCodex, isApproved } from './codex.js';
 import { runGrok } from './grok.js';
-import { parseRestrictions, restrictionsToRules, claudeDisallowedTools } from './restrictions.js';
+import { parseRestrictions, restrictionsToRules, claudeDisallowedTools, buildSandboxProfile } from './restrictions.js';
 import { runTool, evalCondition } from './tools.js';
 import { guardBudget, recordCost, BudgetExceededError } from './cost.js';
 import {
@@ -81,6 +81,11 @@ interface RunContext {
   hasCloudFiles?: boolean;
   /** Agent.costPolicy — null/undefined = no budget limit. */
   costPolicy: unknown;
+  /**
+   * Cached path to this run's SBPL profile (written once under runDir/sandbox.sb).
+   * Only set when restrictions.sandbox.enabled is true.
+   */
+  sandboxProfilePath?: string;
 }
 
 interface VerdictResult {
@@ -446,6 +451,24 @@ async function safeRecordCost(args: {
   }
 }
 
+/**
+ * Opt-in L6 write sandbox: if restrictions.sandbox.enabled, materialize an SBPL
+ * profile under runDir/sandbox.sb (once per run) and return its path; otherwise
+ * return undefined so engines spawn without sandbox-exec (zero behaviour change).
+ */
+async function ensureSandboxProfile(ctx: RunContext): Promise<string | undefined> {
+  if (!ctx.manifest.restrictions.sandbox?.enabled) return undefined;
+  if (ctx.sandboxProfilePath) return ctx.sandboxProfilePath;
+  const profile = buildSandboxProfile(
+    ctx.manifest.agentDir,
+    ctx.manifest.restrictions.sandbox.extraWritePaths,
+  );
+  const profilePath = path.join(ctx.runDir, 'sandbox.sb');
+  await writeFile(profilePath, profile, 'utf8');
+  ctx.sandboxProfilePath = profilePath;
+  return profilePath;
+}
+
 async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | null, round: number): Promise<string> {
   await guardBudget(ctx.manifest.agentId, ctx.costPolicy);
 
@@ -453,6 +476,7 @@ async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | 
   const onLine = (line: string) => {
     if (line.trim()) hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round, line });
   };
+  const sandboxProfilePath = await ensureSandboxProfile(ctx);
 
   // Top-k semantic recall for execute only (verify path never injects recall).
   let recallBlock = '';
@@ -464,7 +488,14 @@ async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | 
 
   if (ctx.manifest.engineExecute === 'CODEX') {
     const prompt = buildExecutePrompt(ctx, instruction, feedback, true, recallBlock);
-    const res = await runCodex({ prompt, cwd: ctx.manifest.agentDir, sandbox: 'workspace-write', timeoutMs: EXEC_TIMEOUT_MS, onLine });
+    const res = await runCodex({
+      prompt,
+      cwd: ctx.manifest.agentDir,
+      sandbox: 'workspace-write',
+      timeoutMs: EXEC_TIMEOUT_MS,
+      onLine,
+      sandboxProfilePath,
+    });
     await safeRecordCost({
       agentId: ctx.manifest.agentId,
       runId: ctx.runId,
@@ -482,6 +513,7 @@ async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | 
       timeoutMs: EXEC_TIMEOUT_MS,
       disableWebSearch: !ctx.manifest.restrictions.webSearch,
       onLine,
+      sandboxProfilePath,
     });
     await safeRecordCost({
       agentId: ctx.manifest.agentId,
@@ -502,6 +534,7 @@ async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | 
     disallowedTools: claudeDisallowedTools(ctx.manifest.restrictions),
     timeoutMs: EXEC_TIMEOUT_MS,
     onLine,
+    sandboxProfilePath,
   });
   await safeRecordCost({
     agentId: ctx.manifest.agentId,
@@ -549,11 +582,19 @@ function buildVerifyPrompt(rubric: string, artifact: string, sourceOfTruth: stri
 
 async function runVerifyStep(ctx: RunContext, rubric: string, artifact: string, sourceOfTruth: string, threadId: string | null): Promise<VerdictResult> {
   await guardBudget(ctx.manifest.agentId, ctx.costPolicy);
+  const sandboxProfilePath = await ensureSandboxProfile(ctx);
 
   if (ctx.manifest.engineVerify === 'CODEX') {
     const isResume = threadId != null;
     const prompt = buildVerifyPrompt(rubric, artifact, sourceOfTruth, isResume);
-    const res = await runCodex({ prompt, cwd: ctx.manifest.agentDir, resumeThreadId: threadId, sandbox: 'read-only', timeoutMs: VERIFY_TIMEOUT_MS });
+    const res = await runCodex({
+      prompt,
+      cwd: ctx.manifest.agentDir,
+      resumeThreadId: threadId,
+      sandbox: 'read-only',
+      timeoutMs: VERIFY_TIMEOUT_MS,
+      sandboxProfilePath,
+    });
     await safeRecordCost({
       agentId: ctx.manifest.agentId,
       runId: ctx.runId,
@@ -576,6 +617,7 @@ async function runVerifyStep(ctx: RunContext, rubric: string, artifact: string, 
       cwd: ctx.manifest.agentDir,
       resumeSessionId: threadId,
       timeoutMs: VERIFY_TIMEOUT_MS,
+      sandboxProfilePath,
     });
     await safeRecordCost({
       agentId: ctx.manifest.agentId,
@@ -599,6 +641,7 @@ async function runVerifyStep(ctx: RunContext, rubric: string, artifact: string, 
     // Honors the agent's webSearch restriction.
     allowedTools: ctx.manifest.restrictions.webSearch ? ['WebFetch', 'WebSearch'] : undefined,
     timeoutMs: VERIFY_TIMEOUT_MS,
+    sandboxProfilePath,
   });
   await safeRecordCost({
     agentId: ctx.manifest.agentId,
@@ -612,11 +655,18 @@ async function runVerifyStep(ctx: RunContext, rubric: string, artifact: string, 
 
 async function callManagerDecision(ctx: RunContext, instruction: string, source: string): Promise<string> {
   await guardBudget(ctx.manifest.agentId, ctx.costPolicy);
+  const sandboxProfilePath = await ensureSandboxProfile(ctx);
 
   if (ctx.manifest.engineExecute === 'CODEX') {
     const parts = [ctx.manifest.rolePrompt ? `[Role]\n${ctx.manifest.rolePrompt}` : '', `[Task]\n${instruction}`, `[Context]\n${source}`].filter(Boolean);
     const prompt = parts.join('\n\n');
-    const res = await runCodex({ prompt, cwd: ctx.manifest.agentDir, sandbox: 'workspace-write', timeoutMs: DECISION_TIMEOUT_MS });
+    const res = await runCodex({
+      prompt,
+      cwd: ctx.manifest.agentDir,
+      sandbox: 'workspace-write',
+      timeoutMs: DECISION_TIMEOUT_MS,
+      sandboxProfilePath,
+    });
     await safeRecordCost({
       agentId: ctx.manifest.agentId,
       runId: ctx.runId,
@@ -628,7 +678,13 @@ async function callManagerDecision(ctx: RunContext, instruction: string, source:
   }
   const prompt = [`[Task]\n${instruction}`, `[Context]\n${source}`].join('\n\n');
   const systemAppend = ctx.manifest.rolePrompt || undefined;
-  const res = await runClaude({ prompt, systemAppend, cwd: ctx.manifest.agentDir, timeoutMs: DECISION_TIMEOUT_MS });
+  const res = await runClaude({
+    prompt,
+    systemAppend,
+    cwd: ctx.manifest.agentDir,
+    timeoutMs: DECISION_TIMEOUT_MS,
+    sandboxProfilePath,
+  });
   await safeRecordCost({
     agentId: ctx.manifest.agentId,
     runId: ctx.runId,
