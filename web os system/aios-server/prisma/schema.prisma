@@ -200,6 +200,8 @@ model Agent {
   restrictions  Json?
   /// 成本政策 { dailyBudgetUsd:number, monthlyBudgetUsd:number, hardStop:boolean }；null = 不限制。
   costPolicy    Json?
+  /// 身分卡 { oneLiner, purpose, canDo[], cannotDo[], servedAudience, exampleCommands[] }；null = 未設定。
+  identityCard  Json?
   /// 風險分級 low|medium|high。
   riskTier      String      @default("medium")
   maxRounds     Int         @default(5)
