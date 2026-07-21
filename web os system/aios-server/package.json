@@ -16,7 +16,8 @@
     "prisma:push": "prisma db push",
     "seed": "tsx src/scripts/seed.ts",
     "doctor": "tsx src/scripts/doctor.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "temporal:worker": "tsx src/temporal/worker.ts"
   },
   "prisma": {
     "schema": "prisma/schema.prisma"
@@ -29,6 +30,10 @@
     "@googleapis/gmail": "^7.0.0",
     "@prisma/client": "^5.22.0",
     "@qdrant/js-client-rest": "^1.18.0",
+    "@temporalio/activity": "^1.20.3",
+    "@temporalio/client": "^1.20.3",
+    "@temporalio/worker": "^1.20.3",
+    "@temporalio/workflow": "^1.20.3",
     "argon2": "^0.41.1",
     "bullmq": "^5.28.1",
     "cron-parser": "^4.9.0",
