@@ -30,9 +30,17 @@ export const DEFAULT_RESTRICTIONS: AgentRestrictions = {
   computerUse: false,
   sendEmail: false,
   cloudWrite: true,
-  shell: true,
+  shell: false,
   cloudEmbedding: true,
 };
+
+/** claude --disallowedTools 清單：依限制硬性禁用工具（引擎層攔截，非提示）。 */
+export function claudeDisallowedTools(r: AgentRestrictions): string[] {
+  const t: string[] = [];
+  if (!r.webSearch) t.push('WebSearch', 'WebFetch');
+  if (!r.shell) t.push('Bash');   // 關閉 shell → 硬性禁用 claude 的 Bash 工具
+  return t;
+}
 
 export function parseRestrictions(raw: unknown): AgentRestrictions {
   const r = (raw ?? {}) as Partial<AgentRestrictions>;

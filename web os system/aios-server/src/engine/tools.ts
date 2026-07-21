@@ -10,6 +10,8 @@ export interface ToolContext {
   agentDir: string;
   /** From the agent's restrictions (engine/restrictions.ts). */
   cloudWrite: boolean;
+  /** From the agent's restrictions — gate email-sending tools (groundwork; no built-in email tool yet). */
+  sendEmail: boolean;
 }
 
 export interface ToolModule {

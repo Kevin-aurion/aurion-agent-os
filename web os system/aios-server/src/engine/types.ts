@@ -145,4 +145,6 @@ export interface RunAgentOptions {
   runId?: string;
   /** internal: delegation depth (0 = top-level run); callers should not set this. */
   depth?: number;
+  /** internal: set by the approval flow to bypass the high-risk pre-exec gate and resume the existing run. */
+  approvedApprovalId?: string;
 }

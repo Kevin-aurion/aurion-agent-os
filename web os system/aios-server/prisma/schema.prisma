@@ -89,6 +89,12 @@ enum RunStatus {
   CANCELLED
 }
 
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum MessageRole {
   USER
   AGENT
@@ -192,6 +198,10 @@ model Agent {
   /// Capability restrictions, enforced at prompt + CLI-flag level:
   /// { webSearch, computerUse, sendEmail, cloudWrite, shell: boolean, notes?: string }
   restrictions  Json?
+  /// 成本政策 { dailyBudgetUsd:number, monthlyBudgetUsd:number, hardStop:boolean }；null = 不限制。
+  costPolicy    Json?
+  /// 風險分級 low|medium|high。
+  riskTier      String      @default("medium")
   maxRounds     Int         @default(5)
   status        AgentStatus @default(ACTIVE)
   createdBy     String
@@ -317,6 +327,22 @@ model RunStep {
   @@index([runId, stepKey])
 }
 
+// ── HITL pre-execution approval (high-risk agents) ────────────────────────────
+model ApprovalRequest {
+  id          String         @id
+  runId       String         @unique
+  agentId     String
+  reason      String
+  /// runAgent 的重派載荷（agentId/workflowId/input/triggeredBy），核准後據此續跑。
+  payload     Json
+  status      ApprovalStatus @default(PENDING)
+  resumeToken String         @unique
+  decidedBy   String?
+  decidedAt   DateTime?
+  createdAt   DateTime       @default(now())
+  @@index([status, createdAt])
+}
+
 // ── Conversations (chat with an agent) ────────────────────────────────────────
 model Conversation {
   id        String    @id
@@ -379,6 +405,21 @@ model ComputerControlTask {
   createdAt    DateTime @default(now())
 }
 
+// ── Cost ledger (estimated; fail-closed budget guard at L7) ───────────────────
+// CLI engines do not return token usage — costs are estimates from char length
+// so a runaway agent loop can be hard-stopped by daily/monthly budget.
+model CostLog {
+  id           String   @id
+  agentId      String
+  runId        String?
+  engine       Engine
+  inputTokens  Int
+  outputTokens Int
+  costUsd      Decimal  @db.Decimal(12, 6)
+  createdAt    DateTime @default(now())
+  @@index([agentId, createdAt])
+}
+
 // ── Governance / ops ──────────────────────────────────────────────────────────
 model AuditLog {
   id        String   @id
@@ -387,6 +428,10 @@ model AuditLog {
   entity    String
   entityId  String
   detail    Json?
+  /// Previous row's hash in the append-only chain (null for genesis / pre-backfill).
+  prevHash  String?
+  /// sha256 hex of canonical(prevHash + row content); null until backfilled.
+  hash      String?
   createdAt DateTime @default(now())
   @@index([entity, entityId])
 }

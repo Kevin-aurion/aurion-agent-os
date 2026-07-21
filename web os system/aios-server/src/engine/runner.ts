@@ -15,12 +15,14 @@ import { paths } from '../config.js';
 import { hub } from '../ws/hub.js';
 import { audit } from '../lib/audit.js';
 import { errors } from '../lib/http.js';
+import { requiresApproval, createApproval } from '../lib/approval.js';
 import { materializeAgent } from './materialize.js';
 import { runClaude, runClaudeStream } from './claude.js';
 import { runCodex, isApproved } from './codex.js';
 import { runGrok } from './grok.js';
-import { parseRestrictions, restrictionsToRules } from './restrictions.js';
+import { parseRestrictions, restrictionsToRules, claudeDisallowedTools } from './restrictions.js';
 import { runTool, evalCondition } from './tools.js';
+import { guardBudget, recordCost, BudgetExceededError } from './cost.js';
 import {
   readCorePages,
   recall,
@@ -77,6 +79,8 @@ interface RunContext {
   triggeredBy: string;
   /** Set when the agent's cloud file targets were synced into agentDir/data/. */
   hasCloudFiles?: boolean;
+  /** Agent.costPolicy — null/undefined = no budget limit. */
+  costPolicy: unknown;
 }
 
 interface VerdictResult {
@@ -255,7 +259,7 @@ function compileStep(row: { stepKey: string; type: string; config: unknown; veri
         ...base,
         type: 'DO',
         config: {
-          instruction: String(cfg.instruction ?? ''),
+          instruction: String(cfg.instruction ?? cfg.prompt ?? ''),
           // Workflow DO steps run inside the agent's own workspace and often
           // need to WRITE artifacts (報價單/報告等) — headless CLIs would
           // otherwise silently refuse file writes at the permission prompt.
@@ -361,7 +365,9 @@ async function compileManifest(agentId: string, workflowId: string | undefined, 
     skills,
     steps,
     memoryCore,
-  };
+    // Carried for L7 budget guard; not part of CompiledManifest type surface.
+    costPolicy: agent.costPolicy ?? null,
+  } as CompiledManifest & { costPolicy: unknown };
 }
 
 // ── Engine dispatch (execute / verify / manager-decision prompts) ──────────
@@ -422,7 +428,27 @@ function buildExecutePrompt(
   return parts.join('\n\n');
 }
 
+async function safeRecordCost(args: {
+  agentId: string;
+  runId?: string | null;
+  engine: Engine;
+  inputText: string;
+  outputText: string;
+}): Promise<void> {
+  try {
+    await recordCost(args);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    hub.publish('run.log', {
+      runId: args.runId ?? undefined,
+      line: `recordCost failed (non-fatal): ${msg}`,
+    });
+  }
+}
+
 async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | null, round: number): Promise<string> {
+  await guardBudget(ctx.manifest.agentId, ctx.costPolicy);
+
   const instruction = resolveTemplate(step.config.instruction, ctx);
   const onLine = (line: string) => {
     if (line.trim()) hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round, line });
@@ -439,6 +465,13 @@ async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | 
   if (ctx.manifest.engineExecute === 'CODEX') {
     const prompt = buildExecutePrompt(ctx, instruction, feedback, true, recallBlock);
     const res = await runCodex({ prompt, cwd: ctx.manifest.agentDir, sandbox: 'workspace-write', timeoutMs: EXEC_TIMEOUT_MS, onLine });
+    await safeRecordCost({
+      agentId: ctx.manifest.agentId,
+      runId: ctx.runId,
+      engine: 'CODEX',
+      inputText: prompt,
+      outputText: res.text,
+    });
     return res.text;
   }
   if (ctx.manifest.engineExecute === 'GROK') {
@@ -450,17 +483,32 @@ async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | 
       disableWebSearch: !ctx.manifest.restrictions.webSearch,
       onLine,
     });
+    await safeRecordCost({
+      agentId: ctx.manifest.agentId,
+      runId: ctx.runId,
+      engine: 'GROK',
+      inputText: prompt,
+      outputText: res.stdout,
+    });
     return res.stdout;
   }
   const prompt = buildExecutePrompt(ctx, instruction, feedback, false, recallBlock);
+  const systemAppend = buildSystemPrompt(ctx.manifest) || undefined;
   const res = await runClaudeStream({
     prompt,
-    systemAppend: buildSystemPrompt(ctx.manifest) || undefined,
+    systemAppend,
     cwd: ctx.manifest.agentDir,
     fullPermissions: step.config.permissions === 'full',
-    disallowedTools: ctx.manifest.restrictions.webSearch ? undefined : ['WebSearch', 'WebFetch'],
+    disallowedTools: claudeDisallowedTools(ctx.manifest.restrictions),
     timeoutMs: EXEC_TIMEOUT_MS,
     onLine,
+  });
+  await safeRecordCost({
+    agentId: ctx.manifest.agentId,
+    runId: ctx.runId,
+    engine: 'CLAUDE_CODE',
+    inputText: systemAppend ? `${systemAppend}\n\n${prompt}` : prompt,
+    outputText: res.stdout,
   });
   return res.stdout;
 }
@@ -500,10 +548,19 @@ function buildVerifyPrompt(rubric: string, artifact: string, sourceOfTruth: stri
 }
 
 async function runVerifyStep(ctx: RunContext, rubric: string, artifact: string, sourceOfTruth: string, threadId: string | null): Promise<VerdictResult> {
+  await guardBudget(ctx.manifest.agentId, ctx.costPolicy);
+
   if (ctx.manifest.engineVerify === 'CODEX') {
     const isResume = threadId != null;
     const prompt = buildVerifyPrompt(rubric, artifact, sourceOfTruth, isResume);
     const res = await runCodex({ prompt, cwd: ctx.manifest.agentDir, resumeThreadId: threadId, sandbox: 'read-only', timeoutMs: VERIFY_TIMEOUT_MS });
+    await safeRecordCost({
+      agentId: ctx.manifest.agentId,
+      runId: ctx.runId,
+      engine: 'CODEX',
+      inputText: prompt,
+      outputText: res.text,
+    });
     return { approved: isApproved(res.text), text: res.text, threadId: res.threadId };
   }
   if (ctx.manifest.engineVerify === 'GROK') {
@@ -519,6 +576,13 @@ async function runVerifyStep(ctx: RunContext, rubric: string, artifact: string, 
       cwd: ctx.manifest.agentDir,
       resumeSessionId: threadId,
       timeoutMs: VERIFY_TIMEOUT_MS,
+    });
+    await safeRecordCost({
+      agentId: ctx.manifest.agentId,
+      runId: ctx.runId,
+      engine: 'GROK',
+      inputText: `${sys}\n\n${prompt}`,
+      outputText: res.stdout,
     });
     return { approved: isApproved(res.stdout), text: res.stdout, threadId: res.sessionId };
   }
@@ -536,17 +600,42 @@ async function runVerifyStep(ctx: RunContext, rubric: string, artifact: string, 
     allowedTools: ctx.manifest.restrictions.webSearch ? ['WebFetch', 'WebSearch'] : undefined,
     timeoutMs: VERIFY_TIMEOUT_MS,
   });
+  await safeRecordCost({
+    agentId: ctx.manifest.agentId,
+    runId: ctx.runId,
+    engine: 'CLAUDE_CODE',
+    inputText: `${sys}\n\n${prompt}`,
+    outputText: res.stdout,
+  });
   return { approved: isApproved(res.stdout), text: res.stdout, threadId: null };
 }
 
 async function callManagerDecision(ctx: RunContext, instruction: string, source: string): Promise<string> {
+  await guardBudget(ctx.manifest.agentId, ctx.costPolicy);
+
   if (ctx.manifest.engineExecute === 'CODEX') {
     const parts = [ctx.manifest.rolePrompt ? `[Role]\n${ctx.manifest.rolePrompt}` : '', `[Task]\n${instruction}`, `[Context]\n${source}`].filter(Boolean);
-    const res = await runCodex({ prompt: parts.join('\n\n'), cwd: ctx.manifest.agentDir, sandbox: 'workspace-write', timeoutMs: DECISION_TIMEOUT_MS });
+    const prompt = parts.join('\n\n');
+    const res = await runCodex({ prompt, cwd: ctx.manifest.agentDir, sandbox: 'workspace-write', timeoutMs: DECISION_TIMEOUT_MS });
+    await safeRecordCost({
+      agentId: ctx.manifest.agentId,
+      runId: ctx.runId,
+      engine: 'CODEX',
+      inputText: prompt,
+      outputText: res.text,
+    });
     return res.text;
   }
   const prompt = [`[Task]\n${instruction}`, `[Context]\n${source}`].join('\n\n');
-  const res = await runClaude({ prompt, systemAppend: ctx.manifest.rolePrompt || undefined, cwd: ctx.manifest.agentDir, timeoutMs: DECISION_TIMEOUT_MS });
+  const systemAppend = ctx.manifest.rolePrompt || undefined;
+  const res = await runClaude({ prompt, systemAppend, cwd: ctx.manifest.agentDir, timeoutMs: DECISION_TIMEOUT_MS });
+  await safeRecordCost({
+    agentId: ctx.manifest.agentId,
+    runId: ctx.runId,
+    engine: 'CLAUDE_CODE',
+    inputText: systemAppend ? `${systemAppend}\n\n${prompt}` : prompt,
+    outputText: res.stdout,
+  });
   return res.stdout;
 }
 
@@ -567,7 +656,10 @@ async function runDoStep(step: DoStep, ctx: RunContext): Promise<StepResult> {
     try {
       output = await runExecuteStep(ctx, step, feedback, round);
     } catch (e) {
-      const reason = `EXECUTE_ERROR: ${e instanceof Error ? e.message : String(e)}`;
+      const isBudget = e instanceof BudgetExceededError;
+      const reason = isBudget
+        ? `預算超限，已 fail-closed 阻斷: ${e.message}`
+        : `EXECUTE_ERROR: ${e instanceof Error ? e.message : String(e)}`;
       await persistRunStep(ctx, step.stepKey, round, 'error', { error: reason, output: lastOutput || undefined });
       hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round, line: reason });
       return { ok: false, stepKey: step.stepKey, type: step.type, output: lastOutput, rounds: round, approved: false, reason, records };
@@ -589,8 +681,12 @@ async function runDoStep(step: DoStep, ctx: RunContext): Promise<StepResult> {
     try {
       verdict = await runVerifyStep(ctx, rubric, output, sourceForStep(ctx), threadId);
     } catch (e) {
-      const reason = `VERIFY_ERROR: ${e instanceof Error ? e.message : String(e)}`;
+      const isBudget = e instanceof BudgetExceededError;
+      const reason = isBudget
+        ? `預算超限，已 fail-closed 阻斷: ${e.message}`
+        : `VERIFY_ERROR: ${e instanceof Error ? e.message : String(e)}`;
       await persistRunStep(ctx, step.stepKey, round, 'error', { error: reason, output });
+      hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round, line: reason });
       return { ok: false, stepKey: step.stepKey, type: step.type, output, rounds: round, approved: false, reason, records };
     }
     if (round === 1) threadId = verdict.threadId;
@@ -631,6 +727,7 @@ async function runToolStep(step: ToolStep, ctx: RunContext): Promise<StepResult>
       agentId: ctx.manifest.agentId,
       agentDir: ctx.manifest.agentDir,
       cloudWrite: ctx.manifest.restrictions.cloudWrite,
+      sendEmail: ctx.manifest.restrictions.sendEmail,
     });
   } catch (e) {
     const reason = `TOOL_ERROR: ${e instanceof Error ? e.message : String(e)}`;
@@ -657,8 +754,12 @@ async function runToolStep(step: ToolStep, ctx: RunContext): Promise<StepResult>
       null,
     );
   } catch (e) {
-    const reason = `VERIFY_ERROR: ${e instanceof Error ? e.message : String(e)}`;
+    const isBudget = e instanceof BudgetExceededError;
+    const reason = isBudget
+      ? `預算超限，已 fail-closed 阻斷: ${e.message}`
+      : `VERIFY_ERROR: ${e instanceof Error ? e.message : String(e)}`;
     await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason, output });
+    hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round: 1, line: reason });
     return { ok: false, stepKey: step.stepKey, type: step.type, output, rounds: 1, approved: false, reason, records: [] };
   }
   await save(ctx, `${step.stepKey}.r1.verdict.md`, verdict.text);
@@ -894,7 +995,15 @@ async function routeDefects(failed: StepResult, candidates: string[], ctx: RunCo
     const arr = JSON.parse(m ? m[0] : out) as string[];
     const valid = arr.filter((id) => candidates.includes(id));
     if (valid.length) return valid;
-  } catch {
+  } catch (e) {
+    // Budget hard-stop must not be swallowed into the conservative default.
+    if (e instanceof BudgetExceededError) {
+      hub.publish('run.log', {
+        runId: ctx.runId,
+        line: `預算超限，已 fail-closed 阻斷: ${e.message}`,
+      });
+      throw e;
+    }
     // fall through to the conservative default below
   }
   return candidates; // parse failure => conservative: route back to every candidate
@@ -912,6 +1021,48 @@ async function routeDefects(failed: StepResult, candidates: string[], ctx: RunCo
 export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
   const agentRow = await prisma.agent.findUnique({ where: { id: opts.agentId } });
   if (!agentRow || agentRow.deletedAt) throw errors.notFound(`Agent not found: ${opts.agentId}`);
+
+  // Pre-execution HITL gate: high-risk agents halt before any engine call.
+  const alreadyApproved = !!opts.approvedApprovalId;
+  if (requiresApproval(agentRow.riskTier, alreadyApproved)) {
+    const runId = opts.runId ?? ulid();
+    const runDir = path.join(paths.runs, runId);
+    await mkdir(runDir, { recursive: true });
+    await prisma.run.create({
+      data: {
+        id: runId,
+        workflowId: opts.workflowId ?? null,
+        agentId: agentRow.id,
+        triggeredBy: opts.triggeredBy,
+        status: 'AWAITING_REVIEW',
+        input: (opts.input ?? {}) as object,
+        runDir,
+      },
+    });
+    const { resumeToken } = await createApproval({
+      runId,
+      agentId: agentRow.id,
+      reason: '高風險員工（riskTier=high）執行前需人工核准',
+      payload: {
+        agentId: opts.agentId,
+        workflowId: opts.workflowId,
+        input: opts.input,
+        triggeredBy: opts.triggeredBy,
+      },
+    });
+    await audit(opts.triggeredBy, 'run.awaiting_review', 'Run', runId, { agentId: agentRow.id });
+    hub.publish('run.step', { runId, agentId: agentRow.id, phase: 'awaiting_review' });
+    hub.publish('approval.requested', { runId, agentId: agentRow.id, resumeToken });
+    return {
+      ok: false,
+      runId,
+      runDir,
+      status: 'AWAITING_REVIEW',
+      results: [],
+      reworkHistory: [],
+      stoppedAt: 'awaiting_review',
+    };
+  }
 
   const agentDir = await materializeAgent(agentRow.id);
 
@@ -958,17 +1109,40 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
     }
   }
 
-  await prisma.run.create({
-    data: {
-      id: runId,
-      workflowId: opts.workflowId ?? null,
-      agentId: agentRow.id,
-      triggeredBy: opts.triggeredBy,
-      status: 'RUNNING',
-      input: (opts.input ?? {}) as object,
-      runDir,
-    },
-  });
+  // Create-or-resume: approval flow already created the run as AWAITING_REVIEW.
+  if (opts.approvedApprovalId) {
+    const existing = await prisma.run.findUnique({ where: { id: runId } });
+    if (existing) {
+      await prisma.run.update({
+        where: { id: runId },
+        data: { status: 'RUNNING' },
+      });
+    } else {
+      await prisma.run.create({
+        data: {
+          id: runId,
+          workflowId: opts.workflowId ?? null,
+          agentId: agentRow.id,
+          triggeredBy: opts.triggeredBy,
+          status: 'RUNNING',
+          input: (opts.input ?? {}) as object,
+          runDir,
+        },
+      });
+    }
+  } else {
+    await prisma.run.create({
+      data: {
+        id: runId,
+        workflowId: opts.workflowId ?? null,
+        agentId: agentRow.id,
+        triggeredBy: opts.triggeredBy,
+        status: 'RUNNING',
+        input: (opts.input ?? {}) as object,
+        runDir,
+      },
+    });
+  }
   await audit(opts.triggeredBy, 'run.start', 'Run', runId, { agentId: agentRow.id, workflowId: opts.workflowId ?? null });
   hub.publish('run.started', { runId, agentId: agentRow.id, workflowId: opts.workflowId ?? null, triggeredBy: opts.triggeredBy, startedAt: new Date().toISOString() });
 
@@ -989,6 +1163,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
     depth: opts.depth ?? 0,
     triggeredBy: opts.triggeredBy,
     hasCloudFiles,
+    costPolicy: (manifest as CompiledManifest & { costPolicy?: unknown }).costPolicy ?? agentRow.costPolicy ?? null,
   };
 
   const stepIndex = new Map(manifest.steps.map((s, idx) => [s.stepKey, idx]));
@@ -1075,14 +1250,19 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
   } catch (e) {
     finalStatus = 'FAILED';
     stoppedAt = stoppedAt ?? 'runner';
+    const isBudget = e instanceof BudgetExceededError;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (isBudget) {
+      hub.publish('run.log', { runId, line: `預算超限，已 fail-closed 阻斷: ${msg}` });
+    }
     results.push({
       ok: false,
       stepKey: 'runner',
       type: 'DO',
-      output: e instanceof Error ? e.message : String(e),
+      output: msg,
       rounds: 0,
       approved: false,
-      reason: 'RUNNER_ERROR',
+      reason: isBudget ? `預算超限，已 fail-closed 阻斷: ${msg}` : 'RUNNER_ERROR',
       records: [],
     });
   }
