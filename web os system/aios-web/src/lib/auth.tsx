@@ -50,3 +50,8 @@ export function useAuth() {
   if (!c) throw new Error('useAuth must be used within AuthProvider');
   return c;
 }
+
+/** FDE = OWNER or TRAINER; can train agents and review change proposals. */
+export function isFdeRole(role: string | undefined | null): boolean {
+  return role === 'OWNER' || role === 'TRAINER';
+}

@@ -40,7 +40,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { API, ApiError } from '@/lib/api';
-import { useAuth } from '@/lib/auth';
+import { useAuth, isFdeRole } from '@/lib/auth';
 import { useAwp, type AwpFrame } from '@/lib/awp';
 import { AppShell } from '@/components/AppShell';
 import { EmptyState, Field, PageHeader, Spinner, StatusBadge } from '@/components/ui';
@@ -1904,10 +1904,6 @@ type ChatMsg =
       workflows: AgentFlows['workflows'];
     }
   | { id: string; kind: 'error'; text: string };
-
-function isFdeRole(role: string | undefined | null): boolean {
-  return role === 'OWNER' || role === 'TRAINER';
-}
 
 function normalizeUnderstanding(raw: unknown): SkillUnderstanding | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;

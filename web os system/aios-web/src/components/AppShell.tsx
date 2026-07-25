@@ -2,9 +2,11 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
-import { LayoutDashboard, Users, Wrench, Workflow, Plug, ScrollText, LogOut, Wifi, WifiOff, Network } from 'lucide-react';
-import { useAuth } from '@/lib/auth';
+import { useQuery } from '@tanstack/react-query';
+import { LayoutDashboard, Users, Wrench, Workflow, Plug, ScrollText, LogOut, Wifi, WifiOff, Network, FileCheck2 } from 'lucide-react';
+import { useAuth, isFdeRole } from '@/lib/auth';
 import { useAwp } from '@/lib/awp';
+import { API } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { Spinner } from './ui';
 
@@ -18,11 +20,25 @@ const NAV = [
   { href: '/audit', label: '稽核 Audit', icon: ScrollText },
 ];
 
+interface PendingProposalRow {
+  id: string;
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
   const { user, loading, logout } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
   const { connected } = useAwp(['run.*', 'agent.status', 'integration.status', 'skill.review_ready', 'workflow.triggered', 'schedule.fired']);
+  const isFde = isFdeRole(user?.role);
+
+  // Shared key with /proposals page — badge reuses cache when available.
+  const proposalsQ = useQuery({
+    queryKey: ['proposals'],
+    queryFn: () => API.get<PendingProposalRow[]>('/api/proposals'),
+    enabled: !!user && isFde,
+    staleTime: 30_000,
+  });
+  const pendingCount = isFde && Array.isArray(proposalsQ.data) ? proposalsQ.data.length : null;
 
   useEffect(() => {
     if (!loading && !user) router.replace('/login');
@@ -51,6 +67,23 @@ export function AppShell({ children }: { children: ReactNode }) {
               </Link>
             );
           })}
+          {isFde && (
+            <Link
+              href="/proposals"
+              className={cn(
+                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm',
+                pathname.startsWith('/proposals')
+                  ? 'bg-brand/10 text-brand font-medium'
+                  : 'text-muted hover:bg-black/5 dark:hover:bg-white/5',
+              )}
+            >
+              <FileCheck2 className="h-4 w-4" />
+              <span className="flex-1">提案審核 Proposals</span>
+              {pendingCount !== null && pendingCount > 0 && (
+                <span className="badge bg-brand/15 text-brand tabular-nums">{pendingCount}</span>
+              )}
+            </Link>
+          )}
         </nav>
         <div className="border-t border-border px-3 py-3">
           <div className="mb-2 flex items-center gap-2 px-2 text-xs text-muted">
