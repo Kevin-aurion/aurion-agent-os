@@ -49,6 +49,8 @@ enum SkillOrigin {
   UPLOADED
   BUILTIN
   CLI_GENERATED
+  /// Produced by record-and-replay / event-stream capture (Codex MCP).
+  RECORDED
 }
 
 enum SkillKind {
@@ -93,6 +95,27 @@ enum ApprovalStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+/// Who/what originated a change proposal (operator suggestion or system signal).
+enum ProposalSource {
+  OPERATOR
+  VIOLATION
+  SEMANTIC
+}
+
+/// Lifecycle of a change proposal in the FDE inbox.
+enum ProposalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// What the proposal would mutate if approved.
+enum ProposalTarget {
+  SKILL
+  RESTRICTION
+  IDENTITY_CARD
 }
 
 enum MessageRole {
@@ -366,6 +389,30 @@ model ApprovalRequest {
   decidedAt   DateTime?
   createdAt   DateTime       @default(now())
   @@index([status, createdAt])
+}
+
+// ── Change proposals (operator suggestions + violation/semantic signals) ─────
+// Single FDE inbox: only TRAINER/OWNER can approve/reject; operators may create.
+// Approve applies target mutation; reject is a pure status change (no target write).
+model ChangeProposal {
+  id                 String          @id
+  agentId            String
+  runId              String?
+  source             ProposalSource
+  proposedBy         String
+  targetType         ProposalTarget
+  targetId           String?
+  proposedChange     Json
+  severity           String          @default("medium")
+  confidence         Float?
+  status             ProposalStatus  @default(PENDING)
+  decidedBy          String?
+  decidedAt          DateTime?
+  resultingVersionId String?
+  createdAt          DateTime        @default(now())
+
+  @@index([status, createdAt])
+  @@index([agentId, createdAt])
 }
 
 // ── Conversations (chat with an agent) ────────────────────────────────────────

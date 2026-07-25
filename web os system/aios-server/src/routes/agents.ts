@@ -201,6 +201,15 @@ export async function agentRoutes(app: FastifyInstance) {
       const skill = await prisma.skill.findFirst({ where: { id: body.skillId, deletedAt: null } });
       if (!skill) throw errors.notFound('Skill not found');
       if (skill.reviewStatus !== 'CONFIRMED') throw errors.conflict('skill not confirmed');
+      // Recorded / computer-control skills require CODEX as the execute engine (ADR 0005).
+      if (
+        (skill.origin === 'RECORDED' || skill.kind === 'COMPUTER_CONTROL') &&
+        agent.engineExecute !== 'CODEX'
+      ) {
+        throw errors.badRequest(
+          '此類技能只能由 CODEX 引擎驅動，請將員工主引擎改為 CODEX',
+        );
+      }
       const agentSkill = await prisma.agentSkill.create({
         data: { agentId: id, skillId: body.skillId },
       });
