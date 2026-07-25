@@ -30,6 +30,11 @@ import {
 import { runTool, evalCondition } from './tools.js';
 import { guardBudget, recordCost, BudgetExceededError } from './cost.js';
 import { recordViolation, createProposal } from '../lib/changeproposal.js';
+import {
+  connectComputerUse,
+  assertToolsPresent,
+  COMPUTER_USE_TOOLS,
+} from '../lib/codexmcp.js';
 import { parseIdentityCard, type IdentityCard } from '../lib/identitycard.js';
 import {
   readCorePages,
@@ -1207,6 +1212,125 @@ async function runComputerControlStep(step: ComputerControlStep, ctx: RunContext
     hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round: 1, line: reason });
     return { ok: false, stepKey: step.stepKey, type: step.type, output: '', rounds: 1, approved: false, reason, records: [] };
   }
+
+  // CODEX primary path: drive Computer Use MCP in-process (ADR 0005).
+  // On connect failure, fall through to the macOS App bridge below.
+  if (ctx.manifest.engineExecute === 'CODEX') {
+    const codexResult = await tryCodexComputerUse(step, ctx);
+    if (codexResult) return codexResult;
+  }
+
+  // Fallback (non-CODEX, or CODEX connect failure): dispatch to macOS App via WS.
+  return runComputerControlViaDesktopApp(step, ctx);
+}
+
+/**
+ * Execute COMPUTER_CONTROL via Codex Computer Use MCP.
+ * Returns null only when the MCP process cannot be started (caller falls back).
+ * Tool-list drift / permission / tool-call failures return a failed StepResult
+ * with a clear message (no silent swallow).
+ */
+async function tryCodexComputerUse(step: ComputerControlStep, ctx: RunContext): Promise<StepResult | null> {
+  let client: Awaited<ReturnType<typeof connectComputerUse>> | null = null;
+  try {
+    try {
+      client = await connectComputerUse();
+    } catch (e) {
+      // Connect/spawn failure → allow macOS App fallback.
+      const msg = e instanceof Error ? e.message : String(e);
+      hub.publish('run.log', {
+        runId: ctx.runId,
+        stepKey: step.stepKey,
+        round: 1,
+        line: `CODEX Computer Use 連線失敗，改走 macOS App fallback: ${msg}`,
+      });
+      return null;
+    }
+
+    try {
+      await assertToolsPresent(client, [...COMPUTER_USE_TOOLS]);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
+      hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round: 1, line: reason });
+      return { ok: false, stepKey: step.stepKey, type: step.type, output: '', rounds: 1, approved: false, reason, records: [] };
+    }
+
+    hub.publish('run.step', {
+      runId: ctx.runId,
+      stepKey: step.stepKey,
+      type: step.type,
+      round: 1,
+      phase: 'executing',
+    });
+
+    const results: Record<string, unknown> = { via: 'codex-computer-use-mcp' };
+
+    // Always probe app inventory first.
+    try {
+      results.list_apps = await client.call('list_apps', {});
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
+      hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round: 1, line: reason });
+      return { ok: false, stepKey: step.stepKey, type: step.type, output: '', rounds: 1, approved: false, reason, records: [] };
+    }
+
+    // Optional: step.config may carry app / actions (forward-compatible).
+    const cfg = step.config as ComputerControlStep['config'] & {
+      app?: string;
+      actions?: Array<{ tool: string; args?: Record<string, unknown> }>;
+    };
+    const appName = typeof cfg.app === 'string' ? cfg.app.trim() : '';
+    if (appName) {
+      try {
+        results.get_app_state = await client.call('get_app_state', { app: appName });
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
+        return { ok: false, stepKey: step.stepKey, type: step.type, output: JSON.stringify(results), rounds: 1, approved: false, reason, records: [] };
+      }
+    }
+
+    if (Array.isArray(cfg.actions)) {
+      const actionResults: unknown[] = [];
+      for (const action of cfg.actions) {
+        if (!action || typeof action.tool !== 'string') continue;
+        const toolName = action.tool;
+        if (!(COMPUTER_USE_TOOLS as readonly string[]).includes(toolName)) {
+          const reason = `未知的 Computer Use 工具: ${toolName}。允許: ${COMPUTER_USE_TOOLS.join(', ')}`;
+          await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
+          return { ok: false, stepKey: step.stepKey, type: step.type, output: JSON.stringify(results), rounds: 1, approved: false, reason, records: [] };
+        }
+        actionResults.push({
+          tool: toolName,
+          result: await client.call(toolName, action.args ?? {}),
+        });
+      }
+      results.actions = actionResults;
+    }
+
+    if (step.config.instructions) {
+      results.instructions = resolveTemplate(step.config.instructions, ctx);
+    }
+    results.skillId = step.config.skillId;
+
+    const output = JSON.stringify(results);
+    await save(ctx, `${step.stepKey}.r1.output.txt`, output);
+    await persistRunStep(ctx, step.stepKey, 1, 'approved', { output, approved: true });
+    return { ok: true, stepKey: step.stepKey, type: step.type, output, rounds: 1, approved: true, records: [] };
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
+    hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round: 1, line: reason });
+    return { ok: false, stepKey: step.stepKey, type: step.type, output: '', rounds: 1, approved: false, reason, records: [] };
+  } finally {
+    client?.close();
+  }
+}
+
+/** Legacy path: publish computer.control_requested and wait for macOS App executor. */
+async function runComputerControlViaDesktopApp(step: ComputerControlStep, ctx: RunContext): Promise<StepResult> {
   const taskId = ulid();
   try {
     await prisma.computerControlTask.create({

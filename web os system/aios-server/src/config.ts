@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import os from 'node:os';
 import path from 'node:path';
 
 function req(name: string, fallback?: string): string {
@@ -12,6 +13,10 @@ function req(name: string, fallback?: string): string {
 function opt(name: string, fallback = ''): string {
   return process.env[name] ?? fallback;
 }
+
+/** Default Codex App home (~/.codex). Overridable via CODEX_HOME. */
+const codexHomeDefault = path.join(os.homedir(), '.codex');
+const codexHome = opt('CODEX_HOME', codexHomeDefault) || codexHomeDefault;
 
 export const config = {
   httpPort: Number(opt('AIOS_HTTP_PORT', '8700')),
@@ -57,6 +62,31 @@ export const config = {
     claudePath: opt('CLAUDE_CLI_PATH', 'claude'),
     codexPath: opt('CODEX_CLI_PATH', 'codex'),
     grokPath: opt('GROK_CLI_PATH', 'grok'),
+  },
+
+  // Codex App MCP bridges (Computer Use + Record & Replay). Paths verified on
+  // macOS Codex install; override with env when App layout drifts.
+  codex: {
+    home: codexHome,
+    computerUseDir: opt('CODEX_COMPUTER_USE_DIR', path.join(codexHome, 'computer-use')),
+    computerUseBin: opt(
+      'CODEX_COMPUTER_USE_BIN',
+      path.join(
+        codexHome,
+        'computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient',
+      ),
+    ),
+    recordPluginDir: opt(
+      'CODEX_RECORD_PLUGIN_DIR',
+      path.join(codexHome, '.tmp/bundled-marketplaces/openai-bundled/plugins/record-and-replay'),
+    ),
+    recordLauncher: opt(
+      'CODEX_RECORD_LAUNCHER',
+      path.join(
+        codexHome,
+        '.tmp/bundled-marketplaces/openai-bundled/plugins/record-and-replay/bin/computer-use-client-launcher',
+      ),
+    ),
   },
 
   // Local Docling document-parse service (docker aios-docparse, loopback only).
