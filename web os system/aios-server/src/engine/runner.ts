@@ -15,7 +15,7 @@ import { paths } from '../config.js';
 import { hub } from '../ws/hub.js';
 import { audit } from '../lib/audit.js';
 import { errors } from '../lib/http.js';
-import { requiresApproval, createApproval } from '../lib/approval.js';
+import { requiresApproval, createApproval, isRunApproved } from '../lib/approval.js';
 import { materializeAgent } from './materialize.js';
 import { runClaude, runClaudeStream } from './claude.js';
 import { runCodex, isApproved } from './codex.js';
@@ -1083,7 +1083,8 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
   if (!agentRow || agentRow.deletedAt) throw errors.notFound(`Agent not found: ${opts.agentId}`);
 
   // Pre-execution HITL gate: high-risk agents halt before any engine call.
-  const alreadyApproved = !!opts.approvedApprovalId;
+  // Only a real DB ApprovalRequest with status APPROVED counts (fail-closed).
+  const alreadyApproved = await isRunApproved(opts.runId ?? '', opts.approvedApprovalId);
   if (requiresApproval(agentRow.riskTier, alreadyApproved)) {
     const runId = opts.runId ?? ulid();
     const runDir = path.join(paths.runs, runId);

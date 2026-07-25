@@ -1,5 +1,6 @@
 // HITL pre-execution approval helpers for high-risk agents.
 // Gate: riskTier === 'high' && !alreadyApproved → halt at AWAITING_REVIEW.
+// alreadyApproved must come from isRunApproved (DB-backed), never from a bare string.
 import { ulid } from 'ulid';
 import type { ApprovalRequest } from '@prisma/client';
 import { prisma } from './db.js';
@@ -11,6 +12,45 @@ export function requiresApproval(
   alreadyApproved: boolean,
 ): boolean {
   return riskTier === 'high' && !alreadyApproved;
+}
+
+/**
+ * Only a real ApprovalRequest for this run with status==='APPROVED' counts.
+ * Fail-closed: any query error → false (treat as not approved).
+ * Matches when approvalId and/or runId point at an APPROVED row.
+ */
+export async function isRunApproved(
+  runId: string,
+  approvalId?: string | null,
+): Promise<boolean> {
+  try {
+    if (!runId && !approvalId) return false;
+
+    if (approvalId) {
+      const byId = await prisma.approvalRequest.findUnique({ where: { id: approvalId } });
+      if (byId?.status === 'APPROVED') {
+        // If runId was provided, it must match the request's run.
+        if (runId && byId.runId !== runId) return false;
+        return true;
+      }
+      // Fake / unknown id is never approved (do not fall through to a looser match).
+      return false;
+    }
+
+    if (!runId) return false;
+    const byRun = await prisma.approvalRequest.findUnique({ where: { runId } });
+    return byRun?.status === 'APPROVED';
+  } catch {
+    return false;
+  }
+}
+
+/** Durable workflows cannot host high-risk HITL yet — reject this combination. */
+export function durableHighRiskRejected(
+  riskTier: string | null | undefined,
+  durable: boolean,
+): boolean {
+  return riskTier === 'high' && durable;
 }
 
 export async function createApproval(args: {

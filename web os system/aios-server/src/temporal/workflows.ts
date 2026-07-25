@@ -50,13 +50,25 @@ export interface DurableWorkflowInput {
 }
 
 /**
- * Opt-in durable workflow path: high-risk waits for approveSignal, then
- * runs the real engine via runAgentActivity.
- * Requires temporal worker (`npm run temporal:worker`) to progress.
+ * Opt-in durable workflow path: runs the real engine via runAgentActivity
+ * and returns the full RunOutcome. High-risk durable is rejected at
+ * workflow/runner dispatch (durableHighRiskRejected) — this path should
+ * only see medium/low riskTier. Requires temporal worker to progress.
  */
 export async function durableWorkflowRun(
   input: DurableWorkflowInput,
-): Promise<{ runId: string; status: string; stoppedAt?: string | null }> {
+): Promise<{
+  ok: boolean;
+  runId: string;
+  runDir: string;
+  status: string;
+  results: unknown[];
+  reworkHistory: unknown[];
+  stoppedAt?: string;
+  output?: unknown;
+}> {
+  // Defensive: if high-risk ever reaches here, still wait for signal
+  // (dispatch gate should have rejected first).
   if (input.riskTier === 'high') {
     let approved = false;
     setHandler(approveSignal, () => {

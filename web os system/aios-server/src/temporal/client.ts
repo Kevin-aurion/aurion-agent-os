@@ -4,6 +4,7 @@
  */
 
 import { Client, Connection } from '@temporalio/client';
+import type { RunOutcome } from '../engine/types.js';
 import type { DurableRunInput, DurableWorkflowInput } from './workflows.js';
 import { durableAgentRun, durableWorkflowRun, approveSignal } from './workflows.js';
 
@@ -52,11 +53,11 @@ export async function approveDurableRun(workflowId: string): Promise<void> {
   await handle.signal(approveSignal);
 }
 
-/** Await and return the workflow result. */
-export async function getDurableRunResult(workflowId: string): Promise<unknown> {
+/** Await and return the full RunOutcome from durableWorkflowRun. */
+export async function getDurableRunResult(workflowId: string): Promise<RunOutcome> {
   const client = await getClient();
   const handle = client.workflow.getHandle(workflowId);
-  return handle.result();
+  return handle.result() as Promise<RunOutcome>;
 }
 
 /** Return current workflow status string (e.g. RUNNING, COMPLETED, FAILED). */

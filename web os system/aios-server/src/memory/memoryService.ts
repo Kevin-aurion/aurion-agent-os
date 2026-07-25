@@ -157,13 +157,18 @@ function shaOf(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
-/** Load agent.cloudEmbedding restriction (default true). Redactor always applies. */
+/**
+ * Load agent.cloudEmbedding restriction (default true when row loads).
+ * Fail-closed: query failure → false (do not send to cloud).
+ * Cloud embedding itself is an intentional product exception (OpenRouter Gemini),
+ * not an accident — but only when we can confirm the agent allows it.
+ */
 async function agentAllowsCloudEmbedding(agentId: string): Promise<boolean> {
   try {
     const row = await prisma.agent.findUnique({ where: { id: agentId }, select: { restrictions: true } });
     return parseRestrictions(row?.restrictions).cloudEmbedding;
   } catch {
-    return true;
+    return false;
   }
 }
 

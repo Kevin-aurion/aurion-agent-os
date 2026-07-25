@@ -9,6 +9,7 @@
 import { prisma } from '../lib/db.js';
 import { errors } from '../lib/http.js';
 import { hub } from '../ws/hub.js';
+import { durableHighRiskRejected } from '../lib/approval.js';
 import type { RunOutcome } from '../engine/index.js';
 
 const VALID_STATUSES = new Set(['RUNNING', 'SUCCEEDED', 'FAILED', 'AWAITING_REVIEW', 'CANCELLED']);
@@ -54,9 +55,15 @@ export async function runWorkflow(
   // Opt-in durable path: Workflow.durable=true → Temporal (HITL wait +
   // runAgent activity). Requires `npm run temporal:worker` or the workflow
   // will not progress. Non-durable stays in-process (unchanged).
+  // Durable + high-risk is rejected fail-closed (no Temporal HITL wiring yet).
   let outcome: RunOutcome;
   if (workflow.durable) {
     const agent = await prisma.agent.findUnique({ where: { id: workflow.agentId } });
+    if (durableHighRiskRejected(agent?.riskTier, true)) {
+      throw errors.badRequest(
+        '耐久工作流尚不支援高風險員工的人工核准，請關閉 durable 或調降 riskTier',
+      );
+    }
     const rid = runId ?? (await import('ulid')).ulid();
     const { startDurableWorkflowRun, getDurableRunResult } = await import('../temporal/client.js');
     await startDurableWorkflowRun({
@@ -67,8 +74,7 @@ export async function runWorkflow(
       input,
       riskTier: agent?.riskTier ?? 'medium',
     });
-    // Temporal result is { runId, status, stoppedAt? }; status must be a RunStatus.
-    outcome = (await getDurableRunResult(rid)) as RunOutcome;
+    outcome = await getDurableRunResult(rid);
   } else {
     const { runAgent } = await import('../engine/index.js');
     outcome = await runAgent({
