@@ -12,6 +12,8 @@ export interface ToolContext {
   cloudWrite: boolean;
   /** From the agent's restrictions — gate email-sending tools (groundwork; no built-in email tool yet). */
   sendEmail: boolean;
+  /** Optional run id — used for VIOLATION proposal linkage when a hard block fires. */
+  runId?: string;
 }
 
 export interface ToolModule {
@@ -34,6 +36,14 @@ const uploadToCloud: ToolModule = {
   async run(args, ctx) {
     if (!ctx) throw new Error('upload_to_cloud requires tool context');
     if (!ctx.cloudWrite) {
+      // Hard block unchanged — still throw. Extra: fail-safe VIOLATION signal (ADR 0004).
+      const { recordViolation } = await import('../lib/changeproposal.js');
+      await recordViolation({
+        agentId: ctx.agentId,
+        runId: ctx.runId,
+        kind: 'cloud_write',
+        detail: { tool: 'upload_to_cloud', message: 'cloudWrite restriction blocked upload' },
+      });
       throw new Error('RESTRICTED: 此員工未開啟「寫入雲端檔案」權限，無法上傳。');
     }
     const files = Array.isArray(args.files) ? (args.files as string[]) : [];

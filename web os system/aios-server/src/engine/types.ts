@@ -96,6 +96,11 @@ export interface CompiledManifest {
   steps: Step[];
   /** L1 core wiki pages (index.md + facts.md) injected into the system prompt. */
   memoryCore: string;
+  /**
+   * Parsed identity card when the agent has one; null when Agent.identityCard is null.
+   * Used by the verify-gate semantic overstep review (ADR 0004) — never invent a card.
+   */
+  identityCard: import('../lib/identitycard.js').IdentityCard | null;
 }
 
 export interface RoundRecord {

@@ -41,7 +41,14 @@ export const DEFAULT_RESTRICTIONS: AgentRestrictions = {
   cloudEmbedding: true,
 };
 
-/** claude --disallowedTools 清單：依限制硬性禁用工具（引擎層攔截，非提示）。 */
+/**
+ * claude --disallowedTools 清單：依限制硬性禁用工具（引擎層攔截，非提示）。
+ *
+ * UNOBSERVABLE for violation signals (ADR 0004 / ticket 03): shell and webSearch
+ * are blocked inside the Claude CLI process. Our Node process never sees the
+ * attempt, so we do NOT fabricate VIOLATION proposals for these flags. Only
+ * in-process hard blocks (computerUse, cloudWrite, budget) emit signals.
+ */
 export function claudeDisallowedTools(r: AgentRestrictions): string[] {
   const t: string[] = [];
   if (!r.webSearch) t.push('WebSearch', 'WebFetch');

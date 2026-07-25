@@ -44,6 +44,73 @@ export async function createProposal(args: CreateProposalArgs): Promise<ChangePr
   });
 }
 
+// ── Violation signal (ADR 0004 hard-block track) ─────────────────────────────
+// Observable intercept points only (in-process): computerUse hard-reject,
+// cloudWrite tool throw, BudgetExceededError. Shell/webSearch are enforced
+// inside Claude CLI via --disallowedTools (not visible here); sandbox write
+// denials are OS EPERM seen only by the CLI — we do NOT fabricate those signals.
+
+/** In-memory dedupe for same process: one PENDING proposal per runId+kind. */
+const violationSeen = new Set<string>();
+
+export type RecordViolationArgs = {
+  agentId: string;
+  runId?: string;
+  kind: string;
+  detail: unknown;
+  severity?: string;
+};
+
+/**
+ * Fail-safe: record a hard-block as a VIOLATION proposal for the FDE inbox.
+ * Never throws — create failures are logged only so execution is undisturbed.
+ * Dedupes by runId + kind (memory Set + PENDING DB check) to avoid spam.
+ */
+export async function recordViolation(args: RecordViolationArgs): Promise<void> {
+  try {
+    const kind = args.kind;
+    const dedupeKey = args.runId ? `${args.runId}::${kind}` : null;
+    if (dedupeKey && violationSeen.has(dedupeKey)) return;
+
+    if (args.runId) {
+      const pending = await prisma.changeProposal.findMany({
+        where: {
+          agentId: args.agentId,
+          runId: args.runId,
+          source: 'VIOLATION',
+          status: 'PENDING',
+        },
+      });
+      const already = pending.some((p) => {
+        const c = p.proposedChange;
+        if (!c || typeof c !== 'object' || Array.isArray(c)) return false;
+        return (c as { violation?: unknown }).violation === kind;
+      });
+      if (already) {
+        if (dedupeKey) violationSeen.add(dedupeKey);
+        return;
+      }
+    }
+
+    await createProposal({
+      agentId: args.agentId,
+      runId: args.runId,
+      source: 'VIOLATION',
+      proposedBy: 'system',
+      targetType: 'RESTRICTION',
+      proposedChange: { violation: kind, detail: args.detail },
+      severity: args.severity ?? 'high',
+    });
+    if (dedupeKey) violationSeen.add(dedupeKey);
+  } catch (e) {
+    // Fail-safe: never affect the execution path that triggered the hard block.
+    console.error(
+      '[changeproposal] recordViolation failed (ignored):',
+      e instanceof Error ? e.message : e,
+    );
+  }
+}
+
 /** List PENDING proposals with basic agent info (FDE inbox). */
 export async function listPendingProposals(): Promise<PendingProposal[]> {
   const pending = await prisma.changeProposal.findMany({

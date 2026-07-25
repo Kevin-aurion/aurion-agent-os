@@ -29,6 +29,8 @@ import {
 } from './restrictions.js';
 import { runTool, evalCondition } from './tools.js';
 import { guardBudget, recordCost, BudgetExceededError } from './cost.js';
+import { recordViolation, createProposal } from '../lib/changeproposal.js';
+import { parseIdentityCard, type IdentityCard } from '../lib/identitycard.js';
 import {
   readCorePages,
   recall,
@@ -364,6 +366,10 @@ async function compileManifest(agentId: string, workflowId: string | undefined, 
     memoryCore = '';
   }
 
+  // Identity card for verify-gate semantic overstep (ticket 06). Null when unset.
+  const identityCard: IdentityCard | null =
+    agent.identityCard != null ? parseIdentityCard(agent.identityCard).card : null;
+
   return {
     agentSlug: agent.slug,
     agentId: agent.id,
@@ -376,6 +382,7 @@ async function compileManifest(agentId: string, workflowId: string | undefined, 
     skills,
     steps,
     memoryCore,
+    identityCard,
     // Carried for L7 budget guard; not part of CompiledManifest type surface.
     costPolicy: agent.costPolicy ?? null,
   } as CompiledManifest & { costPolicy: unknown };
@@ -462,6 +469,10 @@ async function safeRecordCost(args: {
  * Opt-in L6 write sandbox: if restrictions.sandbox.enabled, materialize an SBPL
  * profile under runDir/sandbox.sb (once per run) and return its path; otherwise
  * return undefined so engines spawn without sandbox-exec (zero behaviour change).
+ *
+ * UNOBSERVABLE for violation signals: sandbox denials surface as OS EPERM inside
+ * the CLI child process — we never see the attempt here, so we do not invent
+ * VIOLATION proposals for sandbox blocks (ticket 03 / ADR 0004).
  */
 async function ensureSandboxProfile(ctx: RunContext): Promise<string | undefined> {
   if (!ctx.manifest.restrictions.sandbox?.enabled) return undefined;
@@ -678,7 +689,42 @@ async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | 
   return res.text;
 }
 
-function buildVerifyPrompt(rubric: string, artifact: string, sourceOfTruth: string, isResume: boolean): string {
+function formatIdentityCardForVerify(card: IdentityCard): string {
+  return [
+    `oneLiner: ${card.oneLiner}`,
+    `purpose: ${card.purpose}`,
+    `canDo: ${JSON.stringify(card.canDo)}`,
+    `cannotDo: ${JSON.stringify(card.cannotDo)}`,
+    `servedAudience: ${card.servedAudience}`,
+  ].join('\n');
+}
+
+/**
+ * Build the verifier user prompt. When the agent has an identity card, append
+ * an Overstep block AFTER the Verdict format. Overstep must not affect
+ * APPROVED / ISSUES FOUND (isApproved stays fail-closed and unchanged).
+ */
+function buildVerifyPrompt(
+  rubric: string,
+  artifact: string,
+  sourceOfTruth: string,
+  isResume: boolean,
+  identityCard?: IdentityCard | null,
+): string {
+  const overstepAppendix =
+    identityCard != null
+      ? [
+          '',
+          '[Identity card — authorization scope for Overstep only]',
+          formatIdentityCardForVerify(identityCard),
+          '',
+          'After the Verdict block, output exactly these two additional lines as the absolute end of your reply.',
+          'IMPORTANT: The Overstep judgment does NOT affect APPROVED / ISSUES FOUND. Decide the Verdict first, independently.',
+          '## Overstep',
+          'NONE | LOW | HIGH — <one-sentence reason>',
+        ].join('\n')
+      : '';
+
   if (isResume) {
     return [
       "[Re-review] The other party has attempted to fix the issues from your previous round. Below is the revised artifact.",
@@ -688,9 +734,10 @@ function buildVerifyPrompt(rubric: string, artifact: string, sourceOfTruth: stri
       artifact,
       '',
       'Discipline: do not rubber-stamp, do not concede just to end the loop, do not treat MAINTAIN as APPROVED. If real problems remain, say ISSUES FOUND.',
-      '[Reply format — mandatory] The last two lines of your reply must be exactly:',
+      '[Reply format — mandatory] Your Verdict block must be:',
       '## Verdict',
       'APPROVED  (or)  ISSUES FOUND',
+      overstepAppendix,
     ].join('\n');
   }
   return [
@@ -706,10 +753,69 @@ function buildVerifyPrompt(rubric: string, artifact: string, sourceOfTruth: stri
     artifact,
     '',
     'Discipline: verify every completeness claim against the source; independently recompute anything arithmetic rather than trusting the artifact; only report substantive problems, ignore pure style; when in doubt say ISSUES FOUND.',
-    '[Reply format — mandatory] The last two lines of your reply must be exactly:',
+    '[Reply format — mandatory] Your Verdict block must be:',
     '## Verdict',
     'APPROVED  (or)  ISSUES FOUND',
+    overstepAppendix,
   ].join('\n');
+}
+
+export type OverstepLevel = 'NONE' | 'LOW' | 'HIGH' | 'UNKNOWN';
+
+/**
+ * Parse the optional "## Overstep" trailer from a verifier reply.
+ * Does not affect isApproved — pure extraction for the semantic track (ADR 0004).
+ */
+export function parseOverstep(text: string): { level: OverstepLevel; reason?: string } {
+  if (!text) return { level: 'UNKNOWN' };
+  const m = text.match(
+    /##\s*Overstep\s*\r?\n\s*(NONE|LOW|HIGH)\s*(?:[—–\-]\s*(.+?))?\s*(?:\r?\n|$)/i,
+  );
+  if (!m) return { level: 'UNKNOWN' };
+  const level = m[1]!.toUpperCase() as 'NONE' | 'LOW' | 'HIGH';
+  const reason = m[2]?.trim();
+  return reason ? { level, reason } : { level };
+}
+
+/**
+ * Semantic overstep review (ticket 06): only HIGH with an identity card creates
+ * a SEMANTIC proposal. LOW / NONE / UNKNOWN → log only (noise control, ADR 0004).
+ * Fail-safe: never throws into the verify path.
+ */
+export async function applySemanticOverstepReview(args: {
+  agentId: string;
+  runId?: string;
+  verdictText: string;
+  identityCard: IdentityCard | null | undefined;
+}): Promise<void> {
+  try {
+    if (args.identityCard == null) return;
+
+    const { level, reason } = parseOverstep(args.verdictText);
+    if (level === 'HIGH') {
+      await createProposal({
+        agentId: args.agentId,
+        runId: args.runId,
+        source: 'SEMANTIC',
+        proposedBy: 'system',
+        targetType: 'IDENTITY_CARD',
+        severity: 'high',
+        confidence: 0.8,
+        proposedChange: { overstep: reason ?? 'semantic overstep (HIGH)' },
+      });
+      return;
+    }
+    // Noise control: LOW / NONE / UNKNOWN — log only, do not queue.
+    console.log(
+      `[semantic-overstep] agent=${args.agentId} run=${args.runId ?? '-'} level=${level}` +
+        (reason ? ` reason=${reason}` : ''),
+    );
+  } catch (e) {
+    console.error(
+      '[semantic-overstep] applySemanticOverstepReview failed (ignored):',
+      e instanceof Error ? e.message : e,
+    );
+  }
 }
 
 async function runVerifyStep(ctx: RunContext, rubric: string, artifact: string, sourceOfTruth: string, threadId: string | null): Promise<VerdictResult> {
@@ -719,7 +825,13 @@ async function runVerifyStep(ctx: RunContext, rubric: string, artifact: string, 
   const engine = ctx.manifest.engineVerify;
   const adapter = ENGINE_ADAPTERS[engine];
   const isResume = adapter.supportsResume && threadId != null;
-  const prompt = buildVerifyPrompt(rubric, artifact, sourceOfTruth, isResume);
+  const prompt = buildVerifyPrompt(
+    rubric,
+    artifact,
+    sourceOfTruth,
+    isResume,
+    ctx.manifest.identityCard,
+  );
   const res = await adapter.verify({
     prompt,
     cwd: ctx.manifest.agentDir,
@@ -734,6 +846,14 @@ async function runVerifyStep(ctx: RunContext, rubric: string, artifact: string, 
     engine, // must match the verifier engine actually invoked
     inputText: res.costInput,
     outputText: res.text,
+  });
+  // Semantic overstep track (ADR 0004): after verdict text is known, maybe queue.
+  // Does not change approved/isApproved — fail-closed gate is unchanged.
+  await applySemanticOverstepReview({
+    agentId: ctx.manifest.agentId,
+    runId: ctx.runId,
+    verdictText: res.text,
+    identityCard: ctx.manifest.identityCard,
   });
   return { approved: isApproved(res.text), text: res.text, threadId: res.threadId };
 }
@@ -803,6 +923,14 @@ async function runDoStep(step: DoStep, ctx: RunContext): Promise<StepResult> {
       const reason = isBudget
         ? `預算超限，已 fail-closed 阻斷: ${e.message}`
         : `EXECUTE_ERROR: ${e instanceof Error ? e.message : String(e)}`;
+      if (isBudget) {
+        await recordViolation({
+          agentId: ctx.manifest.agentId,
+          runId: ctx.runId,
+          kind: 'budget_exceeded',
+          detail: { phase: 'execute', stepKey: step.stepKey, message: e.message },
+        });
+      }
       await persistRunStep(ctx, step.stepKey, round, 'error', { error: reason, output: lastOutput || undefined });
       hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round, line: reason });
       return { ok: false, stepKey: step.stepKey, type: step.type, output: lastOutput, rounds: round, approved: false, reason, records };
@@ -828,6 +956,14 @@ async function runDoStep(step: DoStep, ctx: RunContext): Promise<StepResult> {
       const reason = isBudget
         ? `預算超限，已 fail-closed 阻斷: ${e.message}`
         : `VERIFY_ERROR: ${e instanceof Error ? e.message : String(e)}`;
+      if (isBudget) {
+        await recordViolation({
+          agentId: ctx.manifest.agentId,
+          runId: ctx.runId,
+          kind: 'budget_exceeded',
+          detail: { phase: 'verify', stepKey: step.stepKey, message: e instanceof Error ? e.message : String(e) },
+        });
+      }
       await persistRunStep(ctx, step.stepKey, round, 'error', { error: reason, output });
       hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round, line: reason });
       return { ok: false, stepKey: step.stepKey, type: step.type, output, rounds: round, approved: false, reason, records };
@@ -871,6 +1007,7 @@ async function runToolStep(step: ToolStep, ctx: RunContext): Promise<StepResult>
       agentDir: ctx.manifest.agentDir,
       cloudWrite: ctx.manifest.restrictions.cloudWrite,
       sendEmail: ctx.manifest.restrictions.sendEmail,
+      runId: ctx.runId,
     });
   } catch (e) {
     const reason = `TOOL_ERROR: ${e instanceof Error ? e.message : String(e)}`;
@@ -901,6 +1038,14 @@ async function runToolStep(step: ToolStep, ctx: RunContext): Promise<StepResult>
     const reason = isBudget
       ? `預算超限，已 fail-closed 阻斷: ${e.message}`
       : `VERIFY_ERROR: ${e instanceof Error ? e.message : String(e)}`;
+    if (isBudget) {
+      await recordViolation({
+        agentId: ctx.manifest.agentId,
+        runId: ctx.runId,
+        kind: 'budget_exceeded',
+        detail: { phase: 'tool_verify', stepKey: step.stepKey, message: e instanceof Error ? e.message : String(e) },
+      });
+    }
     await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason, output });
     hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round: 1, line: reason });
     return { ok: false, stepKey: step.stepKey, type: step.type, output, rounds: 1, approved: false, reason, records: [] };
@@ -1051,6 +1196,13 @@ async function runComputerControlStep(step: ComputerControlStep, ctx: RunContext
   // desktop automation at all, regardless of the workflow definition.
   if (!ctx.manifest.restrictions.computerUse) {
     const reason = 'RESTRICTED: 此員工未開啟「電腦操控」權限（概況 → 限制設定），無法執行 COMPUTER_CONTROL 步驟。';
+    // Still reject (unchanged). Extra: fail-safe VIOLATION signal for FDE inbox.
+    await recordViolation({
+      agentId: ctx.manifest.agentId,
+      runId: ctx.runId,
+      kind: 'computer_use',
+      detail: { stepKey: step.stepKey, skillId: step.config.skillId, message: reason },
+    });
     await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
     hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round: 1, line: reason });
     return { ok: false, stepKey: step.stepKey, type: step.type, output: '', rounds: 1, approved: false, reason, records: [] };
@@ -1141,6 +1293,12 @@ async function routeDefects(failed: StepResult, candidates: string[], ctx: RunCo
   } catch (e) {
     // Budget hard-stop must not be swallowed into the conservative default.
     if (e instanceof BudgetExceededError) {
+      await recordViolation({
+        agentId: ctx.manifest.agentId,
+        runId: ctx.runId,
+        kind: 'budget_exceeded',
+        detail: { phase: 'manager_decision', message: e.message },
+      });
       hub.publish('run.log', {
         runId: ctx.runId,
         line: `預算超限，已 fail-closed 阻斷: ${e.message}`,
@@ -1397,6 +1555,12 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
     const isBudget = e instanceof BudgetExceededError;
     const msg = e instanceof Error ? e.message : String(e);
     if (isBudget) {
+      await recordViolation({
+        agentId: agentRow.id,
+        runId,
+        kind: 'budget_exceeded',
+        detail: { phase: 'runner', message: msg },
+      });
       hub.publish('run.log', { runId, line: `預算超限，已 fail-closed 阻斷: ${msg}` });
     }
     results.push({
