@@ -20,7 +20,13 @@ import { materializeAgent } from './materialize.js';
 import { runClaude, runClaudeStream } from './claude.js';
 import { runCodex, isApproved } from './codex.js';
 import { runGrok } from './grok.js';
-import { parseRestrictions, restrictionsToRules, claudeDisallowedTools, buildSandboxProfile } from './restrictions.js';
+import {
+  parseRestrictions,
+  restrictionsToRules,
+  claudeDisallowedTools,
+  buildSandboxProfile,
+  type AgentRestrictions,
+} from './restrictions.js';
 import { runTool, evalCondition } from './tools.js';
 import { guardBudget, recordCost, BudgetExceededError } from './cost.js';
 import {
@@ -470,6 +476,164 @@ async function ensureSandboxProfile(ctx: RunContext): Promise<string | undefined
   return profilePath;
 }
 
+// ── Single engine dispatch table (execute / verify / decide) ─────────────
+// One adapter per Engine; all three call paths share this table so adding
+// an engine or changing CLI args is a single-place edit. Behaviour must stay
+// equivalent to the former if-cascades (restrictions, sandbox, cost engine).
+
+type EngineAdapter = {
+  /** Claude folds role into systemAppend; Codex/Grok embed role in the prompt. */
+  roleInSystem: boolean;
+  /** Claude has no cross-round thread; Codex/Grok resume via threadId. */
+  supportsResume: boolean;
+  execute(args: {
+    prompt: string;
+    systemAppend?: string;
+    cwd: string;
+    timeoutMs: number;
+    restrictions: AgentRestrictions;
+    sandboxProfilePath?: string;
+    onLine?: (l: string) => void;
+    fullPermissions?: boolean;
+  }): Promise<{ text: string }>;
+  verify(args: {
+    prompt: string;
+    cwd: string;
+    timeoutMs: number;
+    threadId: string | null;
+    restrictions: AgentRestrictions;
+    sandboxProfilePath?: string;
+  }): Promise<{ text: string; threadId: string | null; costInput: string }>;
+  decide(args: {
+    prompt: string;
+    systemAppend?: string;
+    cwd: string;
+    timeoutMs: number;
+    sandboxProfilePath?: string;
+  }): Promise<{ text: string }>;
+};
+
+const ENGINE_ADAPTERS: Record<Engine, EngineAdapter> = {
+  CLAUDE_CODE: {
+    roleInSystem: true,
+    supportsResume: false,
+    async execute({ prompt, systemAppend, cwd, timeoutMs, restrictions, sandboxProfilePath, onLine, fullPermissions }) {
+      const res = await runClaudeStream({
+        prompt,
+        systemAppend,
+        cwd,
+        fullPermissions,
+        disallowedTools: claudeDisallowedTools(restrictions),
+        timeoutMs,
+        onLine: onLine ?? (() => {}),
+        sandboxProfilePath,
+      });
+      return { text: res.stdout };
+    },
+    async verify({ prompt, cwd, timeoutMs, restrictions, sandboxProfilePath }) {
+      // Stateless re-review every round (claude -p has no thread resume).
+      const sys =
+        'You are an independent, cross-model verifier (Claude Code). Treat the artifact as a claim to be falsified, not assumed true.';
+      const res = await runClaude({
+        prompt,
+        systemAppend: sys,
+        cwd,
+        // Read-only web so the verifier can check cited external sources.
+        // Honors the agent's webSearch restriction.
+        allowedTools: restrictions.webSearch ? ['WebFetch', 'WebSearch'] : undefined,
+        timeoutMs,
+        sandboxProfilePath,
+      });
+      return { text: res.stdout, threadId: null, costInput: `${sys}\n\n${prompt}` };
+    },
+    async decide({ prompt, systemAppend, cwd, timeoutMs, sandboxProfilePath }) {
+      const res = await runClaude({
+        prompt,
+        systemAppend,
+        cwd,
+        timeoutMs,
+        sandboxProfilePath,
+      });
+      return { text: res.stdout };
+    },
+  },
+  CODEX: {
+    roleInSystem: false,
+    supportsResume: true,
+    async execute({ prompt, cwd, timeoutMs, sandboxProfilePath, onLine }) {
+      const res = await runCodex({
+        prompt,
+        cwd,
+        sandbox: 'workspace-write',
+        timeoutMs,
+        onLine,
+        sandboxProfilePath,
+      });
+      return { text: res.text };
+    },
+    async verify({ prompt, cwd, timeoutMs, threadId, sandboxProfilePath }) {
+      const res = await runCodex({
+        prompt,
+        cwd,
+        resumeThreadId: threadId,
+        sandbox: 'read-only',
+        timeoutMs,
+        sandboxProfilePath,
+      });
+      return { text: res.text, threadId: res.threadId, costInput: prompt };
+    },
+    async decide({ prompt, cwd, timeoutMs, sandboxProfilePath }) {
+      const res = await runCodex({
+        prompt,
+        cwd,
+        sandbox: 'workspace-write',
+        timeoutMs,
+        sandboxProfilePath,
+      });
+      return { text: res.text };
+    },
+  },
+  GROK: {
+    roleInSystem: false,
+    supportsResume: true,
+    async execute({ prompt, cwd, timeoutMs, restrictions, sandboxProfilePath, onLine }) {
+      const res = await runGrok({
+        prompt,
+        cwd,
+        timeoutMs,
+        disableWebSearch: !restrictions.webSearch,
+        onLine,
+        sandboxProfilePath,
+      });
+      return { text: res.stdout };
+    },
+    async verify({ prompt, cwd, timeoutMs, threadId, sandboxProfilePath }) {
+      // Session resume keeps prior objections across rounds (CONCEDE/MAINTAIN).
+      const sys =
+        'You are an independent, cross-model verifier (Grok). Treat the artifact as a claim to be falsified, not assumed true. Do not modify any files — review only.';
+      const res = await runGrok({
+        prompt,
+        systemAppend: sys,
+        cwd,
+        resumeSessionId: threadId,
+        timeoutMs,
+        sandboxProfilePath,
+      });
+      return { text: res.stdout, threadId: res.sessionId, costInput: `${sys}\n\n${prompt}` };
+    },
+    async decide({ prompt, systemAppend, cwd, timeoutMs, sandboxProfilePath }) {
+      const res = await runGrok({
+        prompt,
+        systemAppend,
+        cwd,
+        timeoutMs,
+        sandboxProfilePath,
+      });
+      return { text: res.stdout };
+    },
+  },
+};
+
 async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | null, round: number): Promise<string> {
   await guardBudget(ctx.manifest.agentId, ctx.costPolicy);
 
@@ -487,67 +651,31 @@ async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | 
     recallBlock = '';
   }
 
-  if (ctx.manifest.engineExecute === 'CODEX') {
-    const prompt = buildExecutePrompt(ctx, instruction, feedback, true, recallBlock);
-    const res = await runCodex({
-      prompt,
-      cwd: ctx.manifest.agentDir,
-      sandbox: 'workspace-write',
-      timeoutMs: EXEC_TIMEOUT_MS,
-      onLine,
-      sandboxProfilePath,
-    });
-    await safeRecordCost({
-      agentId: ctx.manifest.agentId,
-      runId: ctx.runId,
-      engine: 'CODEX',
-      inputText: prompt,
-      outputText: res.text,
-      stepKey: step.stepKey,
-    });
-    return res.text;
-  }
-  if (ctx.manifest.engineExecute === 'GROK') {
-    const prompt = buildExecutePrompt(ctx, instruction, feedback, true, recallBlock);
-    const res = await runGrok({
-      prompt,
-      cwd: ctx.manifest.agentDir,
-      timeoutMs: EXEC_TIMEOUT_MS,
-      disableWebSearch: !ctx.manifest.restrictions.webSearch,
-      onLine,
-      sandboxProfilePath,
-    });
-    await safeRecordCost({
-      agentId: ctx.manifest.agentId,
-      runId: ctx.runId,
-      engine: 'GROK',
-      inputText: prompt,
-      outputText: res.stdout,
-      stepKey: step.stepKey,
-    });
-    return res.stdout;
-  }
-  const prompt = buildExecutePrompt(ctx, instruction, feedback, false, recallBlock);
-  const systemAppend = buildSystemPrompt(ctx.manifest) || undefined;
-  const res = await runClaudeStream({
+  const engine = ctx.manifest.engineExecute;
+  const adapter = ENGINE_ADAPTERS[engine];
+  // Claude: role/skills via systemAppend; Codex/Grok: role folded into the user prompt.
+  const includeRole = !adapter.roleInSystem;
+  const prompt = buildExecutePrompt(ctx, instruction, feedback, includeRole, recallBlock);
+  const systemAppend = adapter.roleInSystem ? buildSystemPrompt(ctx.manifest) || undefined : undefined;
+  const res = await adapter.execute({
     prompt,
     systemAppend,
     cwd: ctx.manifest.agentDir,
-    fullPermissions: step.config.permissions === 'full',
-    disallowedTools: claudeDisallowedTools(ctx.manifest.restrictions),
     timeoutMs: EXEC_TIMEOUT_MS,
-    onLine,
+    restrictions: ctx.manifest.restrictions,
     sandboxProfilePath,
+    onLine,
+    fullPermissions: step.config.permissions === 'full',
   });
   await safeRecordCost({
     agentId: ctx.manifest.agentId,
     runId: ctx.runId,
-    engine: 'CLAUDE_CODE',
+    engine, // must match the engine actually invoked
     inputText: systemAppend ? `${systemAppend}\n\n${prompt}` : prompt,
-    outputText: res.stdout,
+    outputText: res.text,
     stepKey: step.stepKey,
   });
-  return res.stdout;
+  return res.text;
 }
 
 function buildVerifyPrompt(rubric: string, artifact: string, sourceOfTruth: string, isResume: boolean): string {
@@ -588,101 +716,56 @@ async function runVerifyStep(ctx: RunContext, rubric: string, artifact: string, 
   await guardBudget(ctx.manifest.agentId, ctx.costPolicy);
   const sandboxProfilePath = await ensureSandboxProfile(ctx);
 
-  if (ctx.manifest.engineVerify === 'CODEX') {
-    const isResume = threadId != null;
-    const prompt = buildVerifyPrompt(rubric, artifact, sourceOfTruth, isResume);
-    const res = await runCodex({
-      prompt,
-      cwd: ctx.manifest.agentDir,
-      resumeThreadId: threadId,
-      sandbox: 'read-only',
-      timeoutMs: VERIFY_TIMEOUT_MS,
-      sandboxProfilePath,
-    });
-    await safeRecordCost({
-      agentId: ctx.manifest.agentId,
-      runId: ctx.runId,
-      engine: 'CODEX',
-      inputText: prompt,
-      outputText: res.text,
-    });
-    return { approved: isApproved(res.text), text: res.text, threadId: res.threadId };
-  }
-  if (ctx.manifest.engineVerify === 'GROK') {
-    // Grok verifier: fast cross-model review; session resume keeps its own
-    // prior objections across rounds (CONCEDE/MAINTAIN discipline).
-    const isResume = threadId != null;
-    const prompt = buildVerifyPrompt(rubric, artifact, sourceOfTruth, isResume);
-    const sys =
-      'You are an independent, cross-model verifier (Grok). Treat the artifact as a claim to be falsified, not assumed true. Do not modify any files — review only.';
-    const res = await runGrok({
-      prompt,
-      systemAppend: sys,
-      cwd: ctx.manifest.agentDir,
-      resumeSessionId: threadId,
-      timeoutMs: VERIFY_TIMEOUT_MS,
-      sandboxProfilePath,
-    });
-    await safeRecordCost({
-      agentId: ctx.manifest.agentId,
-      runId: ctx.runId,
-      engine: 'GROK',
-      inputText: `${sys}\n\n${prompt}`,
-      outputText: res.stdout,
-    });
-    return { approved: isApproved(res.stdout), text: res.stdout, threadId: res.sessionId };
-  }
-  // Claude verifier: `claude -p` has no cross-round thread, so every round is a stateless re-review.
-  const prompt = buildVerifyPrompt(rubric, artifact, sourceOfTruth, false);
-  const sys =
-    'You are an independent, cross-model verifier (Claude Code). Treat the artifact as a claim to be falsified, not assumed true.';
-  const res = await runClaude({
+  const engine = ctx.manifest.engineVerify;
+  const adapter = ENGINE_ADAPTERS[engine];
+  const isResume = adapter.supportsResume && threadId != null;
+  const prompt = buildVerifyPrompt(rubric, artifact, sourceOfTruth, isResume);
+  const res = await adapter.verify({
     prompt,
-    systemAppend: sys,
     cwd: ctx.manifest.agentDir,
-    // Read-only web access so the verifier can actually check cited external
-    // sources (e.g. news URLs) instead of fail-closing on "cannot verify".
-    // Honors the agent's webSearch restriction.
-    allowedTools: ctx.manifest.restrictions.webSearch ? ['WebFetch', 'WebSearch'] : undefined,
     timeoutMs: VERIFY_TIMEOUT_MS,
+    threadId,
+    restrictions: ctx.manifest.restrictions,
     sandboxProfilePath,
   });
   await safeRecordCost({
     agentId: ctx.manifest.agentId,
     runId: ctx.runId,
-    engine: 'CLAUDE_CODE',
-    inputText: `${sys}\n\n${prompt}`,
-    outputText: res.stdout,
+    engine, // must match the verifier engine actually invoked
+    inputText: res.costInput,
+    outputText: res.text,
   });
-  return { approved: isApproved(res.stdout), text: res.stdout, threadId: null };
+  return { approved: isApproved(res.text), text: res.text, threadId: res.threadId };
 }
 
 async function callManagerDecision(ctx: RunContext, instruction: string, source: string): Promise<string> {
   await guardBudget(ctx.manifest.agentId, ctx.costPolicy);
   const sandboxProfilePath = await ensureSandboxProfile(ctx);
 
-  if (ctx.manifest.engineExecute === 'CODEX') {
-    const parts = [ctx.manifest.rolePrompt ? `[Role]\n${ctx.manifest.rolePrompt}` : '', `[Task]\n${instruction}`, `[Context]\n${source}`].filter(Boolean);
-    const prompt = parts.join('\n\n');
-    const res = await runCodex({
-      prompt,
-      cwd: ctx.manifest.agentDir,
-      sandbox: 'workspace-write',
-      timeoutMs: DECISION_TIMEOUT_MS,
-      sandboxProfilePath,
-    });
-    await safeRecordCost({
-      agentId: ctx.manifest.agentId,
-      runId: ctx.runId,
-      engine: 'CODEX',
-      inputText: prompt,
-      outputText: res.text,
-    });
-    return res.text;
+  const engine = ctx.manifest.engineExecute;
+  const adapter = ENGINE_ADAPTERS[engine];
+  // Codex embeds role in the user prompt; Claude/Grok pass role via systemAppend.
+  let prompt: string;
+  let systemAppend: string | undefined;
+  if (adapter.roleInSystem) {
+    // CLAUDE_CODE (and any future roleInSystem engines)
+    prompt = [`[Task]\n${instruction}`, `[Context]\n${source}`].join('\n\n');
+    systemAppend = ctx.manifest.rolePrompt || undefined;
+  } else if (engine === 'CODEX') {
+    // Historical: Codex decision puts [Role] in the user prompt.
+    const parts = [
+      ctx.manifest.rolePrompt ? `[Role]\n${ctx.manifest.rolePrompt}` : '',
+      `[Task]\n${instruction}`,
+      `[Context]\n${source}`,
+    ].filter(Boolean);
+    prompt = parts.join('\n\n');
+    systemAppend = undefined;
+  } else {
+    // GROK (and other non-system role engines): role via systemAppend (rolePrompt).
+    prompt = [`[Task]\n${instruction}`, `[Context]\n${source}`].join('\n\n');
+    systemAppend = ctx.manifest.rolePrompt || undefined;
   }
-  const prompt = [`[Task]\n${instruction}`, `[Context]\n${source}`].join('\n\n');
-  const systemAppend = ctx.manifest.rolePrompt || undefined;
-  const res = await runClaude({
+  const res = await adapter.decide({
     prompt,
     systemAppend,
     cwd: ctx.manifest.agentDir,
@@ -692,11 +775,11 @@ async function callManagerDecision(ctx: RunContext, instruction: string, source:
   await safeRecordCost({
     agentId: ctx.manifest.agentId,
     runId: ctx.runId,
-    engine: 'CLAUDE_CODE',
+    engine, // GROK decide must record GROK, not CLAUDE_CODE
     inputText: systemAppend ? `${systemAppend}\n\n${prompt}` : prompt,
-    outputText: res.stdout,
+    outputText: res.text,
   });
-  return res.stdout;
+  return res.text;
 }
 
 // ── Step executors ───────────────────────────────────────────────────────

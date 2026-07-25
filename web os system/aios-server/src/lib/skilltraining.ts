@@ -11,18 +11,10 @@ import { errors } from './http.js';
 import { runClaude } from '../engine/claude.js';
 import { materializeAgent } from '../engine/materialize.js';
 import { understandSkill } from '../skills/understand.js';
+import { slugify } from './slug.js';
 
 const DRAFT_REVIEW_STATUSES = new Set(['PENDING_UNDERSTANDING', 'AWAITING_USER_CONFIRM']);
 const DRAFT_TIMEOUT_MS = 5 * 60_000;
-
-function slugify(name: string): string {
-  const s = name
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return s || 'skill';
-}
 
 async function uniqueSlug(base: string): Promise<string> {
   let slug = base;

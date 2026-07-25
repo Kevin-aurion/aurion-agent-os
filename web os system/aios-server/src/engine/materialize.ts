@@ -10,6 +10,7 @@ import { prisma } from '../lib/db.js';
 import { paths } from '../config.js';
 import { sha256 } from '../lib/crypto.js';
 import { errors } from '../lib/http.js';
+import { sanitizeSegment, assertInsideRoot } from '../lib/safepath.js';
 import { ensureAgentWiki } from '../memory/memoryService.js';
 
 async function writeIfChanged(filePath: string, content: string): Promise<void> {
@@ -31,11 +32,8 @@ const DEFAULT_DEPARTMENT = '未分類';
 
 /** Sanitizes a department name for use as a filesystem folder name. */
 function sanitizeDepartment(department: string | null | undefined): string {
-  const trimmed = (department ?? '').trim();
-  if (!trimmed) return DEFAULT_DEPARTMENT;
-  // Replace path separators and reserved/unsafe filename characters with '-'.
-  const sanitized = trimmed.replace(/[\\/:*?"<>|\x00-\x1f]/g, '-').trim();
-  return sanitized || DEFAULT_DEPARTMENT;
+  // Strips separators/reserved chars; pure-dot segments ('.'/'..'/'...') → fallback.
+  return sanitizeSegment((department ?? '').trim(), DEFAULT_DEPARTMENT);
 }
 
 function buildAgentMd(
@@ -91,7 +89,11 @@ export async function materializeAgent(agentId: string): Promise<string> {
     .map((as) => as.skill)
     .filter((s) => s.reviewStatus === 'CONFIRMED' && !s.deletedAt);
 
-  const agentDir = path.join(paths.agents, sanitizeDepartment(agent.department), agent.slug);
+  // Resolve under agents root, then assert no escape (defense in depth after sanitize).
+  const agentDir = assertInsideRoot(
+    paths.agents,
+    path.join(paths.agents, sanitizeDepartment(agent.department), agent.slug),
+  );
   await mkdir(agentDir, { recursive: true });
 
   const agentMd = buildAgentMd(agent, confirmedSkills.map((s) => s.slug), agent.workflows);
