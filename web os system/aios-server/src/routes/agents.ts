@@ -6,15 +6,7 @@ import { ok, errors, sendError } from '../lib/http.js';
 import { requireAuth, requireTrainer } from '../lib/guard.js';
 import { audit } from '../lib/audit.js';
 import { hub } from '../ws/hub.js';
-
-function slugify(name: string): string {
-  const base = name
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '');
-  return `${base || 'agent'}-${ulid().slice(-6).toLowerCase()}`;
-}
+import { slugify } from '../lib/slug.js';
 
 const EngineEnum = z.enum(['CLAUDE_CODE', 'CODEX', 'GROK']);
 
@@ -116,6 +108,31 @@ export async function agentRoutes(app: FastifyInstance) {
       await audit(req.user!.sub, 'agent.created', 'Agent', agent.id, { name: agent.name });
       hub.publish('agent.status', { id: agent.id, status: agent.status, event: 'created' });
       return ok(agent);
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  });
+
+  // Compose a full AI employee from natural language (async blueprint + fan-out).
+  app.post('/api/agents/compose', { preHandler: requireTrainer }, async (req, reply) => {
+    try {
+      const body = z
+        .object({
+          requirement: z.string().min(1),
+          engine: EngineEnum.default('CLAUDE_CODE'),
+        })
+        .parse(req.body);
+
+      const { composeAgentFromRequirement } = await import('../agents/compose.js');
+      const { agentId } = await composeAgentFromRequirement({
+        requirement: body.requirement,
+        engine: body.engine,
+        createdBy: req.user!.sub,
+      });
+      await audit(req.user!.sub, 'agent.compose', 'Agent', agentId, { engine: body.engine });
+      hub.publish('agent.status', { id: agentId, status: 'ACTIVE', event: 'created' });
+      const agent = await prisma.agent.findUnique({ where: { id: agentId } });
+      return ok({ ...agent, composing: true });
     } catch (e) {
       return sendError(reply, e);
     }

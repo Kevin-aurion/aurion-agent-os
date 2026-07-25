@@ -14,7 +14,7 @@ import { audit } from '../lib/audit.js';
 import { sha256 } from '../lib/crypto.js';
 import { runWorkflow } from '../workflow/runner.js';
 
-const TriggerSchema = z
+export const TriggerSchema = z
   .object({
     type: z.enum(['schedule', 'manual', 'keyword', 'webhook', 'event']),
     cron: z.string().optional(),
@@ -25,7 +25,7 @@ const TriggerSchema = z
   })
   .passthrough();
 
-const StepInputSchema = z.object({
+export const StepInputSchema = z.object({
   stepKey: z.string().min(1),
   type: z.enum(['DO', 'TOOL', 'AGENT', 'CONDITION', 'NOTIFY', 'COMPUTER_CONTROL']),
   config: z.record(z.unknown()).default({}),
@@ -34,7 +34,7 @@ const StepInputSchema = z.object({
 });
 
 /** For 'webhook' triggers, hash any plaintext `secret` on the way in and never persist it raw. */
-function normalizeTrigger(trigger: Record<string, unknown>): Record<string, unknown> {
+export function normalizeTrigger(trigger: Record<string, unknown>): Record<string, unknown> {
   const t: Record<string, unknown> = { ...trigger };
   if (t.type === 'webhook' && typeof t.secret === 'string' && t.secret.trim()) {
     t.secretHash = sha256(t.secret.trim());
@@ -45,7 +45,7 @@ function normalizeTrigger(trigger: Record<string, unknown>): Record<string, unkn
 
 /** Keep the Schedule row in sync with a workflow's trigger config, and tell the
  * live BullMQ scheduler so changes take effect without a restart. */
-async function syncSchedule(workflowId: string, trigger: Record<string, unknown>, enabled: boolean): Promise<void> {
+export async function syncSchedule(workflowId: string, trigger: Record<string, unknown>, enabled: boolean): Promise<void> {
   // Best-effort live-scheduler notifications; a down Redis must not break CRUD.
   const scheduler = await import('../scheduler/index.js').catch(() => null);
 
@@ -71,7 +71,7 @@ async function syncSchedule(workflowId: string, trigger: Record<string, unknown>
   await scheduler?.syncSchedule?.(scheduleId).catch(() => {});
 }
 
-function serializeWorkflowSummary(w: {
+export function serializeWorkflowSummary(w: {
   id: string;
   agentId: string;
   name: string;
@@ -177,6 +177,43 @@ export async function workflowRoutes(app: FastifyInstance) {
         include: { _count: { select: { steps: true } }, schedules: true },
       });
       return ok(serializeWorkflowSummary(full!));
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  });
+
+  // ── Compose from natural language (async draft; never blocks HTTP) ─────────
+  app.post('/api/agents/:agentId/workflows/compose', { preHandler: requireTrainer }, async (req, reply) => {
+    try {
+      const { agentId } = z.object({ agentId: z.string() }).parse(req.params);
+      const body = z
+        .object({
+          requirement: z.string().min(1),
+          engine: z.enum(['CLAUDE_CODE', 'CODEX', 'GROK']).default('CLAUDE_CODE'),
+        })
+        .parse(req.body);
+
+      const agent = await prisma.agent.findUnique({ where: { id: agentId } });
+      if (!agent || agent.deletedAt) throw errors.notFound(`Agent not found: ${agentId}`);
+
+      // Dynamic import avoids a static cycle: compose.ts imports helpers from this module.
+      const { composeWorkflowForAgent } = await import('../workflow/compose.js');
+      const { workflowId } = await composeWorkflowForAgent({
+        agentId,
+        requirement: body.requirement,
+        engine: body.engine,
+        createdBy: req.user!.sub,
+      });
+      await audit(req.user!.sub, 'workflow.compose', 'Workflow', workflowId, {
+        agentId,
+        engine: body.engine,
+      });
+
+      const full = await prisma.workflow.findUnique({
+        where: { id: workflowId },
+        include: { _count: { select: { steps: true } }, schedules: true },
+      });
+      return ok({ ...serializeWorkflowSummary(full!), composing: true });
     } catch (e) {
       return sendError(reply, e);
     }
