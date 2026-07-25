@@ -12,14 +12,18 @@ import {
   Check,
   CheckCircle2,
   ChevronRight,
+  Circle,
   Clock,
   Cloud,
   ExternalLink,
   File as FileIcon,
   Folder,
   GraduationCap,
+  List,
   Loader2,
   MessageSquare,
+  Mic,
+  MicOff,
   Play,
   Plus,
   RefreshCw,
@@ -27,6 +31,7 @@ import {
   Search,
   Send,
   Settings2,
+  Square,
   Tag,
   Trash2,
   Workflow,
@@ -34,7 +39,8 @@ import {
   X,
   XCircle,
 } from 'lucide-react';
-import { API } from '@/lib/api';
+import { API, ApiError } from '@/lib/api';
+import { useAuth } from '@/lib/auth';
 import { useAwp, type AwpFrame } from '@/lib/awp';
 import { AppShell } from '@/components/AppShell';
 import { EmptyState, Field, PageHeader, Spinner, StatusBadge } from '@/components/ui';
@@ -1856,133 +1862,698 @@ function RunsTab({ agent }: { agent: AgentDetail }) {
   );
 }
 
-// ---------- 訓練 Training ----------
+// ---------- 訓練 Training（聊天式技能工廠） ----------
+
+interface TrainMessageResult {
+  skillId: string;
+  contentMd: string;
+  reviewStatus: string;
+  understanding: SkillUnderstanding | null;
+}
+
+interface AgentFlows {
+  skills: Array<{ id: string; name: string; summary: string; reviewStatus: string }>;
+  workflows: Array<{ id: string; name: string; trigger: string }>;
+}
+
+interface RecordingStatus {
+  recording?: boolean;
+  isRecording?: boolean;
+  active?: boolean;
+  status?: string;
+  [key: string]: unknown;
+}
+
+type ChatMsg =
+  | { id: string; kind: 'user'; text: string }
+  | { id: string; kind: 'system'; text: string }
+  | { id: string; kind: 'drafting' }
+  | {
+      id: string;
+      kind: 'draft';
+      skillId: string;
+      name: string;
+      reviewStatus: string;
+      understanding: SkillUnderstanding | null;
+      statusNote?: string;
+    }
+  | {
+      id: string;
+      kind: 'flows';
+      skills: AgentFlows['skills'];
+      workflows: AgentFlows['workflows'];
+    }
+  | { id: string; kind: 'error'; text: string };
+
+function isFdeRole(role: string | undefined | null): boolean {
+  return role === 'OWNER' || role === 'TRAINER';
+}
+
+function normalizeUnderstanding(raw: unknown): SkillUnderstanding | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const o = raw as Record<string, unknown>;
+  const arr = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
+  return {
+    summary: typeof o.summary === 'string' ? o.summary : '',
+    capabilities: arr(o.capabilities),
+    data_read: arr(o.data_read),
+    data_written: arr(o.data_written),
+    external_calls: arr(o.external_calls),
+    irreversible_actions: arr(o.irreversible_actions),
+    risks: arr(o.risks),
+  };
+}
+
+function parseSkillNameFromMd(md: string): string {
+  const m = md.match(/^---\r?\n[\s\S]*?^name:\s*["']?(.+?)["']?\s*$/m);
+  return m?.[1]?.trim() || '技能草稿';
+}
+
+function isRecordingActive(s: RecordingStatus | undefined): boolean {
+  if (!s) return false;
+  if (s.recording === true || s.isRecording === true || s.active === true) return true;
+  if (typeof s.status === 'string' && /record|active|running/i.test(s.status)) return true;
+  return false;
+}
+
+function VoiceInput({
+  onTranscript,
+  disabled,
+}: {
+  onTranscript: (text: string) => void;
+  disabled?: boolean;
+}) {
+  const [recording, setRecording] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const mediaRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  useEffect(() => {
+    return () => {
+      mediaRef.current?.stop();
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+    };
+  }, []);
+
+  async function start() {
+    setError(null);
+    if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      setError('此瀏覽器不支援麥克風錄音');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      chunksRef.current = [];
+      const mime = MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : MediaRecorder.isTypeSupported('audio/mp4')
+          ? 'audio/mp4'
+          : '';
+      const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      mediaRef.current = rec;
+      rec.ondataavailable = (ev) => {
+        if (ev.data.size > 0) chunksRef.current.push(ev.data);
+      };
+      rec.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+        const blob = new Blob(chunksRef.current, { type: rec.mimeType || 'audio/webm' });
+        chunksRef.current = [];
+        if (!blob.size) {
+          setError('沒有錄到音訊');
+          setBusy(false);
+          setRecording(false);
+          return;
+        }
+        setBusy(true);
+        try {
+          const form = new FormData();
+          const ext = blob.type.includes('mp4') ? 'm4a' : 'webm';
+          form.append('file', blob, `voice.${ext}`);
+          const res = await API.upload<{ text: string }>('/api/voice/transcribe', form);
+          const text = (res.text ?? '').trim();
+          if (!text) setError('轉錄結果為空');
+          else onTranscript(text);
+        } catch (e) {
+          setError(e instanceof Error ? e.message : String(e));
+        } finally {
+          setBusy(false);
+          setRecording(false);
+        }
+      };
+      rec.start();
+      setRecording(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '無法開啟麥克風');
+    }
+  }
+
+  function stop() {
+    const rec = mediaRef.current;
+    if (rec && rec.state !== 'inactive') {
+      setBusy(true);
+      rec.stop();
+    }
+    mediaRef.current = null;
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        type="button"
+        className={cn(
+          'btn-ghost h-9 w-9 shrink-0 p-0',
+          recording && 'bg-rose-500/15 text-rose-400',
+        )}
+        title={recording ? '停止錄音並轉錄' : '語音輸入（音訊會送往 OpenAI 轉錄）'}
+        disabled={disabled || busy}
+        onClick={() => (recording ? stop() : void start())}
+      >
+        {busy ? (
+          <Spinner className="h-4 w-4" />
+        ) : recording ? (
+          <MicOff className="h-4 w-4" />
+        ) : (
+          <Mic className="h-4 w-4" />
+        )}
+      </button>
+      <p className="max-w-[10rem] text-right text-[10px] leading-tight text-muted">
+        音訊會送往 OpenAI 轉錄
+      </p>
+      {error && <p className="max-w-[12rem] text-right text-[10px] text-rose-400">{error}</p>}
+    </div>
+  );
+}
 
 function TrainingTab({ agent }: { agent: AgentDetail }) {
   const qc = useQueryClient();
-  const [requirement, setRequirement] = useState('');
-  const [engine, setEngine] = useState<'CLAUDE_CODE' | 'CODEX' | 'GROK'>('CLAUDE_CODE');
-  const [buildingSkillId, setBuildingSkillId] = useState<string | null>(null);
-  const [mountedMsg, setMountedMsg] = useState('');
+  const { user } = useAuth();
+  const isFde = isFdeRole(user?.role);
+  const [input, setInput] = useState('');
+  const [messages, setMessages] = useState<ChatMsg[]>([
+    {
+      id: 'welcome',
+      kind: 'system',
+      text: '用聊天描述要教這位員工的流程，或按「有哪些流程？」查看現況。也可開始錄製桌面操作。',
+    },
+  ]);
+  const [draftSkillId, setDraftSkillId] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [proposingId, setProposingId] = useState<string | null>(null);
+  const listEndRef = useRef<HTMLDivElement | null>(null);
 
-  const buildMutation = useMutation({
-    mutationFn: () => API.post<SkillDetail>('/api/skills/build', { requirement, engine }),
-    onSuccess: (skill) => setBuildingSkillId(skill.id),
-  });
+  // Recording state: poll status ≥3s while active or after start.
+  const [recordingWanted, setRecordingWanted] = useState(false);
+  const [recBusy, setRecBusy] = useState(false);
 
-  const skillQuery = useQuery({
-    queryKey: ['building-skill', buildingSkillId],
-    queryFn: () => API.get<SkillDetail>(`/api/skills/${buildingSkillId}`),
-    enabled: !!buildingSkillId,
-    refetchInterval: (q) => (q.state.data?.reviewStatus === 'PENDING_UNDERSTANDING' ? 2000 : false),
+  const recStatusQ = useQuery({
+    queryKey: ['recording-status'],
+    queryFn: () => API.get<RecordingStatus>('/api/recording/status'),
+    refetchInterval: (q) => {
+      const active = recordingWanted || isRecordingActive(q.state.data);
+      return active ? 3000 : false;
+    },
+    retry: false,
   });
+  const recordingOn = recordingWanted || isRecordingActive(recStatusQ.data);
 
   useAwp(['skill.review_ready'], (frame) => {
     const payload = (frame.payload ?? {}) as { skillId?: string };
-    if (buildingSkillId && payload.skillId === buildingSkillId) {
-      qc.invalidateQueries({ queryKey: ['building-skill', buildingSkillId] });
+    if (payload.skillId) {
+      qc.invalidateQueries({ queryKey: ['agent', agent.id] });
+      qc.invalidateQueries({ queryKey: ['building-skill', payload.skillId] });
     }
   });
 
-  const confirmMutation = useMutation({
-    mutationFn: async (skillId: string) => {
-      await API.post(`/api/skills/${skillId}/confirm`);
-      return API.post(`/api/agents/${agent.id}/skills`, { skillId });
-    },
-    onSuccess: () => {
+  useEffect(() => {
+    listEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, sending]);
+
+  function pushMsg(msg: ChatMsg) {
+    setMessages((prev) => [...prev, msg]);
+  }
+
+  function isFlowsIntent(text: string): boolean {
+    const t = text.trim();
+    return /有哪些流程|目前有哪些流程|流程清單|list\s*flows/i.test(t);
+  }
+
+  async function loadFlows() {
+    setSending(true);
+    setActionError(null);
+    pushMsg({ id: crypto.randomUUID(), kind: 'user', text: '有哪些流程？' });
+    try {
+      const flows = await API.get<AgentFlows>(`/api/agents/${agent.id}/flows`);
+      pushMsg({
+        id: crypto.randomUUID(),
+        kind: 'flows',
+        skills: flows.skills ?? [],
+        workflows: flows.workflows ?? [],
+      });
+    } catch (e) {
+      pushMsg({
+        id: crypto.randomUUID(),
+        kind: 'error',
+        text: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function sendTrainMessage(raw: string) {
+    const message = raw.trim();
+    if (!message || sending) return;
+    if (isFlowsIntent(message)) {
+      setInput('');
+      await loadFlows();
+      return;
+    }
+
+    setSending(true);
+    setActionError(null);
+    setInput('');
+    pushMsg({ id: crypto.randomUUID(), kind: 'user', text: message });
+    const draftingId = crypto.randomUUID();
+    pushMsg({ id: draftingId, kind: 'drafting' });
+
+    try {
+      const result = await API.post<TrainMessageResult>(`/api/agents/${agent.id}/train/message`, {
+        message,
+        skillId: draftSkillId ?? undefined,
+      });
+      const understanding = normalizeUnderstanding(result.understanding);
+      let name = parseSkillNameFromMd(result.contentMd ?? '');
+      try {
+        const detail = await API.get<SkillDetail>(`/api/skills/${result.skillId}`);
+        if (detail.name) name = detail.name;
+      } catch {
+        /* name from md is fine */
+      }
+      setDraftSkillId(result.skillId);
+      setMessages((prev) =>
+        prev
+          .filter((m) => m.id !== draftingId)
+          .concat({
+            id: crypto.randomUUID(),
+            kind: 'draft',
+            skillId: result.skillId,
+            name,
+            reviewStatus: result.reviewStatus,
+            understanding,
+          }),
+      );
       qc.invalidateQueries({ queryKey: ['agent', agent.id] });
-      setMountedMsg('已確認並掛載此能力');
-      setBuildingSkillId(null);
-      setRequirement('');
-      setTimeout(() => setMountedMsg(''), 3000);
-    },
-  });
+    } catch (e) {
+      setMessages((prev) =>
+        prev
+          .filter((m) => m.id !== draftingId)
+          .concat({
+            id: crypto.randomUUID(),
+            kind: 'error',
+            text: e instanceof Error ? e.message : String(e),
+          }),
+      );
+    } finally {
+      setSending(false);
+    }
+  }
 
-  const rejectMutation = useMutation({
-    mutationFn: (skillId: string) => API.post(`/api/skills/${skillId}/reject`),
-    onSuccess: () => setBuildingSkillId(null),
-  });
+  async function confirmSkill(skillId: string) {
+    setConfirmingId(skillId);
+    setActionError(null);
+    try {
+      await API.post(`/api/skills/${skillId}/confirm`);
+      // Oral/recording training already links the skill; mount is best-effort if not linked.
+      try {
+        await API.post(`/api/agents/${agent.id}/skills`, { skillId });
+      } catch (e) {
+        // Already linked or not CONFIRMED-path only — ignore conflict-like failures.
+        if (!(e instanceof ApiError)) throw e;
+      }
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.kind === 'draft' && m.skillId === skillId
+            ? { ...m, reviewStatus: 'CONFIRMED', statusNote: '已確認並掛載' }
+            : m,
+        ),
+      );
+      setDraftSkillId(null);
+      qc.invalidateQueries({ queryKey: ['agent', agent.id] });
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setConfirmingId(null);
+    }
+  }
 
-  const skill = skillQuery.data;
-  const understanding = skill?.understanding;
-  const isBuilding = !!buildingSkillId && (!skill || skill.reviewStatus === 'PENDING_UNDERSTANDING');
+  async function proposeSkill(skillId: string, name: string) {
+    setProposingId(skillId);
+    setActionError(null);
+    try {
+      await API.post(`/api/agents/${agent.id}/proposals`, {
+        targetType: 'SKILL',
+        targetId: skillId,
+        proposedChange: {
+          action: 'confirm_skill',
+          skillId,
+          name,
+          note: '操作者從訓練頁送出：請 FDE 確認並掛載此技能草稿',
+        },
+        severity: 'medium',
+      });
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.kind === 'draft' && m.skillId === skillId
+            ? { ...m, statusNote: '已送出提案，等待 FDE 審核' }
+            : m,
+        ),
+      );
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setProposingId(null);
+    }
+  }
+
+  async function startRecording() {
+    setRecBusy(true);
+    setActionError(null);
+    try {
+      await API.post('/api/recording/start');
+      setRecordingWanted(true);
+      pushMsg({
+        id: crypto.randomUUID(),
+        kind: 'system',
+        text: '已開始錄製。請在桌面完成一次操作後按「結束錄製」。單次上限 30 分鐘。',
+      });
+      void recStatusQ.refetch();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRecBusy(false);
+    }
+  }
+
+  async function stopRecordingAndImport() {
+    setRecBusy(true);
+    setActionError(null);
+    try {
+      await API.post('/api/recording/stop');
+      setRecordingWanted(false);
+      pushMsg({ id: crypto.randomUUID(), kind: 'system', text: '錄製已停止，正在匯入為技能草稿…' });
+      const draftingId = crypto.randomUUID();
+      pushMsg({ id: draftingId, kind: 'drafting' });
+      const result = await API.post<{
+        skillId?: string;
+        id?: string;
+        name?: string;
+        reviewStatus?: string;
+        understanding?: unknown;
+        contentMd?: string;
+      }>(`/api/agents/${agent.id}/recording/to-skill`, {});
+      const skillId = result.skillId ?? result.id;
+      if (!skillId) throw new Error('recording/to-skill 未回傳 skillId');
+      let name = result.name ?? parseSkillNameFromMd(result.contentMd ?? '');
+      let understanding = normalizeUnderstanding(result.understanding);
+      let reviewStatus = result.reviewStatus ?? 'AWAITING_USER_CONFIRM';
+      try {
+        const detail = await API.get<SkillDetail>(`/api/skills/${skillId}`);
+        name = detail.name || name;
+        understanding = detail.understanding ?? understanding;
+        reviewStatus = detail.reviewStatus || reviewStatus;
+      } catch {
+        /* use payload */
+      }
+      setDraftSkillId(skillId);
+      setMessages((prev) =>
+        prev
+          .filter((m) => m.id !== draftingId)
+          .concat({
+            id: crypto.randomUUID(),
+            kind: 'draft',
+            skillId,
+            name: name || '錄製技能草稿',
+            reviewStatus,
+            understanding,
+          }),
+      );
+      qc.invalidateQueries({ queryKey: ['agent', agent.id] });
+      void recStatusQ.refetch();
+    } catch (e) {
+      setRecordingWanted(false);
+      pushMsg({
+        id: crypto.randomUUID(),
+        kind: 'error',
+        text: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setRecBusy(false);
+    }
+  }
 
   return (
-    <div className="max-w-3xl space-y-6">
-      <div className="card space-y-4 p-5">
-        <div className="flex items-center gap-2 font-medium">
-          <GraduationCap className="h-4 w-4 text-brand" /> 教這位員工新能力
+    <div className="mx-auto flex max-w-3xl flex-col gap-4">
+      {/* Recording bar */}
+      <div className="card space-y-3 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="text-sm font-medium">桌面操作錄製</div>
+          <div className="flex items-center gap-2">
+            {!recordingOn ? (
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={recBusy || sending}
+                onClick={() => void startRecording()}
+              >
+                {recBusy ? <Spinner className="border-white/40 border-t-white" /> : <Circle className="h-3.5 w-3.5 fill-rose-500 text-rose-500" />}
+                開始錄製
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn-primary bg-rose-600 hover:bg-rose-500"
+                disabled={recBusy}
+                onClick={() => void stopRecordingAndImport()}
+              >
+                {recBusy ? <Spinner className="border-white/40 border-t-white" /> : <Square className="h-3.5 w-3.5" />}
+                結束錄製
+              </button>
+            )}
+          </div>
         </div>
-        <Field label="描述你要這位員工學會的能力">
-          <textarea
-            className="input min-h-[100px] resize-y"
-            placeholder="例如：讀取指定資料夾中的發票 PDF，擷取品項與金額，彙整成一份應收帳款清單 Excel，欄位包含單號、對象、金額、到期日，完成後上傳到雲端的 AIOS 資料夾"
-            value={requirement}
-            onChange={(e) => setRequirement(e.target.value)}
-            disabled={!!buildingSkillId}
-          />
-          <p className="mt-1 text-xs text-muted">
-            寫清楚「輸入是什麼、要做哪些步驟、產出什麼格式、放到哪裡」，AI 會據此建立可重複執行的技能；越具體，理解與產出越準確。
-          </p>
-        </Field>
-        <Field label="產生引擎">
-          <select className="input" value={engine} onChange={(e) => setEngine(e.target.value as typeof engine)} disabled={!!buildingSkillId}>
-            <option value="CLAUDE_CODE">CLAUDE_CODE</option>
-            <option value="CODEX">CODEX</option>
-            <option value="GROK">GROK（最快）</option>
-          </select>
-        </Field>
-        {buildMutation.error instanceof Error && <p className="text-sm text-rose-400">{buildMutation.error.message}</p>}
-        {mountedMsg && <p className="text-sm text-emerald-400">{mountedMsg}</p>}
-        <div className="flex justify-end">
+        {recordingOn && (
+          <div className="flex items-center gap-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-300">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-rose-500" />
+            </span>
+            🔴 正在錄製中 — 單次上限 30 分鐘
+          </div>
+        )}
+        <p className="text-xs text-muted">
+          錄製完成後會委派 Codex 匯入為技能草稿，再走理解閘與確認流程（不會自動掛載）。
+        </p>
+      </div>
+
+      {/* Chat transcript */}
+      <div className="card flex max-h-[min(60vh,560px)] min-h-[320px] flex-col overflow-hidden p-0">
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <GraduationCap className="h-4 w-4 text-brand" /> 聊天式技能工廠
+          </div>
           <button
-            className="btn-primary"
-            disabled={!requirement.trim() || buildMutation.isPending || !!buildingSkillId}
-            onClick={() => buildMutation.mutate()}
+            type="button"
+            className="btn-ghost text-xs"
+            disabled={sending}
+            onClick={() => void loadFlows()}
           >
-            {buildMutation.isPending ? <Spinner className="border-white/40 border-t-white" /> : <GraduationCap className="h-4 w-4" />}
-            建立能力
+            <List className="h-3.5 w-3.5" /> 有哪些流程？
           </button>
+        </div>
+
+        <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+          {messages.map((m) => {
+            if (m.kind === 'user') {
+              return (
+                <div key={m.id} className="flex justify-end">
+                  <div className="max-w-[85%] rounded-2xl rounded-br-md bg-brand/20 px-3 py-2 text-sm">
+                    {m.text}
+                  </div>
+                </div>
+              );
+            }
+            if (m.kind === 'system') {
+              return (
+                <div key={m.id} className="text-center text-xs text-muted">
+                  {m.text}
+                </div>
+              );
+            }
+            if (m.kind === 'drafting') {
+              return (
+                <div key={m.id} className="flex items-center gap-2 text-sm text-muted">
+                  <Spinner className="h-4 w-4" /> 草擬中…
+                </div>
+              );
+            }
+            if (m.kind === 'error') {
+              return (
+                <div key={m.id} className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+                  {m.text}
+                </div>
+              );
+            }
+            if (m.kind === 'flows') {
+              return (
+                <div key={m.id} className="card space-y-3 border-border/80 bg-black/10 p-4">
+                  <div className="text-sm font-medium">目前流程清單（免 LLM）</div>
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-muted">技能</div>
+                    {m.skills.length === 0 ? (
+                      <p className="text-sm text-muted">尚無掛載技能</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {m.skills.map((s) => (
+                          <li key={s.id} className="flex items-start justify-between gap-2 text-sm">
+                            <div className="min-w-0">
+                              <div className="font-medium">{s.name}</div>
+                              {s.summary && <div className="text-xs text-muted">{s.summary}</div>}
+                            </div>
+                            <StatusBadge status={s.reviewStatus} />
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-muted">工作流</div>
+                    {m.workflows.length === 0 ? (
+                      <p className="text-sm text-muted">尚無工作流</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {m.workflows.map((w) => (
+                          <li key={w.id} className="flex items-center justify-between gap-2 text-sm">
+                            <span className="font-medium">{w.name}</span>
+                            <span className="badge bg-black/10 text-muted dark:bg-white/10">{w.trigger}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+            // draft card
+            const u = m.understanding;
+            return (
+              <div key={m.id} className="card space-y-3 border-brand/20 p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="font-medium">{m.name}</h3>
+                  <StatusBadge status={m.reviewStatus} />
+                </div>
+                {u?.summary && <p className="text-sm">{u.summary}</p>}
+                {u && (
+                  <>
+                    <UnderstandingList title="能力" items={u.capabilities} />
+                    <UnderstandingList title="讀取資料" items={u.data_read} />
+                    <UnderstandingList title="寫入/修改資料" items={u.data_written} />
+                    <UnderstandingList title="外部呼叫" items={u.external_calls} />
+                    {u.irreversible_actions.length > 0 && (
+                      <UnderstandingList
+                        title="不可逆動作"
+                        items={u.irreversible_actions}
+                        icon={<AlertTriangle className="h-3.5 w-3.5 text-rose-400" />}
+                      />
+                    )}
+                    {u.risks.length > 0 && (
+                      <UnderstandingList
+                        title="風險"
+                        items={u.risks}
+                        icon={<AlertTriangle className="h-3.5 w-3.5 text-amber-400" />}
+                      />
+                    )}
+                  </>
+                )}
+                {m.statusNote && <p className="text-sm text-emerald-400">{m.statusNote}</p>}
+                {m.reviewStatus !== 'CONFIRMED' && !m.statusNote?.includes('提案') && (
+                  <div className="flex justify-end gap-2 pt-1">
+                    {isFde ? (
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        disabled={confirmingId === m.skillId}
+                        onClick={() => void confirmSkill(m.skillId)}
+                      >
+                        {confirmingId === m.skillId && (
+                          <Spinner className="border-white/40 border-t-white" />
+                        )}
+                        ✅ 確認掛載
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        disabled={proposingId === m.skillId}
+                        onClick={() => void proposeSkill(m.skillId, m.name)}
+                      >
+                        {proposingId === m.skillId && (
+                          <Spinner className="border-white/40 border-t-white" />
+                        )}
+                        送出提案
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          <div ref={listEndRef} />
+        </div>
+
+        {/* Composer */}
+        <div className="border-t border-border px-3 py-3">
+          {actionError && <p className="mb-2 text-sm text-rose-400">{actionError}</p>}
+          <div className="flex items-end gap-2">
+            <textarea
+              className="input min-h-[44px] max-h-32 flex-1 resize-y"
+              placeholder="描述要教的流程，或問「有哪些流程？」…"
+              value={input}
+              rows={2}
+              disabled={sending}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void sendTrainMessage(input);
+                }
+              }}
+            />
+            <VoiceInput
+              disabled={sending}
+              onTranscript={(text) => {
+                setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
+              }}
+            />
+            <button
+              type="button"
+              className="btn-primary h-9 shrink-0"
+              disabled={!input.trim() || sending}
+              onClick={() => void sendTrainMessage(input)}
+            >
+              {sending ? <Spinner className="border-white/40 border-t-white" /> : <Send className="h-4 w-4" />}
+              送出
+            </button>
+          </div>
         </div>
       </div>
 
-      {isBuilding && (
-        <div className="card flex items-center gap-3 p-5 text-sm text-muted">
-          <Spinner className="h-4 w-4" /> AI 正在閱讀並理解這個能力，請稍候...
-        </div>
-      )}
-
-      {skill && skill.reviewStatus === 'AWAITING_USER_CONFIRM' && understanding && (
-        <div className="card space-y-4 p-5">
-          <div className="flex items-center justify-between">
-            <h3 className="font-medium">理解報告：{skill.name}</h3>
-            <StatusBadge status={skill.reviewStatus} />
-          </div>
-          <p className="text-sm">{understanding.summary}</p>
-
-          <UnderstandingList title="能力" items={understanding.capabilities} />
-          <UnderstandingList title="讀取資料" items={understanding.data_read} />
-          <UnderstandingList title="寫入/修改資料" items={understanding.data_written} />
-          <UnderstandingList title="外部呼叫" items={understanding.external_calls} />
-          {understanding.irreversible_actions.length > 0 && (
-            <UnderstandingList title="不可逆動作" items={understanding.irreversible_actions} icon={<AlertTriangle className="h-3.5 w-3.5 text-rose-400" />} />
-          )}
-          {understanding.risks.length > 0 && (
-            <UnderstandingList title="風險" items={understanding.risks} icon={<AlertTriangle className="h-3.5 w-3.5 text-amber-400" />} />
-          )}
-
-          {confirmMutation.error instanceof Error && <p className="text-sm text-rose-400">{confirmMutation.error.message}</p>}
-          <div className="flex justify-end gap-2">
-            <button className="btn-ghost text-rose-400" disabled={rejectMutation.isPending} onClick={() => rejectMutation.mutate(skill.id)}>
-              放棄
-            </button>
-            <button className="btn-primary" disabled={confirmMutation.isPending} onClick={() => confirmMutation.mutate(skill.id)}>
-              {confirmMutation.isPending && <Spinner className="border-white/40 border-t-white" />} 確認並掛載
-            </button>
-          </div>
-        </div>
-      )}
-
+      {/* Mounted skills summary (kept for orientation) */}
       <div className="card space-y-3 p-5">
         <div className="text-sm font-medium">已掛載的技能</div>
         {agent.skills.length === 0 ? (
@@ -1996,7 +2567,9 @@ function TrainingTab({ agent }: { agent: AgentDetail }) {
                   <span className="text-sm font-medium">{s.skill?.name ?? s.skillId}</span>
                 </div>
                 <div className="flex items-center gap-2">
-                  {s.skill?.executionEnv && <span className="badge bg-black/10 text-muted dark:bg-white/10">{s.skill.executionEnv}</span>}
+                  {s.skill?.executionEnv && (
+                    <span className="badge bg-black/10 text-muted dark:bg-white/10">{s.skill.executionEnv}</span>
+                  )}
                   <StatusBadge status={s.skill?.reviewStatus ?? 'UNKNOWN'} />
                 </div>
               </div>

@@ -94,6 +94,14 @@ export const config = {
     url: opt('DOCPARSE_URL', 'http://127.0.0.1:5001'),
   },
 
+  // OpenAI (Whisper voice transcription for skill-training UI). Optional —
+  // missing key or VOICE_ENABLED=false returns a clear NOT_CONFIGURED error.
+  openaiApiKey: opt('OPENAI_API_KEY'),
+  voice: {
+    enabled: opt('VOICE_ENABLED', 'true').toLowerCase() !== 'false',
+    model: opt('WHISPER_MODEL', 'whisper-1') || 'whisper-1',
+  },
+
   // Memory (Phase 1): L1 wiki on disk is source of truth; L3 Qdrant is a
   // rebuildable semantic index. When enabled=false every memory I/O is no-op.
   memory: {

@@ -75,6 +75,7 @@ async function registerFeatureRoutes(app: import('fastify').FastifyInstance) {
     ['./routes/identity.js', 'identityRoutes'],
     ['./routes/docparse.js', 'docparseRoutes'],
     ['./routes/training.js', 'trainingRoutes'],
+    ['./routes/voice.js', 'voiceRoutes'],
     ['./integrations/routes.js', 'integrationRoutes'],
     ['./channels/routes.js', 'channelRoutes'],
   ];
