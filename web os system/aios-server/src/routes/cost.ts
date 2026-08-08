@@ -6,6 +6,7 @@ import { ok, errors, sendError } from '../lib/http.js';
 import { requireAuth, requireTrainer } from '../lib/guard.js';
 import { audit } from '../lib/audit.js';
 import { getSpend, getSpendByStep } from '../engine/cost.js';
+import { requireVisibleAgent } from '../lib/agentaccess.js';
 
 const costPolicySchema = z.object({
   dailyBudgetUsd: z.number().nonnegative().optional(),
@@ -18,11 +19,7 @@ export async function costRoutes(app: FastifyInstance) {
   app.get('/api/agents/:id/cost', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { id } = req.params as { id: string };
-      const agent = await prisma.agent.findFirst({
-        where: { id, deletedAt: null },
-        select: { id: true, costPolicy: true },
-      });
-      if (!agent) throw errors.notFound('Agent not found');
+      const agent = await requireVisibleAgent(id, req.user!);
       const spend = await getSpend(agent.id);
       const byStep = await getSpendByStep(agent.id);
       return ok({

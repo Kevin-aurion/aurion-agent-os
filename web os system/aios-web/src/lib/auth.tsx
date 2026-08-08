@@ -1,6 +1,6 @@
 'use client';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import { API, tokens, type ApiUser } from './api';
+import { API, AUTH_EXPIRED_EVENT, tokens, type ApiUser } from './api';
 
 interface AuthState {
   user: ApiUser | null;
@@ -17,12 +17,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const expire = () => setUser(null);
+    const syncAcrossTabs = (event: StorageEvent) => {
+      if (
+        (event.key === 'aios.access' || event.key === 'aios.refresh') &&
+        !tokens.access &&
+        !tokens.refresh
+      ) {
+        setUser(null);
+      }
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, expire);
+    window.addEventListener('storage', syncAcrossTabs);
     (async () => {
-      if (tokens.access) {
+      if (tokens.access || tokens.refresh) {
         try { setUser(await API.get<ApiUser>('/api/auth/me')); } catch { tokens.clear(); }
       }
       setLoading(false);
     })();
+    return () => {
+      window.removeEventListener(AUTH_EXPIRED_EVENT, expire);
+      window.removeEventListener('storage', syncAcrossTabs);
+    };
   }, []);
 
   async function login(email: string, password: string) {

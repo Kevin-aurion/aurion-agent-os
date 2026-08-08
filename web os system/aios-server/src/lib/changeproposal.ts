@@ -5,15 +5,17 @@ import type { ChangeProposal, Prisma } from '@prisma/client';
 import { prisma } from './db.js';
 import { errors } from './http.js';
 import { audit } from './audit.js';
-import { createSkillVersion } from './skillversion.js';
+import { contentHash, createSkillVersion } from './skillversion.js';
 import { parseIdentityCard } from './identitycard.js';
+import { confirmAwaitingSkill } from './skillgate.js';
+import { redactSecrets } from '../memory/redactor.js';
 
 export type CreateProposalArgs = {
   agentId: string;
   runId?: string;
-  source: 'OPERATOR' | 'VIOLATION' | 'SEMANTIC';
+  source: 'OPERATOR' | 'VIOLATION' | 'SEMANTIC' | 'TRAJECTORY' | 'REFLECTION';
   proposedBy: string;
-  targetType: 'SKILL' | 'RESTRICTION' | 'IDENTITY_CARD';
+  targetType: 'AGENT' | 'SKILL' | 'RESTRICTION' | 'IDENTITY_CARD';
   targetId?: string;
   proposedChange: unknown;
   severity?: string;
@@ -132,11 +134,36 @@ export async function listPendingProposals(): Promise<PendingProposal[]> {
   }));
 }
 
+function parseSkillChange(raw: unknown): { action?: string; contentMd?: string; guidance?: string; name?: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const o = raw as Record<string, unknown>;
+  return {
+    action: typeof o.action === 'string' ? o.action : undefined,
+    contentMd: typeof o.contentMd === 'string' ? o.contentMd : undefined,
+    guidance: typeof o.guidance === 'string' ? o.guidance : undefined,
+    name: typeof o.name === 'string' ? o.name : undefined,
+  };
+}
+
+function approvedGuidance(raw: string | undefined): string {
+  const guidance = redactSecrets(raw ?? '').trim();
+  if (!guidance) throw errors.badRequest('Reflection proposal requires non-empty guidance');
+  if (guidance.length > 8_000) throw errors.badRequest('Reflection guidance exceeds 8,000 characters');
+  return guidance;
+}
+
 /**
  * Approve a PENDING proposal and apply the target mutation.
- * SKILL → new SkillVersion; RESTRICTION → merge into Agent.restrictions;
+ * SKILL:
+ *  - action=confirm_skill → server-side confirm of linked AWAITING draft (no client content trust)
+ *  - contentMd → new SkillVersion (existing content-change path)
+ * RESTRICTION → merge into Agent.restrictions;
  * IDENTITY_CARD → normalize via parseIdentityCard then write Agent.identityCard.
  * Non-PENDING → throw (no double decide).
+ *
+ * Atomic enough: mutation then claim with updateMany where status=PENDING; if claim
+ * fails (race), throw so caller does not treat as success. confirm_skill runs in a
+ * single transaction so skill is not CONFIRMED without APPROVED proposal (and vice versa).
  */
 export async function approveProposal(
   id: string,
@@ -148,18 +175,241 @@ export async function approveProposal(
     throw errors.conflict(`Proposal already decided: ${existing.status}`);
   }
 
-  let resultingVersionId: string | undefined;
-
+  // ── SKILL confirm_skill: atomic confirm + mark APPROVED ─────────────────
   if (existing.targetType === 'SKILL') {
     const skillId = existing.targetId;
     if (!skillId) throw errors.badRequest('SKILL proposal requires targetId (skillId)');
-    const change = (existing.proposedChange ?? {}) as { contentMd?: unknown };
-    if (typeof change.contentMd !== 'string') {
-      throw errors.badRequest('SKILL proposal proposedChange.contentMd must be a string');
+    const change = parseSkillChange(existing.proposedChange);
+
+    if (change.action === 'confirm_skill') {
+      // Do not trust client contentMd/name — only targetId + agent link + DB status.
+      const result = await prisma.$transaction(async (tx) => {
+        const still = await tx.changeProposal.findUnique({ where: { id } });
+        if (!still || still.status !== 'PENDING') {
+          throw errors.conflict(`Proposal already decided: ${still?.status ?? 'missing'}`);
+        }
+
+        await confirmAwaitingSkill(skillId, decidedBy, {
+          requireLinkedAgentId: existing.agentId,
+          client: tx,
+        });
+
+        const claimed = await tx.changeProposal.updateMany({
+          where: { id, status: 'PENDING' },
+          data: {
+            status: 'APPROVED',
+            decidedBy,
+            decidedAt: new Date(),
+            resultingVersionId: null,
+          },
+        });
+        if (claimed.count !== 1) {
+          throw errors.conflict('Proposal already decided');
+        }
+        const proposal = await tx.changeProposal.findUniqueOrThrow({ where: { id } });
+        return { proposal };
+      });
+
+      await audit(decidedBy, 'proposal.approved', 'ChangeProposal', id, {
+        agentId: existing.agentId,
+        targetType: existing.targetType,
+        targetId: existing.targetId,
+        resultingVersionId: null,
+        source: existing.source,
+        action: 'confirm_skill',
+      });
+
+      return result;
     }
+
+    // Reflection guidance is applied only here, after an FDE explicitly approves
+    // the ChangeProposal. Claim + version + live content update are one transaction.
+    if (change.action === 'append_guidance') {
+      const guidance = approvedGuidance(change.guidance);
+      const result = await prisma.$transaction(async (tx) => {
+        const claimed = await tx.changeProposal.updateMany({
+          where: { id, status: 'PENDING' },
+          data: { status: 'APPROVED', decidedBy, decidedAt: new Date() },
+        });
+        if (claimed.count !== 1) throw errors.conflict('Proposal already decided');
+
+        const skill = await tx.skill.findFirst({
+          where: { id: skillId, deletedAt: null, reviewStatus: 'CONFIRMED' },
+        });
+        if (!skill) throw errors.notFound('Confirmed Skill not found');
+        const nextContent = [
+          skill.contentMd.trimEnd(),
+          '---',
+          '## FDE 核准的反思優化指引',
+          guidance,
+        ].filter(Boolean).join('\n\n');
+        const hash = contentHash(nextContent);
+        let version = await tx.skillVersion.findFirst({
+          where: { skillId, contentHash: hash },
+          orderBy: { version: 'asc' },
+        });
+        if (!version) {
+          const latest = await tx.skillVersion.aggregate({
+            where: { skillId },
+            _max: { version: true },
+          });
+          version = await tx.skillVersion.create({
+            data: {
+              id: ulid(),
+              skillId,
+              version: (latest._max.version ?? 0) + 1,
+              contentHash: hash,
+              contentMd: nextContent,
+              channel: 'canary',
+              createdBy: decidedBy,
+            },
+          });
+        }
+        if (skill.stableVersionId && skill.stableVersionId !== version.id) {
+          await tx.skillVersion.updateMany({
+            where: { id: skill.stableVersionId, skillId },
+            data: { channel: 'archived' },
+          });
+        }
+        await tx.skillVersion.update({ where: { id: version.id }, data: { channel: 'stable' } });
+        await tx.skill.update({
+          where: { id: skillId },
+          data: {
+            contentMd: nextContent,
+            version: { increment: 1 },
+            stableVersionId: version.id,
+            canaryVersionId: version.id,
+            confirmedBy: decidedBy,
+            confirmedAt: new Date(),
+          },
+        });
+        const proposal = await tx.changeProposal.update({
+          where: { id },
+          data: { resultingVersionId: version.id },
+        });
+        return { proposal, resultingVersionId: version.id };
+      });
+
+      await audit(decidedBy, 'proposal.approved', 'ChangeProposal', id, {
+        agentId: existing.agentId,
+        targetType: existing.targetType,
+        targetId: existing.targetId,
+        resultingVersionId: result.resultingVersionId,
+        source: existing.source,
+        action: 'append_guidance',
+      });
+      return result;
+    }
+
+    // Content-change path (preserve existing behavior).
+    if (typeof change.contentMd !== 'string') {
+      throw errors.badRequest(
+        'SKILL proposal requires proposedChange.action=confirm_skill or proposedChange.contentMd',
+      );
+    }
+
     const ver = await createSkillVersion(skillId, change.contentMd, decidedBy);
-    resultingVersionId = ver.id;
-  } else if (existing.targetType === 'RESTRICTION') {
+    const claimed = await prisma.changeProposal.updateMany({
+      where: { id, status: 'PENDING' },
+      data: {
+        status: 'APPROVED',
+        decidedBy,
+        decidedAt: new Date(),
+        resultingVersionId: ver.id,
+      },
+    });
+    if (claimed.count !== 1) {
+      throw errors.conflict('Proposal already decided');
+    }
+    const proposal = await prisma.changeProposal.findUniqueOrThrow({ where: { id } });
+    await audit(decidedBy, 'proposal.approved', 'ChangeProposal', id, {
+      agentId: existing.agentId,
+      targetType: existing.targetType,
+      targetId: existing.targetId,
+      resultingVersionId: ver.id,
+      source: existing.source,
+    });
+    return { proposal, resultingVersionId: ver.id };
+  }
+
+  // ── AGENT reflection guidance ─────────────────────────────────────────────
+  if (existing.targetType === 'AGENT') {
+    if (existing.targetId !== existing.agentId) {
+      throw errors.badRequest('AGENT proposal targetId must match agentId');
+    }
+    const change = parseSkillChange(existing.proposedChange);
+    if (change.action === 'rename') {
+      const name = redactSecrets(change.name ?? '').trim();
+      if (name.length < 2 || name.length > 120) {
+        throw errors.badRequest('AGENT rename requires a name between 2 and 120 characters');
+      }
+      const result = await prisma.$transaction(async (tx) => {
+        const claimed = await tx.changeProposal.updateMany({
+          where: { id, status: 'PENDING' },
+          data: { status: 'APPROVED', decidedBy, decidedAt: new Date() },
+        });
+        if (claimed.count !== 1) throw errors.conflict('Proposal already decided');
+        const agent = await tx.agent.findFirst({
+          where: { id: existing.agentId, deletedAt: null, systemManaged: false },
+        });
+        if (!agent) throw errors.notFound('Editable Agent not found');
+        const nextPrompt = agent.rolePrompt.replace(
+          new RegExp(`你是[「『“\"]${agent.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[」』”\"]`),
+          `你是「${name}」`,
+        );
+        await tx.agent.update({
+          where: { id: agent.id },
+          data: { name, rolePrompt: nextPrompt },
+        });
+        return tx.changeProposal.findUniqueOrThrow({ where: { id } });
+      });
+      await audit(decidedBy, 'proposal.approved', 'ChangeProposal', id, {
+        agentId: existing.agentId,
+        targetType: existing.targetType,
+        targetId: existing.targetId,
+        resultingVersionId: null,
+        source: existing.source,
+        action: 'rename',
+        name,
+      });
+      return { proposal: result };
+    }
+    if (change.action !== 'append_role_guidance') {
+      throw errors.badRequest('AGENT proposal requires proposedChange.action=append_role_guidance|rename');
+    }
+    const guidance = approvedGuidance(change.guidance);
+    const result = await prisma.$transaction(async (tx) => {
+      const claimed = await tx.changeProposal.updateMany({
+        where: { id, status: 'PENDING' },
+        data: { status: 'APPROVED', decidedBy, decidedAt: new Date() },
+      });
+      if (claimed.count !== 1) throw errors.conflict('Proposal already decided');
+      const agent = await tx.agent.findFirst({
+        where: { id: existing.agentId, deletedAt: null, systemManaged: false },
+      });
+      if (!agent) throw errors.notFound('Editable Agent not found');
+      const nextPrompt = [
+        agent.rolePrompt.trimEnd(),
+        '---',
+        '## FDE 核准的反思優化指引',
+        guidance,
+      ].filter(Boolean).join('\n\n');
+      await tx.agent.update({ where: { id: agent.id }, data: { rolePrompt: nextPrompt } });
+      return tx.changeProposal.findUniqueOrThrow({ where: { id } });
+    });
+    await audit(decidedBy, 'proposal.approved', 'ChangeProposal', id, {
+      agentId: existing.agentId,
+      targetType: existing.targetType,
+      targetId: existing.targetId,
+      resultingVersionId: null,
+      source: existing.source,
+      action: 'append_role_guidance',
+    });
+    return { proposal: result };
+  }
+
+  // ── RESTRICTION / IDENTITY_CARD ───────────────────────────────────────────
+  if (existing.targetType === 'RESTRICTION') {
     const agent = await prisma.agent.findFirst({ where: { id: existing.agentId, deletedAt: null } });
     if (!agent) throw errors.notFound('Agent not found');
     const prev =
@@ -189,25 +439,29 @@ export async function approveProposal(
     throw errors.badRequest(`Unknown targetType: ${existing.targetType}`);
   }
 
-  const proposal = await prisma.changeProposal.update({
-    where: { id },
+  const claimed = await prisma.changeProposal.updateMany({
+    where: { id, status: 'PENDING' },
     data: {
       status: 'APPROVED',
       decidedBy,
       decidedAt: new Date(),
-      resultingVersionId: resultingVersionId ?? null,
+      resultingVersionId: null,
     },
   });
+  if (claimed.count !== 1) {
+    throw errors.conflict('Proposal already decided');
+  }
+  const proposal = await prisma.changeProposal.findUniqueOrThrow({ where: { id } });
 
   await audit(decidedBy, 'proposal.approved', 'ChangeProposal', id, {
     agentId: existing.agentId,
     targetType: existing.targetType,
     targetId: existing.targetId,
-    resultingVersionId: resultingVersionId ?? null,
+    resultingVersionId: null,
     source: existing.source,
   });
 
-  return { proposal, resultingVersionId };
+  return { proposal };
 }
 
 /**
@@ -221,14 +475,18 @@ export async function rejectProposal(id: string, decidedBy: string): Promise<Cha
     throw errors.conflict(`Proposal already decided: ${existing.status}`);
   }
 
-  const proposal = await prisma.changeProposal.update({
-    where: { id },
+  const claimed = await prisma.changeProposal.updateMany({
+    where: { id, status: 'PENDING' },
     data: {
       status: 'REJECTED',
       decidedBy,
       decidedAt: new Date(),
     },
   });
+  if (claimed.count !== 1) {
+    throw errors.conflict('Proposal already decided');
+  }
+  const proposal = await prisma.changeProposal.findUniqueOrThrow({ where: { id } });
 
   await audit(decidedBy, 'proposal.rejected', 'ChangeProposal', id, {
     agentId: existing.agentId,

@@ -1,0 +1,9 @@
+{
+  "name": "aurion-aios-builder",
+  "description": "Build AIOS employees naturally and synchronize supported lifecycle turns to the hosted Aurion AIOS Remote MCP.",
+  "version": "1.2.1",
+  "author": {
+    "name": "Aurion"
+  },
+  "homepage": "https://aurion-aios.lazyoffice.app/agent-builds"
+}

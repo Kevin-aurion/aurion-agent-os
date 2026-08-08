@@ -7,6 +7,8 @@ import { requireAuth, requireTrainer } from '../lib/guard.js';
 import { audit } from '../lib/audit.js';
 import { hub } from '../ws/hub.js';
 import { slugify } from '../lib/slug.js';
+import { buildAgentSkillCatalog } from '../lib/skillmanifest.js';
+import { isFdeClaims, visibleAgentWhere } from '../lib/agentaccess.js';
 
 const EngineEnum = z.enum(['CLAUDE_CODE', 'CODEX', 'GROK']);
 
@@ -63,10 +65,22 @@ const fileTargetsSchema = z.object({
 
 export async function agentRoutes(app: FastifyInstance) {
   // List non-deleted agents with counts.
-  app.get('/api/agents', { preHandler: requireAuth }, async (_req, reply) => {
+  app.get('/api/agents', { preHandler: requireAuth }, async (req, reply) => {
     try {
+      const query = z.object({ scope: z.enum(['mine', 'all']).optional() }).parse(req.query ?? {});
+      if (query.scope === 'all' && !isFdeClaims(req.user!)) {
+        throw errors.forbidden('Only FDE may request all Agents');
+      }
       const agents = await prisma.agent.findMany({
-        where: { deletedAt: null },
+        where: {
+          deletedAt: null,
+          // Infrastructure agents are operated only by their dedicated admin
+          // surfaces and must never appear as selectable workbench employees.
+          systemManaged: false,
+          // Workbench defaults to the signed-in account even for Kevin/OWNER.
+          // FDE management surfaces opt in explicitly with ?scope=all.
+          ...(query.scope === 'all' ? {} : { createdBy: req.user!.sub }),
+        },
         orderBy: { createdAt: 'desc' },
         include: {
           _count: { select: { skills: true, workflows: { where: { deletedAt: null } } } },
@@ -143,7 +157,11 @@ export async function agentRoutes(app: FastifyInstance) {
     try {
       const { id } = req.params as { id: string };
       const agent = await prisma.agent.findFirst({
-        where: { id, deletedAt: null },
+        where: {
+          id,
+          deletedAt: null,
+          ...visibleAgentWhere(req.user!),
+        },
         include: {
           skills: { include: { skill: true } },
           fileTargets: { include: { cloudFileRef: true } },
@@ -164,6 +182,7 @@ export async function agentRoutes(app: FastifyInstance) {
       const body = updateSchema.parse(req.body);
       const existing = await prisma.agent.findFirst({ where: { id, deletedAt: null } });
       if (!existing) throw errors.notFound('Agent not found');
+      if (existing.systemManaged) throw errors.forbidden('系統管理 Agent 不可由一般編輯端修改');
       const agent = await prisma.agent.update({
         where: { id },
         data: body,
@@ -182,6 +201,7 @@ export async function agentRoutes(app: FastifyInstance) {
       const { id } = req.params as { id: string };
       const existing = await prisma.agent.findFirst({ where: { id, deletedAt: null } });
       if (!existing) throw errors.notFound('Agent not found');
+      if (existing.systemManaged) throw errors.forbidden('系統管理 Agent 不可刪除');
       const agent = await prisma.agent.update({ where: { id }, data: { deletedAt: new Date() } });
       await audit(req.user!.sub, 'agent.deleted', 'Agent', agent.id);
       hub.publish('agent.status', { id: agent.id, status: agent.status, event: 'deleted' });
@@ -201,6 +221,24 @@ export async function agentRoutes(app: FastifyInstance) {
       const skill = await prisma.skill.findFirst({ where: { id: body.skillId, deletedAt: null } });
       if (!skill) throw errors.notFound('Skill not found');
       if (skill.reviewStatus !== 'CONFIRMED') throw errors.conflict('skill not confirmed');
+
+      // Idempotent if already linked (pre-linked RECORDED/training drafts).
+      const existingLink = await prisma.agentSkill.findUnique({
+        where: { agentId_skillId: { agentId: id, skillId: body.skillId } },
+      });
+      if (existingLink) {
+        // Still enforce CODEX if this agent holds a RECORDED/CC skill (fail-closed).
+        if (
+          (skill.origin === 'RECORDED' || skill.kind === 'COMPUTER_CONTROL') &&
+          agent.engineExecute !== 'CODEX'
+        ) {
+          throw errors.badRequest(
+            '此類技能只能由 CODEX 引擎驅動，請將員工主引擎改為 CODEX',
+          );
+        }
+        return ok(existingLink);
+      }
+
       // Recorded / computer-control skills require CODEX as the execute engine (ADR 0005).
       if (
         (skill.origin === 'RECORDED' || skill.kind === 'COMPUTER_CONTROL') &&
@@ -265,6 +303,35 @@ export async function agentRoutes(app: FastifyInstance) {
       });
       await audit(req.user!.sub, 'agent.file_targets_replaced', 'Agent', id, { count: body.targets.length });
       return ok(fileTargets);
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  });
+
+  // L1 skill catalog for an agent (metadata + safe relPath only; no contentMd body).
+  app.get('/api/agents/:id/skills/catalog', { preHandler: requireAuth }, async (req, reply) => {
+    try {
+      const { id } = z.object({ id: z.string() }).parse(req.params);
+      const agent = await prisma.agent.findFirst({
+        where: { id, deletedAt: null, ...visibleAgentWhere(req.user!) },
+        include: { skills: { include: { skill: true } } },
+      });
+      if (!agent) throw errors.notFound('Agent not found');
+
+      const confirmed = agent.skills
+        .map((as) => as.skill)
+        .filter((s) => s.reviewStatus === 'CONFIRMED' && !s.deletedAt);
+
+      const catalog = buildAgentSkillCatalog(confirmed);
+      return ok(
+        catalog.map((c) => ({
+          slug: c.slug,
+          name: c.name,
+          metadata: c.metadata,
+          relPath: c.relPath,
+          conflicted: c.conflicted,
+        })),
+      );
     } catch (e) {
       return sendError(reply, e);
     }

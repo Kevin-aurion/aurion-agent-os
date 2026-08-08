@@ -13,6 +13,7 @@ import { requireAuth, requireTrainer } from '../lib/guard.js';
 import { audit } from '../lib/audit.js';
 import { sha256 } from '../lib/crypto.js';
 import { runWorkflow } from '../workflow/runner.js';
+import { requireVisibleAgent, requireVisibleWorkflow } from '../lib/agentaccess.js';
 
 export const TriggerSchema = z
   .object({
@@ -132,6 +133,7 @@ export async function workflowRoutes(app: FastifyInstance) {
   app.get('/api/agents/:agentId/workflows', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { agentId } = z.object({ agentId: z.string() }).parse(req.params);
+      await requireVisibleAgent(agentId, req.user!);
       const workflows = await prisma.workflow.findMany({
         where: { agentId, deletedAt: null },
         include: { _count: { select: { steps: true } }, schedules: true },
@@ -223,6 +225,7 @@ export async function workflowRoutes(app: FastifyInstance) {
   app.get('/api/workflows/:id', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { id } = z.object({ id: z.string() }).parse(req.params);
+      await requireVisibleWorkflow(id, req.user!);
       const workflow = await prisma.workflow.findUnique({
         where: { id },
         include: { steps: { orderBy: { position: 'asc' } }, schedules: true },
@@ -333,6 +336,7 @@ export async function workflowRoutes(app: FastifyInstance) {
     try {
       const { id } = z.object({ id: z.string() }).parse(req.params);
       const body = z.object({ input: z.record(z.unknown()).optional() }).parse(req.body ?? {});
+      await requireVisibleWorkflow(id, req.user!);
       const triggeredBy = `user:${req.user!.sub}`;
 
       const runId = await kickOffRun(app, id, body.input ?? {}, triggeredBy);
@@ -348,6 +352,7 @@ export async function workflowRoutes(app: FastifyInstance) {
     try {
       const { id } = z.object({ id: z.string() }).parse(req.params);
       const body = z.object({ message: z.string().optional() }).parse(req.body ?? {});
+      await requireVisibleWorkflow(id, req.user!);
       const triggeredBy = `test:${req.user!.sub}`;
 
       const runId = await kickOffRun(

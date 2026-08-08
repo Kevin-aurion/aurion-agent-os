@@ -37,9 +37,26 @@ const STATUS_COLORS: Record<string, string> = {
   CONFIRMED: 'bg-emerald-500/15 text-emerald-400',
   PENDING_UNDERSTANDING: 'bg-amber-500/15 text-amber-400',
   AWAITING_USER_CONFIRM: 'bg-amber-500/15 text-amber-400',
+  AWAITING_CONFIRM: 'bg-amber-500/15 text-amber-400',
   REJECTED: 'bg-rose-500/15 text-rose-400',
   EXPIRED: 'bg-rose-500/15 text-rose-400',
   ACTIVE: 'bg-emerald-500/15 text-emerald-400',
+  PENDING_ENROLLMENT: 'bg-amber-500/15 text-amber-400',
+  REVOKED: 'bg-rose-500/15 text-rose-400',
+  DISABLED: 'bg-zinc-500/15 text-zinc-400',
+  DISPATCHED: 'bg-blue-500/15 text-blue-400',
+  ACKED: 'bg-blue-500/15 text-blue-400',
+  TIMEOUT: 'bg-rose-500/15 text-rose-400',
+  REQUESTED: 'bg-amber-500/15 text-amber-400',
+  INSTALLING: 'bg-blue-500/15 text-blue-400',
+  READY: 'bg-emerald-500/15 text-emerald-400',
+  // Eval suite / case statuses (Slice 2)
+  PASSED: 'bg-emerald-500/15 text-emerald-400',
+  PASS: 'bg-emerald-500/15 text-emerald-400',
+  FAIL: 'bg-rose-500/15 text-rose-400',
+  ERROR: 'bg-rose-500/15 text-rose-400',
+  PENDING: 'bg-amber-500/15 text-amber-400',
+  SKIPPED: 'bg-zinc-500/15 text-zinc-400',
 };
 
 export function StatusBadge({ status }: { status: string }) {

@@ -1,0 +1,37 @@
+{
+  "name": "aurion-aios-builder",
+  "version": "1.2.1",
+  "description": "Build governed AI employees through natural conversations and synchronize durable drafts to Aurion AIOS.",
+  "author": {
+    "name": "Aurion",
+    "url": "https://aurion-aios.lazyoffice.app/agent-builds"
+  },
+  "homepage": "https://aurion-aios.lazyoffice.app/agent-builds",
+  "keywords": [
+    "agent-builder",
+    "ai-employee",
+    "mcp",
+    "skills"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Aurion AIOS Builder",
+    "shortDescription": "Build governed AI employees",
+    "longDescription": "Interview users naturally in ChatGPT, Codex, Claude or Cursor while Aurion AIOS keeps an asynchronous, versioned Agent and Skill draft behind mandatory FDE review and testing gates.",
+    "developerName": "Aurion",
+    "category": "Productivity",
+    "capabilities": [
+      "Adaptive agent interviews",
+      "Agent and Skill drafting",
+      "Governed testing and review"
+    ],
+    "websiteURL": "https://aurion-aios.lazyoffice.app/agent-builds",
+    "defaultPrompt": [
+      "Help me build an AI employee for a recurring business task.",
+      "Continue one of my unfinished AI employee builds.",
+      "Review and improve the latest draft of my AI employee."
+    ],
+    "brandColor": "#7B83FF"
+  }
+}

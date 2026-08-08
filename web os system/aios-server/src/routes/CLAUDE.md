@@ -3,15 +3,26 @@
 Fastify 路由，全部掛在 `/api/*`。多數以 `requireAuth` preHandler 保護；回應走 `lib/http.ts` 的 `ok()/sendError()`。
 
 ## 檔案
-- `agents.ts` — 員工 CRUD。含 `engineExecute`/`engineVerify`（含 GROK）、`department`、`restrictions`；`_count.workflows` 以 `{deletedAt:null}` 過濾。
+- `agents.ts` — 員工 CRUD。含 `engineExecute`/`engineVerify`（含 GROK）、`department`、`restrictions`；掛載技能時 RECORDED/COMPUTER_CONTROL 強制 CODEX；attach 冪等（已連結則回傳既有列）。
 - `workflows.ts` — 工作流 CRUD 與觸發設定（`schedule`/`keyword`/`manual`）；`syncSchedule` 通知即時排程；`kickOffRun` 預先產生 `runId`。
-- `skills.ts` — 技能。**`/api/skills/build` 為非同步**：先建 skill 列（PENDING_UNDERSTANDING），背景跑草稿+理解（避免同步逾時）。支援 GROK 建置。
-- `conversations.ts` — 對話：持久化使用者訊息 → 背景跑員工 → 回覆持久化並經 WS `chat.message` 廣播。送訊息時帶最近 20 則 `history`（對話記憶）。含 `chat.send` WS 處理器。
+- `skills.ts` — 技能。**`/api/skills/build` 為非同步**。`POST /:id/confirm` 僅 FDE；走 `confirmAwaitingSkill`（AWAITING + CODEX 閘）。
+- `training.ts` — 口述訓練。`train/message` 為 **requireAuth**（MEMBER 可建 inert 草稿）；永不 auto-confirm。`skillId` 必須已掛在該 agent。
+- `agentbuilder.ts` — **Agent Builder**（CEO 友善工廠）。`external-snapshot` 供 ChatGPT 等無 lifecycle hook 客戶端可重試地同步一組對話與完整草稿；`external/prompt-hook` 供 Claude Code `UserPromptSubmit` 自動開案／續接與排入背景演進，`external/stop-guard` 只補存本輪內容、不阻塞等 Artifact。`GET /agents` 僅列登入帳號建立的非系統 Agent；草稿可 PATCH 名稱，live Agent 改名只能建立 ChangeProposal 待 FDE 核准。上傳 `?useAsTemplate=true` 會在建置時產生 Skill template asset。`GET /evolution-queue` 是獨立建置入口資料源：FDE 看全部、MEMBER 僅看本人；背景 READY 僅 shadow 草稿，FDE 才能建立 PAUSED Agent + `AWAITING_USER_CONFIRM` 技能，真實測試需跨模型驗證，finalize 仍需 PASSED。
+- `voice.ts` — 語音轉錄 **requireAuth**（草稿輔助；redact 後回傳）。
+- `recording.ts` — 錄製 start/status/stop/to-skill 皆 **requireAuth**（草稿）；host-global 錄製 session 由後端按 user + 開始時選定的 Agent 持有，to-skill 只接受 opaque sessionId、不接受前端指定本機產物路徑；永不 auto-confirm。
+- `conversations.ts` — 對話。**擁有者隔離**：list 只回 `userId=req.user.sub`；GET/POST messages 與 WS `chat.send` 皆驗證 `conversation.userId`。
+- `proposals.ts` — 提案。MEMBER 可建；FDE approve 支援 `action=confirm_skill`（見 `lib/changeproposal`）。
+- `reflections.ts` — **FDE only** 反思中心：列出整理時段／遮罩後回饋／優化建議，支援手動排程、送交提案、忽略；不能直接套用變更。
 - `runs.ts` — 執行紀錄查詢。
 - `dashboard.ts` — 總覽統計。
 - `auth.ts` — 登入 / token。
+- `mcpoauth.ts` — 公開 Agent Builder Remote MCP 的 OAuth 2.1 邊界：discovery、DCR、Claude／ChatGPT hosted callback、登入／同意、authorization code + PKCE S256、RFC 8707 resource audience、refresh rotation、revoke。OAuth 回應依協議直接回 JSON／HTML，不包 `ok()`；scope 固定 `aios:agent-builder`，不可取得 FDE 生效能力。
 - `health.ts` — 健康檢查。
 
 ## 注意
 - DELETE 請求**不要**帶 `content-type: application/json` 又空 body（Fastify 會 500）。
 - 全頁導向的 OAuth `/start` 無法帶 header，改接受 `?token=` query。
+- **生效閘**：只有 FDE confirm / approveProposal 能把技能變 CONFIRMED；草稿捕捉端點可放寬到 requireAuth。
+- `Agent.systemManaged=true` 不出現在 `/api/agents` 工作台清單，也不可由一般 Agent CRUD 修改或刪除。
+
+- 新增：`evals.ts`（trainer：EvalSuite/Case CRUD、跑評測、`promoteWithGate` 升級閘）、`mcp.ts`（trainer：外部 MCP loopback-only 註冊；`POST /mcp/call` 仍經 agent scope/tool/restriction/approval/budget Broker）、`googleworkspace.ts`（user-scoped Gmail/Drive read；write 需 FDE + 同 Agent 的真核准 Run；可安裝五個分權 MCP preset）、`a2a.ts`（peer 註冊需 trainer；AgentCard/task 預設停用邊界）。

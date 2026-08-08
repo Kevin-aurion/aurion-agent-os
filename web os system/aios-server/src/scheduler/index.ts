@@ -13,17 +13,30 @@ import { prisma } from '../lib/db.js';
 import { hub } from '../ws/hub.js';
 import { audit } from '../lib/audit.js';
 
-interface RunJobData {
+interface WorkflowRunJobData {
+  kind?: 'workflow';
   workflowId: string;
   input?: unknown;
   triggeredBy: string;
   scheduleId?: string;
 }
 
+interface ReflectionRunJobData {
+  kind: 'reflection';
+  triggeredBy: string;
+  manual?: boolean;
+}
+
+type RunJobData = WorkflowRunJobData | ReflectionRunJobData;
+
 interface NotifyJobData {
   bindingId?: string;
   to?: string;
   text: string;
+}
+
+interface BuilderEvolutionJobData {
+  iterationId: string;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-interface
@@ -34,10 +47,12 @@ let connection: { url: string } | undefined;
 let runsQueue: Queue<RunJobData> | undefined;
 let notifyQueue: Queue<NotifyJobData> | undefined;
 let syncQueue: Queue<SyncJobData> | undefined;
+let builderEvolutionQueue: Queue<BuilderEvolutionJobData> | undefined;
 
 let runsWorker: Worker<RunJobData> | undefined;
 let notifyWorker: Worker<NotifyJobData> | undefined;
 let syncWorker: Worker<SyncJobData> | undefined;
+let builderEvolutionWorker: Worker<BuilderEvolutionJobData> | undefined;
 
 let runsEvents: QueueEvents | undefined;
 
@@ -113,10 +128,42 @@ export async function removeSchedule(scheduleId: string): Promise<void> {
 }
 
 export function getQueues() {
-  return { runs: runsQueue, notify: notifyQueue, sync: syncQueue };
+  return { runs: runsQueue, notify: notifyQueue, sync: syncQueue, builderEvolution: builderEvolutionQueue };
+}
+
+/** Queue a non-effective Agent Builder evolution without blocking chat. */
+export async function enqueueBuilderEvolution(iterationId: string): Promise<boolean> {
+  if (!builderEvolutionQueue) return false;
+  try {
+    await builderEvolutionQueue.add(
+      'compile-shadow-harness',
+      { iterationId },
+      {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 1500 },
+        removeOnComplete: 200,
+        removeOnFail: 200,
+      },
+    );
+    return true;
+  } catch (error) {
+    console.warn('[scheduler] failed to enqueue builder evolution:', error instanceof Error ? error.message : error);
+    return false;
+  }
 }
 
 async function runWorkflowRunJob(job: Job<RunJobData>): Promise<unknown> {
+  if (job.data.kind === 'reflection') {
+    const { reflectionService, reflectionWindowFor } = await import('../lib/reflection.js');
+    const now = new Date();
+    return reflectionService.runCycle({
+      triggeredBy: job.data.triggeredBy,
+      now,
+      window: job.data.manual
+        ? { start: reflectionWindowFor(now, config.tz).end, end: now }
+        : undefined,
+    });
+  }
   const { workflowId, input, triggeredBy, scheduleId } = job.data;
 
   if (scheduleId) {
@@ -177,6 +224,11 @@ async function runSyncJob(_job: Job<SyncJobData>): Promise<unknown> {
   return null;
 }
 
+async function runBuilderEvolutionJob(job: Job<BuilderEvolutionJobData>): Promise<void> {
+  const { processBuilderEvolution } = await import('../lib/agentbuilderevolution.js');
+  await processBuilderEvolution(job.data.iterationId);
+}
+
 /** On boot: fire any enabled schedule whose stored nextFireAt already passed. */
 async function catchUpMissedSchedules(): Promise<void> {
   if (!runsQueue) return;
@@ -222,12 +274,14 @@ export async function startScheduler(): Promise<void> {
       },
     });
     syncQueue = new Queue<SyncJobData>('sync', { connection });
+    builderEvolutionQueue = new Queue<BuilderEvolutionJobData>('builder-evolution', { connection });
 
     // Fail fast if Redis is actually unreachable rather than silently
     // queueing commands forever.
     await runsQueue.waitUntilReady();
     await notifyQueue.waitUntilReady();
     await syncQueue.waitUntilReady();
+    await builderEvolutionQueue.waitUntilReady();
 
     runsWorker = new Worker<RunJobData>(
       'runs',
@@ -244,6 +298,11 @@ export async function startScheduler(): Promise<void> {
       async (job) => runSyncJob(job),
       { connection, concurrency: 2 },
     );
+    builderEvolutionWorker = new Worker<BuilderEvolutionJobData>(
+      'builder-evolution',
+      async (job) => runBuilderEvolutionJob(job),
+      { connection, concurrency: 2 },
+    );
 
     runsWorker.on('failed', (job, err) => {
       console.warn(`[scheduler] runs job ${job?.id} failed:`, err.message);
@@ -251,10 +310,33 @@ export async function startScheduler(): Promise<void> {
     notifyWorker.on('failed', (job, err) => {
       console.warn(`[scheduler] notify job ${job?.id} failed:`, err.message);
     });
+    builderEvolutionWorker.on('failed', (job, err) => {
+      console.warn(`[scheduler] builder evolution job ${job?.id} failed:`, err.message);
+    });
 
     runsEvents = new QueueEvents('runs', { connection });
 
     started = true;
+
+    // System reflection is a first-class, timezone-aware job. It is not a
+    // mutable user Workflow because its governance and data boundary are fixed.
+    const { ensureReflectionAgent, REFLECTION_CRON } = await import('../lib/reflection.js');
+    await ensureReflectionAgent();
+    await runsQueue.upsertJobScheduler(
+      'system:reflection',
+      { pattern: REFLECTION_CRON, tz: config.tz },
+      {
+        name: 'reflection-cycle',
+        data: { kind: 'reflection', triggeredBy: 'reflection-schedule' },
+      },
+    );
+    // Catch the latest completed window after downtime/restart. ReflectionCycle's
+    // unique window makes this safe to enqueue once on every scheduler boot.
+    await runsQueue.add(
+      'reflection-cycle',
+      { kind: 'reflection', triggeredBy: 'reflection-catchup' },
+      { removeOnComplete: 100, removeOnFail: 100 },
+    );
 
     // Register the default retry/backoff policy for notify jobs at add-time
     // via a small wrapper; consumers can still override per-call.
@@ -265,15 +347,44 @@ export async function startScheduler(): Promise<void> {
 
     await catchUpMissedSchedules();
 
-    console.log(`[scheduler] started — ${schedules.length} enabled schedule(s) registered`);
+    await prisma.agentBuildIteration.updateMany({
+      where: {
+        status: { in: ['ANALYZING', 'BUILDING'] },
+        updatedAt: { lt: new Date(Date.now() - 30_000) },
+      },
+      data: { status: 'QUEUED', error: '背景建置中斷，已排入重試' },
+    });
+    const queuedIterations = await prisma.agentBuildIteration.findMany({
+      where: { status: 'QUEUED' },
+      select: { id: true },
+      orderBy: { createdAt: 'asc' },
+      take: 200,
+    });
+    for (const iteration of queuedIterations) {
+      await enqueueBuilderEvolution(iteration.id);
+    }
+
+    console.log(`[scheduler] started — ${schedules.length} workflow schedule(s) + system reflection + ${queuedIterations.length} builder evolution(s)`);
   } catch (e) {
     console.warn('[scheduler] Redis unavailable or scheduler failed to start — continuing without it:', e instanceof Error ? e.message : e);
     await stopScheduler().catch(() => {});
     runsQueue = undefined;
     notifyQueue = undefined;
     syncQueue = undefined;
+    builderEvolutionQueue = undefined;
     started = false;
   }
+}
+
+/** Enqueue an FDE-requested partial-window reflection without bypassing BullMQ. */
+export async function enqueueReflectionNow(triggeredBy: string): Promise<string> {
+  if (!runsQueue) throw new Error('Scheduler is unavailable');
+  const job = await runsQueue.add(
+    'reflection-cycle',
+    { kind: 'reflection', triggeredBy, manual: true },
+    { removeOnComplete: 100, removeOnFail: 100 },
+  );
+  return String(job.id);
 }
 
 /** Default job options helper for notify jobs: 3 retries, exponential backoff. */
@@ -291,13 +402,17 @@ async function stopScheduler(): Promise<void> {
     runsWorker?.close(),
     notifyWorker?.close(),
     syncWorker?.close(),
+    builderEvolutionWorker?.close(),
     runsEvents?.close(),
     runsQueue?.close(),
     notifyQueue?.close(),
     syncQueue?.close(),
+    builderEvolutionQueue?.close(),
   ]);
   runsWorker = undefined;
   notifyWorker = undefined;
   syncWorker = undefined;
+  builderEvolutionWorker = undefined;
   runsEvents = undefined;
+  builderEvolutionQueue = undefined;
 }

@@ -11,6 +11,7 @@ import {
   recallHits,
   reindexAgent,
 } from '../memory/memoryService.js';
+import { requireVisibleAgent } from '../lib/agentaccess.js';
 
 const searchSchema = z.object({
   query: z.string().min(1),
@@ -21,8 +22,7 @@ export async function memoryRoutes(app: FastifyInstance) {
   // GET /api/agents/:agentId/memory/files — wiki file tree (flat list with paths)
   app.get('/api/agents/:agentId/memory/files', { preHandler: requireAuth }, async (req) => {
     const { agentId } = req.params as { agentId: string };
-    const agent = await prisma.agent.findUnique({ where: { id: agentId } });
-    if (!agent || agent.deletedAt) throw errors.notFound('Agent not found');
+    await requireVisibleAgent(agentId, req.user!);
     const agentDir = await materializeAgent(agentId);
     const files = await listWikiFiles(agentDir);
     return ok({ files });
@@ -33,8 +33,7 @@ export async function memoryRoutes(app: FastifyInstance) {
     const { agentId } = req.params as { agentId: string };
     const q = req.query as { path?: string };
     if (!q.path || typeof q.path !== 'string') throw errors.badRequest('path query required');
-    const agent = await prisma.agent.findUnique({ where: { id: agentId } });
-    if (!agent || agent.deletedAt) throw errors.notFound('Agent not found');
+    await requireVisibleAgent(agentId, req.user!);
     const agentDir = await materializeAgent(agentId);
     try {
       const content = await readWikiFile(agentDir, q.path);
@@ -50,8 +49,7 @@ export async function memoryRoutes(app: FastifyInstance) {
   app.post('/api/agents/:agentId/memory/search', { preHandler: requireAuth }, async (req) => {
     const { agentId } = req.params as { agentId: string };
     const body = searchSchema.parse(req.body ?? {});
-    const agent = await prisma.agent.findUnique({ where: { id: agentId } });
-    if (!agent || agent.deletedAt) throw errors.notFound('Agent not found');
+    await requireVisibleAgent(agentId, req.user!);
     const hits = await recallHits(agentId, body.query, body.topK ?? 4);
     return ok({ query: body.query, hits });
   });
@@ -59,8 +57,7 @@ export async function memoryRoutes(app: FastifyInstance) {
   // POST /api/agents/:agentId/memory/reindex — scan wiki and incrementally re-embed
   app.post('/api/agents/:agentId/memory/reindex', { preHandler: requireAuth }, async (req) => {
     const { agentId } = req.params as { agentId: string };
-    const agent = await prisma.agent.findUnique({ where: { id: agentId } });
-    if (!agent || agent.deletedAt) throw errors.notFound('Agent not found');
+    await requireVisibleAgent(agentId, req.user!);
     const agentDir = await materializeAgent(agentId);
     const stats = await reindexAgent(agentId, agentDir);
     return ok(stats);

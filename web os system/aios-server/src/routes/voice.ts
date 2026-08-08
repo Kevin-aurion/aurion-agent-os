@@ -1,16 +1,18 @@
 // Voice transcription via OpenAI Whisper.
 // Multipart audio → OpenAI audio/transcriptions → redactSecrets → { text }.
+// Draft-capture helper for Teach mode: any authenticated user (MEMBER may dictate
+// training text). Does not confirm skills or mutate agent config.
 // No new dependencies; uses Node built-in fetch / FormData / Blob.
 import type { FastifyInstance } from 'fastify';
 import { config } from '../config.js';
-import { requireTrainer } from '../lib/guard.js';
+import { requireAuth } from '../lib/guard.js';
 import { ok, errors, sendError } from '../lib/http.js';
 import { redactSecrets } from '../memory/redactor.js';
 
 const OPENAI_TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions';
 
 export async function voiceRoutes(app: FastifyInstance) {
-  app.post('/api/voice/transcribe', { preHandler: requireTrainer }, async (req, reply) => {
+  app.post('/api/voice/transcribe', { preHandler: requireAuth }, async (req, reply) => {
     try {
       if (!config.voice.enabled) {
         throw errors.notConfigured(

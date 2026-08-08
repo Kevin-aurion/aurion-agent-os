@@ -1,6 +1,9 @@
 // Chat conversations with an agent: REST CRUD + WS req handler ('chat.send')
 // that both funnel into the same send-message logic, which persists the user
 // message, kicks off an ad-hoc agent run, and (async) persists+publishes the reply.
+//
+// Privacy (fail-closed): each conversation belongs to conversation.userId.
+// List / read / send only for the authenticated owner (req.user.sub / conn.userId).
 import type { FastifyInstance } from 'fastify';
 import { ulid } from 'ulid';
 import { requireAuth } from '../lib/guard.js';
@@ -8,6 +11,8 @@ import { ok, errors, sendError } from '../lib/http.js';
 import { prisma } from '../lib/db.js';
 import { hub } from '../ws/hub.js';
 import { audit } from '../lib/audit.js';
+import type { AccessClaims } from '../lib/auth.js';
+import { requireVisibleAgent } from '../lib/agentaccess.js';
 
 interface SendMessageResult {
   messageId: string;
@@ -16,13 +21,18 @@ interface SendMessageResult {
 
 /** Given a settled run outcome (or a caught error), persist the AGENT/SYSTEM
  * reply message and publish it over the hub. */
-async function persistAndPublishReply(conversationId: string, outcomeOrError: unknown, isError: boolean) {
+async function persistAndPublishReply(
+  conversationId: string,
+  userId: string,
+  outcomeOrError: unknown,
+  isError: boolean,
+) {
   if (isError) {
     const message = outcomeOrError instanceof Error ? outcomeOrError.message : String(outcomeOrError);
     const agentMessage = await prisma.message.create({
       data: { id: ulid(), conversationId, role: 'SYSTEM', content: `Agent run failed: ${message}` },
     });
-    hub.publish('chat.message', {
+    hub.publishToUser(userId, 'chat.message', {
       conversationId,
       messageId: agentMessage.id,
       role: 'SYSTEM',
@@ -41,7 +51,7 @@ async function persistAndPublishReply(conversationId: string, outcomeOrError: un
   const agentMessage = await prisma.message.create({
     data: { id: ulid(), conversationId, role: 'AGENT', content: replyText, runId: outcome.runId },
   });
-  hub.publish('chat.message', {
+  hub.publishToUser(userId, 'chat.message', {
     conversationId,
     messageId: agentMessage.id,
     role: 'AGENT',
@@ -51,12 +61,24 @@ async function persistAndPublishReply(conversationId: string, outcomeOrError: un
   });
 }
 
-/** Persist the user message, publish it, and kick off an ad-hoc agent run in
- * the background (not awaited) — the reply is persisted + published over WS
- * once the run resolves. Returns immediately with the user message id. */
-async function sendMessage(conversationId: string, content: string, _userId: string | null): Promise<SendMessageResult> {
+/**
+ * Persist the user message, publish it, and kick off an ad-hoc agent run in
+ * the background. Enforces conversation ownership: conversation.userId must
+ * equal the authenticated userId (REST or WS).
+ */
+async function sendMessage(
+  conversationId: string,
+  content: string,
+  claims: Pick<AccessClaims, 'sub' | 'role'> | null | undefined,
+): Promise<SendMessageResult> {
+  if (!claims?.sub) throw errors.unauthorized();
+  const userId = claims.sub;
+
   const conversation = await prisma.conversation.findUnique({ where: { id: conversationId } });
   if (!conversation || conversation.deletedAt) throw errors.notFound('Conversation not found');
+  // Fail-closed privacy: do not leak existence of another user's thread.
+  if (conversation.userId !== userId) throw errors.notFound('Conversation not found');
+  await requireVisibleAgent(conversation.agentId, claims);
 
   // Gather recent conversation history (before this new turn) so the agent has
   // memory of the dialogue — a chat feature needs prior turns as context.
@@ -73,7 +95,7 @@ async function sendMessage(conversationId: string, content: string, _userId: str
     data: { id: ulid(), conversationId, role: 'USER', content },
   });
 
-  hub.publish('chat.message', {
+  hub.publishToUser(userId, 'chat.message', {
     conversationId,
     messageId: userMessage.id,
     role: 'USER',
@@ -109,8 +131,8 @@ async function sendMessage(conversationId: string, content: string, _userId: str
       triggeredBy: `chat:${conversationId}`,
     });
   })()
-    .then((outcome) => persistAndPublishReply(conversationId, outcome, false))
-    .catch((e) => persistAndPublishReply(conversationId, e, true));
+    .then((outcome) => persistAndPublishReply(conversationId, userId, outcome, false))
+    .catch((e) => persistAndPublishReply(conversationId, userId, e, true));
 
   return { messageId: userMessage.id, runId };
 }
@@ -119,8 +141,13 @@ export async function conversationRoutes(app: FastifyInstance) {
   app.get('/api/agents/:agentId/conversations', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { agentId } = req.params as { agentId: string };
+      const userId = req.user?.sub;
+      if (!userId) throw errors.unauthorized();
+      await requireVisibleAgent(agentId, req.user!);
+
+      // Only the caller's own threads for this agent.
       const conversations = await prisma.conversation.findMany({
-        where: { agentId, deletedAt: null },
+        where: { agentId, userId, deletedAt: null },
         orderBy: { createdAt: 'desc' },
       });
       return reply.send(ok(conversations));
@@ -134,8 +161,7 @@ export async function conversationRoutes(app: FastifyInstance) {
       const { agentId } = req.params as { agentId: string };
       const body = (req.body ?? {}) as { title?: string };
 
-      const agent = await prisma.agent.findUnique({ where: { id: agentId } });
-      if (!agent) throw errors.notFound('Agent not found');
+      await requireVisibleAgent(agentId, req.user!);
 
       const userId = req.user?.sub;
       if (!userId) throw errors.unauthorized();
@@ -154,8 +180,12 @@ export async function conversationRoutes(app: FastifyInstance) {
   app.get('/api/conversations/:id/messages', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { id } = req.params as { id: string };
+      const userId = req.user?.sub;
+      if (!userId) throw errors.unauthorized();
+
       const conversation = await prisma.conversation.findUnique({ where: { id } });
-      if (!conversation) throw errors.notFound('Conversation not found');
+      if (!conversation || conversation.deletedAt) throw errors.notFound('Conversation not found');
+      if (conversation.userId !== userId) throw errors.notFound('Conversation not found');
 
       const messages = await prisma.message.findMany({
         where: { conversationId: id },
@@ -175,10 +205,10 @@ export async function conversationRoutes(app: FastifyInstance) {
         throw errors.badRequest('content is required');
       }
 
-      const conversation = await prisma.conversation.findUnique({ where: { id } });
-      if (!conversation || conversation.deletedAt) throw errors.notFound('Conversation not found');
+      const userId = req.user?.sub;
+      if (!userId) throw errors.unauthorized();
 
-      const result = await sendMessage(id, body.content, req.user?.sub ?? null);
+      const result = await sendMessage(id, body.content, req.user!);
       return reply.send(ok(result));
     } catch (e) {
       return sendError(reply, e);
@@ -187,10 +217,10 @@ export async function conversationRoutes(app: FastifyInstance) {
 }
 
 // Register the WS req handler so clients can send a chat message over the
-// socket too (same underlying logic as the REST endpoint).
+// socket too (same underlying logic as the REST endpoint — ownership via conn.userId).
 hub.onReq('chat.send', async (payload: { conversationId?: string; content?: string }, conn) => {
   const { conversationId, content } = payload ?? {};
   if (!conversationId || typeof conversationId !== 'string') throw errors.badRequest('conversationId is required');
   if (!content || typeof content !== 'string') throw errors.badRequest('content is required');
-  return sendMessage(conversationId, content, conn.userId);
+  return sendMessage(conversationId, content, { sub: conn.userId, role: conn.role });
 });

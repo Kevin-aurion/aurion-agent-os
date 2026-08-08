@@ -46,3 +46,15 @@ DerivedData/
 # Local tooling / backups
 /.claude/
 /web os system/backups/
+
+# Local orchestration scratchpads (project test specs live under aios-server/.scratch)
+/.scratch/
+/.aios-skill-factory.workflow.js
+
+# Generated browser evidence and private/imported business material
+/agentic-os/reports/
+/outputs/
+/WAIC展覽報告/
+/參考文件/
+/會議記錄/
+/AI_Agent_第一性優化建議.html

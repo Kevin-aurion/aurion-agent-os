@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plug, Trash2, Send, Plus, HeartPulse, ShieldCheck, ShieldAlert, FileSpreadsheet, ExternalLink, FileBarChart2, FileText } from 'lucide-react';
+import { Plug, Trash2, Send, Plus, HeartPulse, ShieldCheck, ShieldAlert, FileSpreadsheet, ExternalLink, FileBarChart2, FileText, Cable } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { PageHeader, EmptyState, StatusBadge, Field, Spinner } from '@/components/ui';
 import { API, tokens } from '@/lib/api';
@@ -40,6 +40,15 @@ interface HealthResp {
   db?: string | boolean;
   wsConnections?: number;
   [k: string]: unknown;
+}
+interface AgentOption {
+  id: string;
+  name: string;
+  status: string;
+}
+interface McpInstallResult {
+  installed: Array<{ serverId: string; name: string }>;
+  note: string;
 }
 
 const PROVIDER_LABEL: Record<string, string> = { microsoft: 'Microsoft 365', google: 'Google', line: 'LINE' };
@@ -84,6 +93,10 @@ export default function SettingsPage() {
     queryKey: ['health'],
     queryFn: () => API.get<HealthResp>('/api/health'),
   });
+  const agentsQ = useQuery({
+    queryKey: ['agents', 'settings-mcp'],
+    queryFn: () => API.get<AgentOption[]>('/api/agents?scope=all'),
+  });
 
   const disconnectMut = useMutation({
     mutationFn: (accountId: string) => API.del(`/api/integrations/${accountId}`),
@@ -104,6 +117,20 @@ export default function SettingsPage() {
       API.post<ArapTemplateResult>(`/api/integrations/${accountId}/sample-file`, { kind }),
     onSuccess: (data, vars) => {
       setSampleResults((prev) => ({ ...prev, [`${vars.accountId}:${vars.kind}`]: data }));
+    },
+  });
+
+  const [mcpAgentByAccount, setMcpAgentByAccount] = useState<Record<string, string>>({});
+  const [mcpResults, setMcpResults] = useState<Record<string, McpInstallResult>>({});
+  const mcpInstallMut = useMutation({
+    mutationFn: ({ accountId, agentId }: { accountId: string; agentId: string }) =>
+      API.post<McpInstallResult>('/api/google-workspace/mcp/install', {
+        accountId,
+        agentIds: [agentId],
+      }),
+    onSuccess: (data, vars) => {
+      setMcpResults((previous) => ({ ...previous, [vars.accountId]: data }));
+      qc.invalidateQueries({ queryKey: ['mcp', 'servers'] });
     },
   });
 
@@ -193,6 +220,7 @@ export default function SettingsPage() {
                       <th className="px-3 py-2">權限範圍</th>
                       <th className="px-3 py-2">AR/AP 範本</th>
                       <th className="px-3 py-2">範例檔案</th>
+                      <th className="px-3 py-2">Agent 的 Google MCP</th>
                       <th className="px-3 py-2" />
                     </tr>
                   </thead>
@@ -253,6 +281,57 @@ export default function SettingsPage() {
                               );
                             })}
                           </div>
+                        </td>
+                        <td className="px-3 py-2">
+                          {a.provider === 'GOOGLE' ? (
+                            <div className="flex min-w-56 flex-col items-start gap-2">
+                              <select
+                                className="input w-full"
+                                value={mcpAgentByAccount[a.id] ?? ''}
+                                onChange={(event) =>
+                                  setMcpAgentByAccount((previous) => ({
+                                    ...previous,
+                                    [a.id]: event.target.value,
+                                  }))
+                                }
+                              >
+                                <option value="">選擇要授權的 Agent</option>
+                                {(agentsQ.data ?? []).map((agent) => (
+                                  <option key={agent.id} value={agent.id}>
+                                    {agent.name}（{agent.status}）
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                className="btn-ghost whitespace-nowrap"
+                                disabled={
+                                  !mcpAgentByAccount[a.id] ||
+                                  (mcpInstallMut.isPending && mcpInstallMut.variables?.accountId === a.id)
+                                }
+                                onClick={() => {
+                                  const agentId = mcpAgentByAccount[a.id];
+                                  if (agentId) mcpInstallMut.mutate({ accountId: a.id, agentId });
+                                }}
+                              >
+                                {mcpInstallMut.isPending && mcpInstallMut.variables?.accountId === a.id ? (
+                                  <Spinner className="h-3.5 w-3.5" />
+                                ) : (
+                                  <Cable className="h-3.5 w-3.5" />
+                                )}
+                                安裝最小權限工具
+                              </button>
+                              {mcpResults[a.id] && (
+                                <span className="text-xs text-emerald-400">
+                                  已安裝 {mcpResults[a.id]!.installed.length} 個分權入口；寫入與寄信仍需核准。
+                                </span>
+                              )}
+                              {mcpInstallMut.isError && mcpInstallMut.variables?.accountId === a.id && (
+                                <span className="text-xs text-rose-400">{(mcpInstallMut.error as Error).message}</span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted">目前僅支援 Google Workspace</span>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-right">
                           <button

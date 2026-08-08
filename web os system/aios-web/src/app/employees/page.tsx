@@ -39,7 +39,7 @@ export default function EmployeesPage() {
 
   const { data: agents, isLoading } = useQuery({
     queryKey: ['agents'],
-    queryFn: () => API.get<AgentListItem[]>('/api/agents'),
+    queryFn: () => API.get<AgentListItem[]>('/api/agents?scope=all'),
   });
 
   const createMutation = useMutation({

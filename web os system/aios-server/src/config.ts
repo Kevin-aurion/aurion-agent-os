@@ -22,6 +22,7 @@ export const config = {
   httpPort: Number(opt('AIOS_HTTP_PORT', '8700')),
   webPort: Number(opt('AIOS_WEB_PORT', '3100')),
   webOrigin: opt('AIOS_WEB_ORIGIN', 'http://localhost:3100'),
+  publicOrigin: opt('AIOS_PUBLIC_ORIGIN', 'https://aurion-aios.lazyoffice.app').replace(/\/+$/, ''),
   databaseUrl: req('DATABASE_URL'),
   redisUrl: req('REDIS_URL'),
   dataDir: opt('AIOS_DATA_DIR', path.resolve(process.cwd(), '../../aios-data')),
@@ -102,6 +103,14 @@ export const config = {
     model: opt('WHISPER_MODEL', 'whisper-1') || 'whisper-1',
   },
 
+  remoteMcp: {
+    issuer: opt('AIOS_MCP_OAUTH_ISSUER', 'https://aurion-aios-mcp.lazyoffice.app').replace(/\/+$/, ''),
+    resourceUrl: opt(
+      'AIOS_MCP_PUBLIC_URL',
+      'https://aurion-aios-mcp.lazyoffice.app/mcp',
+    ).replace(/\/+$/, ''),
+  },
+
   // Memory (Phase 1): L1 wiki on disk is source of truth; L3 Qdrant is a
   // rebuildable semantic index. When enabled=false every memory I/O is no-op.
   memory: {
@@ -127,6 +136,8 @@ export const paths = {
   cache: path.join(config.dataDir, 'cache'),
   computerControl: path.join(config.dataDir, 'computer-control'),
   runs: path.join(config.dataDir, 'runs'),
+  // Durable DeviceArtifact binaries (screenshots etc.); never via WebSocket.
+  deviceArtifacts: path.join(config.dataDir, 'device-artifacts'),
   builtinSkills: path.resolve(process.cwd(), 'builtin-skills'),
 };
 

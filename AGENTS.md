@@ -1,7 +1,7 @@
 # AGENTS.md — Aurion AIOS 交接文件（給 Codex / 任何協同 AI）
 
 > **這份是給「接手開發的 AI」看的權威現況文件**（Codex 讀 `AGENTS.md`，Claude 讀 `CLAUDE.md`；兩者內容以本檔為最新）。
-> 最後更新：2026-07-26。對應分支 `feat/agentic-os-p0-p1`（19 commits，已 push、PR 已開）。
+> 最後更新：2026-07-27。對應分支 `feat/agentic-os-p0-p1`；Agent Workbench Phase 1 目前在本機工作樹驗收中，尚未提交。
 > 用語與領域模型見 [`CONTEXT.md`](CONTEXT.md)；架構決策見 [`docs/adr/`](docs/adr/)。
 
 ---
@@ -75,19 +75,21 @@ runAgent(opts)
 
 ---
 
-## 4. 完整資料模型（24 models / 19 enums）
+## 4. 完整資料模型（33 models / 27 enums）
 
 **核心**：`User`(OWNER/TRAINER/MEMBER) · `Session` · `Agent` · `Skill` · `Workflow` · `WorkflowStep` · `Run` · `RunStep` · `Conversation` · `Message` · `Schedule`
 **治理**：`ApprovalRequest`（HITL）· **`ChangeProposal`**（提案佇列）· `AuditLog`（**hash chain**）· `CostLog`（**含 stepKey**）
 **技能**：`SkillVersion`（內容定址 + stable/canary）· `AgentSkill`（掛載）
 **其他**：`ConnectedAccount` · `CloudFileRef` · `AgentFileTarget` · `ComputerControlTask` · `MemoryDoc` · `ChannelBinding` · `Lesson`（**死 schema，未使用，待刪**）
+**評測/閘門/互通**：`EvalSuite`·`EvalCase`·`EvalRun`·`EvalResult`（技能升級評測閘）· `McpServerRegistry`（消費外部 MCP，loopback-only）· `RecordingSession`（錄製所有權）· `RunTrace`（執行軌跡，fail-safe）· `A2APeer`·`A2ATask`（Agent 互通，預設停用）
+（新 enum：EvalCaseKind/EvalRunStatus/EvalResultStatus/McpTransport/McpTrustTier/RecordingSessionStatus/RunTraceOutcome/A2ATaskStatus。）
 
 **`Agent` 的治理欄位**：`restrictions(Json)`、`costPolicy(Json)`、`riskTier`、`identityCard(Json)`、`engineExecute`/`engineVerify`
 **慣例**：enum 必須**多行**書寫；欄位註解用 `///`；改 schema 後 `npx prisma migrate dev --name <desc>` + `generate`；**不可手改既有 migration**；金額用 `Decimal`（禁 Float）。
 
 ---
 
-## 5. REST 端點（17 個 route 檔）
+## 5. REST 端點（20 個 route 檔）
 
 | 檔 | 端點 | 權限 |
 |---|---|---|
@@ -97,19 +99,22 @@ runAgent(opts)
 | `runs.ts` · `conversations.ts` · `memory.ts` · `dashboard.ts` | 執行、對話、記憶、總覽（**含 `/api/dashboard/health` 十大燈號**）| auth |
 | `approvals.ts` | HITL：列出待審 run／approve（帶 resumeToken 續跑）／reject | trainer |
 | **`proposals.ts`** | `POST /api/agents/:id/proposals`（**auth**，MEMBER 可提案）／`GET /api/proposals`／`approve`／`reject`（**trainer**）| 混合 |
-| **`training.ts`** | `GET /api/agents/:id/flows`（**免 LLM**）／`POST /api/agents/:id/train/message`（口述訓練→草稿） | auth／trainer |
-| **`recording.ts`** | 錄製 `start`／`status`／`stop`／`POST /api/agents/:id/recording/to-skill` | trainer |
-| **`voice.ts`** | `POST /api/voice/transcribe`（OpenAI whisper-1 → redact） | trainer |
+| **`training.ts`** | `GET /api/agents/:id/flows`（**免 LLM**）／`POST /api/agents/:id/train/message`（口述訓練→草稿；既有 `skillId` 必須已掛載該 Agent） | auth |
+| **`recording.ts`** | 錄製 `start`／`status`／`stop`／`POST /api/agents/:id/recording/to-skill`（host-global session 按 user 持有；不信任前端產物路徑；產物仍停在待確認） | auth |
+| **`voice.ts`** | `POST /api/voice/transcribe`（OpenAI whisper-1 → redact） | auth |
 | **`cost.ts`** | 成本查詢（含 `byStep` 明細）／設定預算政策 | trainer |
 | **`identity.ts`** | 身分卡 GET／PUT | auth／trainer |
 | **`docparse.ts`** | 文件解析服務健康檢查 | auth |
+| **`evals.ts`** | EvalSuite/Case CRUD、跑評測、升級閘 promote | trainer |
+| **`mcp.ts`** | 外部 MCP 伺服器註冊（loopback-only）/ broker 呼叫工具 | trainer |
+| **`a2a.ts`** | Agent 互通：peer 註冊（**trainer**）、AgentCard、task（**預設停用邊界**） | 混合 |
 | `auth.ts` · `health.ts` | 登入／refresh、健康 | — |
 
 回應一律走 `lib/http.ts` 的 `ok()` / `sendError()`；守門用 `lib/guard.ts` 的 `requireAuth` / `requireTrainer`。
 
 ---
 
-## 6. 共用 lib（17 個，寫新功能前先看有沒有現成的）
+## 6. 共用 lib（27 個，寫新功能前先看有沒有現成的）
 
 | 檔 | 用途 |
 |---|---|
@@ -125,6 +130,10 @@ runAgent(opts)
 | `docparse.ts` | 本地 Docling：`parseDocumentFile`／`docparseHealthy` |
 | `filecontext.ts` | `fileToText`（試算表→表格／PDF·docx·圖片→Docling／其餘 utf8） |
 | `audit.ts` | **hash chain 稽核**：`computeAuditHash`／`verifyChain`／`verifyAuditChain`／`backfillAuditChain`（pg advisory lock 序列化） |
+| `eval.ts` · `skillpromote.ts` | 評測套件（createSuite/addCase/runSuite，含 PROMPT_INJECTION 紅隊 + redact 證據）／升級閘 `promoteWithGate`·`rollbackWithGate`（fail-closed） |
+| `mcpclient.ts` · `mcpbroker.ts` · `mcpregistry.ts` | 消費外部 MCP：JSON-RPC client／請求-回應 broker（逾時+重連）／註冊表（`assertLoopbackUrl` 精確比對、credentialRef、SafeDto 不洩密） |
+| `trace.ts` · `agentcard.ts` · `a2a.ts` | 執行軌跡沉澱（fail-safe）／AgentCard 投影（先 redact）／A2A 邊界（預設停用、loopback、peer 註冊需 trainer） |
+| `skillgate.ts` · `identitycard.ts` | RECORDED/COMPUTER_CONTROL 強制 CODEX 掛載閘（ADR 0005）／身分卡解析與出廠檢查 |
 | `db.ts` · `auth.ts` · `crypto.ts` · `guard.ts` · `http.ts` | Prisma 單例、argon2+jose、AES-256-GCM、權限、回應信封 |
 
 `src/engine/cost.ts`：`estimateTokens`／`priceUsd`／`decideBudget`（純函式）／`guardBudget`（fail-closed）／`recordCost`／`getSpendByStep`。
@@ -179,6 +188,7 @@ temporal server start-dev               # 耐久執行用（loopback；未進 co
 | **越矩偵測** | 硬攔截→自動提案（去重、fail-safe）／語意越矩審查 | `faa89d3` |
 | **Codex 整合** | Computer Use MCP 橋接／錄製→技能（**委派 Codex 自產**） | `b5f7297` |
 | **前端** | 聊天式技能工廠（訓練 tab）＋語音轉錄／**FDE 提案審核頁** | `866d8cc` `0c5deee` |
+| **Agent Workbench Phase 1（未提交）** | `/work` 使用者工作台（Agent／Thread／交代工作／口述與錄製訓練）＋ `/admin` FDE 管理殼；MEMBER 訓練只產生待確認技能或提案；對話 REST 與 WebSocket 即時／重播皆依 user 隔離 | 本機工作樹 |
 
 ---
 
@@ -193,7 +203,9 @@ temporal server start-dev               # 耐久執行用（loopback；未進 co
 4. **`Lesson` 表是死 schema**（零使用）→ 可刪或併入 `ChangeProposal`。
 5. **sandbox 只做寫入圍籬**，無 CPU/記憶體配額；claude-in-sandbox 尚未 live 驗證。
 6. **語意越矩的 severity 門檻**目前是實作預設，尚未依真實資料調校。
-7. 未做：Browser Use 整合、本地 Whisper、多租戶/計費、消費外部 MCP 的 gateway。
+7. 未做：Browser Use 整合、本地 Whisper、多租戶/計費。（消費外部 MCP 的 gateway 已於本輪完成，見 `docs/adr/0010`。）
+8. **A2A（Agent 互通）預設停用**：僅 loopback、peer 註冊需 FDE(trainer)，尚未跨主機實測。見 `docs/adr/0012`。
+9. **eval 升級閘**：技能 promote 前須跑 EvalSuite 且無未解決 highRisk；跨模型 execute≠verify 於評測沿用。見 `docs/adr/0009`。
 
 ---
 

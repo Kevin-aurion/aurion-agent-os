@@ -14,6 +14,8 @@ export interface ToolContext {
   sendEmail: boolean;
   /** Optional run id — used for VIOLATION proposal linkage when a hard block fires. */
   runId?: string;
+  /** Authenticated actor / run trigger for governed MCP audit attribution. */
+  userId?: string;
 }
 
 export interface ToolModule {
@@ -118,6 +120,25 @@ export async function loadTool(agentDir: string, toolName: string): Promise<Tool
 
 /** Load and execute a tool by name with resolved args. */
 export async function runTool(agentDir: string, toolName: string, args: Record<string, unknown>, ctx?: ToolContext): Promise<unknown> {
+  const mcp = /^mcp:([A-Za-z0-9._-]+):([A-Za-z0-9._-]+)$/.exec(toolName);
+  if (mcp) {
+    if (!ctx) throw new Error('MCP tool requires governed tool context');
+    const [, serverId, externalTool] = mcp;
+    const writeTools = new Set(['gmail_create_draft', 'gmail_send', 'drive_create_text_file']);
+    const callArgs =
+      writeTools.has(externalTool!) && ctx.runId && args.runId == null
+        ? { ...args, runId: ctx.runId }
+        : args;
+    const { brokerDispatch } = await import('../lib/mcpbroker.js');
+    return brokerDispatch({
+      agentId: ctx.agentId,
+      userId: ctx.userId,
+      runId: ctx.runId,
+      serverId: serverId!,
+      tool: externalTool!,
+      args: callArgs,
+    });
+  }
   const mod = await loadTool(agentDir, toolName);
   return mod.run(args, ctx);
 }

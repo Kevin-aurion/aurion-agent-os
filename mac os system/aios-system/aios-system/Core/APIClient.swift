@@ -2,13 +2,18 @@ import Foundation
 
 /// REST client for the local backend. Handles the {success,data} envelope and
 /// transparent access-token refresh (mirrors the web client).
+/// Base URL is read from `AIOSConfig` (user-configurable).
 actor APIClient {
     static let shared = APIClient()
 
     private var access: String? = Keychain.get("access")
     private var refresh: String? = Keychain.get("refresh")
 
-    struct APIError: Error { let code: String; let message: String }
+    struct APIError: Error, LocalizedError {
+        let code: String
+        let message: String
+        var errorDescription: String? { message }
+    }
 
     func setTokens(access: String, refresh: String) {
         self.access = access; self.refresh = refresh
@@ -21,14 +26,22 @@ actor APIClient {
     var hasSession: Bool { access != nil }
     func currentAccess() -> String? { access }
 
-    func request<T: Decodable>(_ path: String, method: String = "GET", body: Encodable? = nil, authed: Bool = true, retry: Bool = true) async throws -> T {
-        var req = URLRequest(url: AIOSConfig.httpBase.appendingPathComponent(path))
+    func request<T: Decodable>(
+        _ path: String,
+        method: String = "GET",
+        body: Encodable? = nil,
+        authed: Bool = true,
+        retry: Bool = true
+    ) async throws -> T {
+        var req = URLRequest(url: AIOSConfig.apiURL(path))
         req.httpMethod = method
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONEncoder().encode(AnyEncodable(body))
         }
-        if authed, let access { req.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization") }
+        if authed, let access {
+            req.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
+        }
 
         let (data, resp) = try await URLSession.shared.data(for: req)
         if let http = resp as? HTTPURLResponse, http.statusCode == 401, retry, await refreshAccess() {
@@ -43,10 +56,19 @@ actor APIClient {
         guard let refresh else { return false }
         struct Body: Encodable { let refresh: String; let client = "macos" }
         do {
-            let r: AuthResult = try await request("/api/auth/refresh", method: "POST", body: Body(refresh: refresh), authed: false, retry: false)
+            let r: AuthResult = try await request(
+                "/api/auth/refresh",
+                method: "POST",
+                body: Body(refresh: refresh),
+                authed: false,
+                retry: false
+            )
             setTokens(access: r.access, refresh: r.refresh)
             return true
-        } catch { clearTokens(); return false }
+        } catch {
+            clearTokens()
+            return false
+        }
     }
 }
 

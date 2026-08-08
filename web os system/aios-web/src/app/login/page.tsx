@@ -1,9 +1,16 @@
 'use client';
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { API } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { Field, Spinner } from '@/components/ui';
+
+function destinationAfterLogin(): string {
+  if (typeof window === 'undefined') return '/';
+  const candidate = new URLSearchParams(window.location.search).get('next') ?? '/';
+  return candidate.startsWith('/') && !candidate.startsWith('//') ? candidate : '/';
+}
 
 export default function LoginPage() {
   const { user, login, register } = useAuth();
@@ -16,7 +23,7 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => { API.get<{ initialized: boolean }>('/api/auth/status').then((s) => setInitialized(s.initialized)).catch(() => setInitialized(true)); }, []);
-  useEffect(() => { if (user) router.replace('/'); }, [user, router]);
+  useEffect(() => { if (user) router.replace(destinationAfterLogin()); }, [user, router]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -24,7 +31,7 @@ export default function LoginPage() {
     try {
       if (initialized) await login(email, password);
       else await register(email, displayName, password);
-      router.replace('/');
+      router.replace(destinationAfterLogin());
     } catch (e: any) { setErr(e.message ?? '失敗'); } finally { setBusy(false); }
   }
 
@@ -45,6 +52,11 @@ export default function LoginPage() {
         <button className="btn-primary w-full justify-center" disabled={busy || initialized === null}>
           {busy && <Spinner className="border-white/40 border-t-white" />} {registering ? '建立並登入' : '登入'}
         </button>
+        <div className="border-t border-border pt-4 text-center">
+          <Link href="/install/agent-builder" className="text-xs text-muted transition hover:text-brand">
+            ChatGPT／Claude Agent Builder 安裝說明與下載
+          </Link>
+        </div>
       </form>
     </div>
   );

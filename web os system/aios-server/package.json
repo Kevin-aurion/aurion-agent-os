@@ -17,7 +17,8 @@
     "seed": "tsx src/scripts/seed.ts",
     "doctor": "tsx src/scripts/doctor.ts",
     "typecheck": "tsc --noEmit",
-    "temporal:worker": "tsx src/temporal/worker.ts"
+    "temporal:worker": "tsx src/temporal/worker.ts",
+    "install:host-service": "npm run build && node scripts/install-host-service.mjs"
   },
   "prisma": {
     "schema": "prisma/schema.prisma"
@@ -25,6 +26,7 @@
   "dependencies": {
     "@azure/msal-node": "^2.16.2",
     "@fastify/cors": "^10.0.1",
+    "@fastify/formbody": "^8.0.2",
     "@fastify/multipart": "^9.0.1",
     "@googleapis/drive": "^8.14.0",
     "@googleapis/gmail": "^7.0.0",

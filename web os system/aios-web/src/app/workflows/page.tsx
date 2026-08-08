@@ -80,7 +80,7 @@ export default function WorkflowsPage() {
   const router = useRouter();
   const qc = useQueryClient();
 
-  const agentsQ = useQuery({ queryKey: ['agents'], queryFn: () => API.get<Agent[]>('/api/agents') });
+  const agentsQ = useQuery({ queryKey: ['agents'], queryFn: () => API.get<Agent[]>('/api/agents?scope=all') });
   const agents = agentsQ.data ?? [];
 
   const workflowQueries = useQueries({

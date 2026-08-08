@@ -10,9 +10,10 @@ import {
   approveProposal,
   rejectProposal,
 } from '../lib/changeproposal.js';
+import { requireVisibleAgent } from '../lib/agentaccess.js';
 
 const createBodySchema = z.object({
-  targetType: z.enum(['SKILL', 'RESTRICTION', 'IDENTITY_CARD']),
+  targetType: z.enum(['AGENT', 'SKILL', 'RESTRICTION', 'IDENTITY_CARD']),
   targetId: z.string().min(1).optional(),
   proposedChange: z.unknown(),
   severity: z.string().min(1).optional(),
@@ -26,8 +27,7 @@ export async function proposalRoutes(app: FastifyInstance) {
     try {
       const { id: agentId } = req.params as { id: string };
       const body = createBodySchema.parse(req.body);
-      const agent = await prisma.agent.findFirst({ where: { id: agentId, deletedAt: null } });
-      if (!agent) throw errors.notFound('Agent not found');
+      await requireVisibleAgent(agentId, req.user!);
 
       const proposal = await createProposal({
         agentId,

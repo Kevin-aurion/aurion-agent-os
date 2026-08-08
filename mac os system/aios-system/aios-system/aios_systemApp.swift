@@ -1,6 +1,6 @@
 //
 //  aios_systemApp.swift
-//  aios-system — local-first Agent OS macOS client + host agent runner.
+//  aios-system — local-first Agent OS macOS client + host device agent.
 //
 
 import AppKit
@@ -25,6 +25,11 @@ struct aios_systemApp: App {
     @State private var app = AppState()
     private let defaultWindowSize = DefaultWindowMetrics.size
 
+    init() {
+        // Headless pure self-tests: `aios-system --self-test` exits before UI.
+        Self.exitIfSelfTestRequested()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -35,11 +40,21 @@ struct aios_systemApp: App {
         .defaultSize(width: defaultWindowSize.width, height: defaultWindowSize.height)
         .windowStyle(.titleBar)
 
-        // Menu-bar presence: live connection + recent activity.
         MenuBarExtra("AIOS", systemImage: app.connected ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle") {
             MenuBarView()
                 .environment(app)
         }
         .menuBarExtraStyle(.window)
+    }
+
+    /// If argv contains `--self-test` or `-self-test`, run pure validators and exit.
+    private static func exitIfSelfTestRequested() {
+        let args = ProcessInfo.processInfo.arguments
+        guard args.contains("--self-test") || args.contains("-self-test") else { return }
+        let code = DeviceAgentSelfTest.runAndReportToStdout()
+        // Flush and terminate without launching UI scenes.
+        fflush(stdout)
+        fflush(stderr)
+        Darwin.exit(code)
     }
 }

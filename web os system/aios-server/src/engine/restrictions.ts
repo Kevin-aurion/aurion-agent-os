@@ -30,6 +30,8 @@ export interface AgentRestrictions {
    * 寫入僅限 agentDir + 系統暫存 + extraWritePaths。
    */
   sandbox?: { enabled?: boolean; extraWritePaths?: string[] };
+  /** Internal runner-only flag for isolated draft/evaluation runs. Never persisted as an Agent capability. */
+  testIsolation?: boolean;
 }
 
 export const DEFAULT_RESTRICTIONS: AgentRestrictions = {
@@ -52,7 +54,8 @@ export const DEFAULT_RESTRICTIONS: AgentRestrictions = {
 export function claudeDisallowedTools(r: AgentRestrictions): string[] {
   const t: string[] = [];
   if (!r.webSearch) t.push('WebSearch', 'WebFetch');
-  if (!r.shell) t.push('Bash');   // 關閉 shell → 硬性禁用 claude 的 Bash 工具
+  if (!r.shell || r.testIsolation) t.push('Bash');   // 關閉 shell → 硬性禁用 claude 的 Bash 工具
+  if (r.testIsolation) t.push('Write', 'Edit', 'NotebookEdit');
   return t;
 }
 

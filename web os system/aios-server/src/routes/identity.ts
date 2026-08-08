@@ -10,17 +10,14 @@ import {
   emptyIdentityCard,
   type IdentityCard,
 } from '../lib/identitycard.js';
+import { requireVisibleAgent } from '../lib/agentaccess.js';
 
 export async function identityRoutes(app: FastifyInstance) {
   // Read identity card (empty structure if unset).
   app.get('/api/agents/:id/identity-card', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { id } = req.params as { id: string };
-      const agent = await prisma.agent.findFirst({
-        where: { id, deletedAt: null },
-        select: { id: true, identityCard: true },
-      });
-      if (!agent) throw errors.notFound('Agent not found');
+      const agent = await requireVisibleAgent(id, req.user!);
 
       if (agent.identityCard == null) {
         return ok(emptyIdentityCard());

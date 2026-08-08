@@ -1,0 +1,41 @@
+{
+  "description": "Persist AI employee-building turns to the hosted AIOS service without running a customer-side server.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "aios",
+            "tool": "prepare_agent_build_prompt",
+            "input": {
+              "externalConversationId": "${session_id}",
+              "prompt": "${prompt}",
+              "source": "CLAUDE_CODE"
+            },
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "aios",
+            "tool": "guard_agent_build_stop",
+            "input": {
+              "externalConversationId": "${session_id}",
+              "transcriptPath": "${transcript_path}",
+              "lastAssistantMessage": "${last_assistant_message}",
+              "stopHookActive": "${stop_hook_active}",
+              "source": "CLAUDE_CODE"
+            },
+            "timeout": 20
+          }
+        ]
+      }
+    ]
+  }
+}

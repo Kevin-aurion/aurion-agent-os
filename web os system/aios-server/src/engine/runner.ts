@@ -30,12 +30,16 @@ import {
 import { runTool, evalCondition } from './tools.js';
 import { guardBudget, recordCost, BudgetExceededError } from './cost.js';
 import { recordViolation, createProposal } from '../lib/changeproposal.js';
-import {
-  connectComputerUse,
-  assertToolsPresent,
-  COMPUTER_USE_TOOLS,
-} from '../lib/codexmcp.js';
+// Server-local Computer Use (connectComputerUse) is intentionally NOT imported
+// on the formal run path — multi-device DeviceTask is the only COMPUTER_CONTROL
+// dispatch. Legacy helpers remain at file bottom under LEGACY_LOCAL_COMPUTER_USE
+// and are never called from runComputerControlStep.
 import { parseIdentityCard, type IdentityCard } from '../lib/identitycard.js';
+import {
+  buildAgentSkillCatalog,
+  buildSkillCatalog,
+  resolveConflictedSlugs,
+} from '../lib/skillmanifest.js';
 import {
   readCorePages,
   recall,
@@ -53,11 +57,24 @@ import type {
   ConditionStep,
   NotifyStep,
   ComputerControlStep,
+  ComputerControlStepConfig,
   StepResult,
   RoundRecord,
   RunOutcome,
   RunAgentOptions,
 } from './types.js';
+import { checkDeviceEligibility } from '../lib/deviceeligibility.js';
+import {
+  createAndDispatchTask,
+  cancelDeviceTask,
+  waitForDeviceTaskTerminal,
+} from '../lib/devicetask.js';
+import { publishToDevice } from '../ws/hub.js';
+import {
+  parseDeviceLineTool,
+  isLineSendTool,
+  LINE_DESKTOP_MANIFEST,
+} from '../lib/devicemcp.js';
 
 const MAX_DELEGATION_DEPTH = 1; // a delegate agent may not itself delegate
 const MAX_CONDITION_JUMPS = 50; // guard against a CONDITION cycle looping forever
@@ -99,6 +116,7 @@ interface RunContext {
    * Only set when restrictions.sandbox.enabled is true.
    */
   sandboxProfilePath?: string;
+  signal?: AbortSignal;
 }
 
 interface VerdictResult {
@@ -291,7 +309,15 @@ function compileStep(row: { stepKey: string; type: string; config: unknown; veri
         },
       };
     case 'TOOL':
-      return { ...base, type: 'TOOL', config: { tool: String(cfg.tool ?? ''), args: (cfg.args as Record<string, string>) ?? {} } };
+      return {
+        ...base,
+        type: 'TOOL',
+        config: {
+          tool: String(cfg.tool ?? ''),
+          args: (cfg.args as Record<string, string>) ?? {},
+          deviceId: typeof cfg.deviceId === 'string' && cfg.deviceId.trim() ? cfg.deviceId.trim() : undefined,
+        },
+      };
     case 'AGENT':
       return { ...base, type: 'AGENT', config: { agentSlug: String(cfg.agentSlug ?? ''), brief: cfg.brief as string | undefined } };
     case 'CONDITION':
@@ -311,31 +337,106 @@ function compileStep(row: { stepKey: string; type: string; config: unknown; veri
       return {
         ...base,
         type: 'COMPUTER_CONTROL',
-        config: { skillId: String(cfg.skillId ?? ''), instructions: cfg.instructions as string | undefined, timeoutMs: cfg.timeoutMs as number | undefined },
+        config: {
+          deviceId: String(cfg.deviceId ?? '').trim(),
+          skillId: String(cfg.skillId ?? ''),
+          instructions: cfg.instructions as string | undefined,
+          timeoutMs: cfg.timeoutMs as number | undefined,
+          app: typeof cfg.app === 'string' ? cfg.app : undefined,
+          checkpoint:
+            cfg.checkpoint && typeof cfg.checkpoint === 'object'
+              ? (cfg.checkpoint as ComputerControlStepConfig['checkpoint'])
+              : undefined,
+        },
       };
     default:
       throw new Error(`Unknown step type: ${row.type}`);
   }
 }
 
-async function compileManifest(agentId: string, workflowId: string | undefined, agentDir: string, chatMessage?: string): Promise<CompiledManifest> {
+export async function compileManifest(
+  agentId: string,
+  workflowId: string | undefined,
+  agentDir: string,
+  chatMessage?: string,
+  forceVerify = false,
+  builderTest?: { sessionId: string; triggeredBy: string },
+): Promise<CompiledManifest> {
   const agent = await prisma.agent.findUnique({
     where: { id: agentId },
     include: { skills: { include: { skill: true } } },
   });
   if (!agent || agent.deletedAt) throw errors.notFound(`Agent not found: ${agentId}`);
 
-  const skills: CompiledSkill[] = agent.skills
+  // Normal runs are confirmed-only. Agent Builder may inject its exact pending
+  // drafts into one isolated test manifest after deterministic DB validation;
+  // this never changes reviewStatus or makes the draft visible to other runs.
+  const confirmed = agent.skills
     .map((as) => as.skill)
-    .filter((s) => s.reviewStatus === 'CONFIRMED' && !s.deletedAt)
-    .map((s) => ({ name: s.slug, contentMd: s.contentMd }));
+    .filter((s) => s.reviewStatus === 'CONFIRMED' && !s.deletedAt);
+  let builderDrafts: typeof confirmed = [];
+  let builderExpected: unknown = null;
+  if (builderTest) {
+    const [session, actor] = await Promise.all([
+      prisma.agentBuildSession.findUnique({ where: { id: builderTest.sessionId } }),
+      prisma.user.findUnique({ where: { id: builderTest.triggeredBy }, select: { role: true, deletedAt: true } }),
+    ]);
+    const expectedAgentId = session?.builtAgentId ?? session?.targetAgentId;
+    const actorMayTest =
+      session?.userId === builderTest.triggeredBy || actor?.role === 'OWNER' || actor?.role === 'TRAINER';
+    if (
+      !session ||
+      session.status !== 'TESTING' ||
+      expectedAgentId !== agentId ||
+      !actor ||
+      actor.deletedAt ||
+      !actorMayTest ||
+      session.draftSkillIds.length === 0
+    ) {
+      throw errors.forbidden('Invalid or stale Agent Builder test capability');
+    }
 
-  const engineExecute: Engine = agent.engineExecute;
+    builderDrafts = agent.skills
+      .map((as) => as.skill)
+      .filter(
+        (skill) =>
+          session.draftSkillIds.includes(skill.id) &&
+          skill.generator === 'agent-builder' &&
+          skill.reviewStatus === 'AWAITING_USER_CONFIRM' &&
+          !skill.deletedAt,
+      );
+    if (
+      builderDrafts.length !== session.draftSkillIds.length ||
+      !session.draftSkillIds.every((id) => builderDrafts.some((skill) => skill.id === id))
+    ) {
+      throw errors.conflict('Agent Builder draft set no longer matches the reviewed session');
+    }
+    builderExpected = session.testExpected;
+  }
+
+  const manifestSkills = [...confirmed, ...builderDrafts];
+  const catalog = buildAgentSkillCatalog(manifestSkills);
+  const contentBySlug = new Map(manifestSkills.map((s) => [s.slug, s.contentMd]));
+  const skills: CompiledSkill[] = catalog.map((c) => ({
+    name: c.slug,
+    contentMd: contentBySlug.get(c.slug) ?? '',
+    metadata: c.metadata,
+    relPath: c.relPath,
+  }));
+
+  // Draft testing uses the one executor whose tool surface can be hard-denied
+  // deterministically. This validates the skill artifact, not an Agent's
+  // production engine permissions.
+  const engineExecute: Engine = builderTest ? 'CLAUDE_CODE' : agent.engineExecute;
   // Verifier: the agent's explicit choice (e.g. GROK for speed), else the
   // opposite CLI of the executor. Cross-model rule: never verify with the
   // same engine that executed.
   const autoVerify: Engine = engineExecute === 'CLAUDE_CODE' ? 'CODEX' : 'CLAUDE_CODE';
-  const engineVerify: Engine = agent.engineVerify && agent.engineVerify !== engineExecute ? agent.engineVerify : autoVerify;
+  const engineVerify: Engine = builderTest
+    ? 'CODEX'
+    : agent.engineVerify && agent.engineVerify !== engineExecute
+      ? agent.engineVerify
+      : autoVerify;
 
   let steps: Step[];
   if (workflowId) {
@@ -349,31 +450,58 @@ async function compileManifest(agentId: string, workflowId: string | undefined, 
     steps = workflow.steps.map(compileStep);
     if (steps.length === 0) throw errors.badRequest(`Workflow ${workflowId} has no steps`);
   } else {
-    // Ad-hoc single DO step for direct chat with the agent. Chat skips the
-    // cross-model verify gate (user decision: 對話不驗證) — verification stays
-    // on for real workflow steps, where correctness gates matter.
+    // Ad-hoc chat normally skips verification. Eval/Agent Builder callers may
+    // only strengthen this path with forceVerify; compileManifest still chooses
+    // a verifier different from the executor above.
     steps = [
       {
         stepKey: 'chat',
         type: 'DO',
-        verifyRubric: null,
+        verifyRubric: builderTest
+          ? [
+              'This is an Agent Builder acceptance test. Fail closed unless the artifact satisfies every expected result below.',
+              'Check calculations, required fields, exception handling, and permission boundaries item by item.',
+              'If any expected item is missing, ambiguous, incorrect, or an external action was performed instead of drafted, return ISSUES FOUND.',
+              '',
+              '## Expected result (source of truth)',
+              typeof builderExpected === 'string'
+                ? builderExpected
+                : JSON.stringify(builderExpected, null, 2),
+            ].join('\n')
+          : null,
         onFail: null,
-        config: { instruction: chatMessage ?? '', skipVerify: true },
+        config: { instruction: chatMessage ?? '', skipVerify: !forceVerify },
       } as DoStep,
     ];
   }
 
   // L1 core memory pages — best-effort; empty string when memory disabled / missing.
   let memoryCore = '';
-  try {
-    memoryCore = await readCorePages(agentDir);
-  } catch {
-    memoryCore = '';
+  if (!builderTest) {
+    try {
+      memoryCore = await readCorePages(agentDir);
+    } catch {
+      memoryCore = '';
+    }
   }
 
   // Identity card for verify-gate semantic overstep (ticket 06). Null when unset.
   const identityCard: IdentityCard | null =
     agent.identityCard != null ? parseIdentityCard(agent.identityCard).card : null;
+
+  const normalRestrictions = parseRestrictions(agent.restrictions);
+  const restrictions = builderTest
+    ? {
+        webSearch: false,
+        computerUse: false,
+        sendEmail: false,
+        cloudWrite: false,
+        shell: false,
+        cloudEmbedding: false,
+        testIsolation: true,
+        notes: 'Agent Builder 隔離試跑：所有外部讀寫、網路、Shell 與電腦操控均停用。',
+      }
+    : normalRestrictions;
 
   return {
     agentSlug: agent.slug,
@@ -383,11 +511,15 @@ async function compileManifest(agentId: string, workflowId: string | undefined, 
     engineVerify,
     maxRounds: Math.max(1, agent.maxRounds ?? 5),
     rolePrompt: agent.rolePrompt ?? '',
-    restrictions: parseRestrictions(agent.restrictions),
+    restrictions,
     skills,
     steps,
     memoryCore,
     identityCard,
+    builderTestDraftSkillIds: builderDrafts.length ? builderDrafts.map((skill) => skill.id) : undefined,
+    builderTestDraftContent: builderDrafts.length
+      ? builderDrafts.map((skill) => skill.contentMd).join('\n\n---\n\n')
+      : undefined,
     // Carried for L7 budget guard; not part of CompiledManifest type surface.
     costPolicy: agent.costPolicy ?? null,
   } as CompiledManifest & { costPolicy: unknown };
@@ -395,14 +527,41 @@ async function compileManifest(agentId: string, workflowId: string | undefined, 
 
 // ── Engine dispatch (execute / verify / manager-decision prompts) ──────────
 
-function buildSystemPrompt(manifest: CompiledManifest): string {
-  // Order: role → restrictions (always before memory) → skills → memory core.
+export function buildSystemPrompt(manifest: CompiledManifest): string {
+  // Order: role → restrictions (always before memory) → skills (L1 catalog only) → memory core.
   const parts: string[] = [];
   if (manifest.rolePrompt) parts.push(manifest.rolePrompt);
   const rules = restrictionsToRules(manifest.restrictions);
   if (rules) parts.push(rules);
-  for (const sk of manifest.skills) {
-    parts.push(`# Skill: ${sk.name}\n(This is a skill manual you have — follow its rules and steps when relevant.)\n\n${sk.contentMd}`);
+  if (manifest.skills.length > 0) {
+    // Deterministic conflictsWith: keep first appearance, mark later as conflicted.
+    const conflictedSlugs = resolveConflictedSlugs(
+      manifest.skills.map((sk) => ({
+        slug: sk.name,
+        conflictsWith: sk.metadata.conflictsWith,
+      })),
+    );
+    parts.push(
+      buildSkillCatalog(
+        manifest.skills.map((sk) => ({
+          name: sk.name,
+          metadata: sk.metadata,
+          relPath: sk.relPath,
+          conflicted: conflictedSlugs.has(sk.name),
+        })),
+      ),
+    );
+  }
+  if (manifest.builderTestDraftContent?.trim()) {
+    parts.push(
+      [
+        '# Agent Builder 隔離測試技能（尚未啟用）',
+        '以下是本次必須實際驗證的待確認技能全文；只可在本次測試中依其流程產生結果。',
+        '它仍未 CONFIRMED，不得因此執行任何外部動作。',
+        '',
+        manifest.builderTestDraftContent.trim(),
+      ].join('\n'),
+    );
   }
   if (manifest.memoryCore?.trim()) {
     parts.push(
@@ -511,6 +670,7 @@ type EngineAdapter = {
     sandboxProfilePath?: string;
     onLine?: (l: string) => void;
     fullPermissions?: boolean;
+    signal?: AbortSignal;
   }): Promise<{ text: string }>;
   verify(args: {
     prompt: string;
@@ -519,6 +679,7 @@ type EngineAdapter = {
     threadId: string | null;
     restrictions: AgentRestrictions;
     sandboxProfilePath?: string;
+    signal?: AbortSignal;
   }): Promise<{ text: string; threadId: string | null; costInput: string }>;
   decide(args: {
     prompt: string;
@@ -526,6 +687,7 @@ type EngineAdapter = {
     cwd: string;
     timeoutMs: number;
     sandboxProfilePath?: string;
+    signal?: AbortSignal;
   }): Promise<{ text: string }>;
 };
 
@@ -533,7 +695,7 @@ const ENGINE_ADAPTERS: Record<Engine, EngineAdapter> = {
   CLAUDE_CODE: {
     roleInSystem: true,
     supportsResume: false,
-    async execute({ prompt, systemAppend, cwd, timeoutMs, restrictions, sandboxProfilePath, onLine, fullPermissions }) {
+    async execute({ prompt, systemAppend, cwd, timeoutMs, restrictions, sandboxProfilePath, onLine, fullPermissions, signal }) {
       const res = await runClaudeStream({
         prompt,
         systemAppend,
@@ -543,10 +705,11 @@ const ENGINE_ADAPTERS: Record<Engine, EngineAdapter> = {
         timeoutMs,
         onLine: onLine ?? (() => {}),
         sandboxProfilePath,
+        signal,
       });
       return { text: res.stdout };
     },
-    async verify({ prompt, cwd, timeoutMs, restrictions, sandboxProfilePath }) {
+    async verify({ prompt, cwd, timeoutMs, restrictions, sandboxProfilePath, signal }) {
       // Stateless re-review every round (claude -p has no thread resume).
       const sys =
         'You are an independent, cross-model verifier (Claude Code). Treat the artifact as a claim to be falsified, not assumed true.';
@@ -559,16 +722,18 @@ const ENGINE_ADAPTERS: Record<Engine, EngineAdapter> = {
         allowedTools: restrictions.webSearch ? ['WebFetch', 'WebSearch'] : undefined,
         timeoutMs,
         sandboxProfilePath,
+        signal,
       });
       return { text: res.stdout, threadId: null, costInput: `${sys}\n\n${prompt}` };
     },
-    async decide({ prompt, systemAppend, cwd, timeoutMs, sandboxProfilePath }) {
+    async decide({ prompt, systemAppend, cwd, timeoutMs, sandboxProfilePath, signal }) {
       const res = await runClaude({
         prompt,
         systemAppend,
         cwd,
         timeoutMs,
         sandboxProfilePath,
+        signal,
       });
       return { text: res.stdout };
     },
@@ -576,18 +741,19 @@ const ENGINE_ADAPTERS: Record<Engine, EngineAdapter> = {
   CODEX: {
     roleInSystem: false,
     supportsResume: true,
-    async execute({ prompt, cwd, timeoutMs, sandboxProfilePath, onLine }) {
+    async execute({ prompt, cwd, timeoutMs, restrictions, sandboxProfilePath, onLine, signal }) {
       const res = await runCodex({
         prompt,
         cwd,
-        sandbox: 'workspace-write',
+        sandbox: restrictions.testIsolation ? 'read-only' : 'workspace-write',
         timeoutMs,
         onLine,
         sandboxProfilePath,
+        signal,
       });
       return { text: res.text };
     },
-    async verify({ prompt, cwd, timeoutMs, threadId, sandboxProfilePath }) {
+    async verify({ prompt, cwd, timeoutMs, threadId, sandboxProfilePath, signal }) {
       const res = await runCodex({
         prompt,
         cwd,
@@ -595,16 +761,18 @@ const ENGINE_ADAPTERS: Record<Engine, EngineAdapter> = {
         sandbox: 'read-only',
         timeoutMs,
         sandboxProfilePath,
+        signal,
       });
       return { text: res.text, threadId: res.threadId, costInput: prompt };
     },
-    async decide({ prompt, cwd, timeoutMs, sandboxProfilePath }) {
+    async decide({ prompt, cwd, timeoutMs, sandboxProfilePath, signal }) {
       const res = await runCodex({
         prompt,
         cwd,
         sandbox: 'workspace-write',
         timeoutMs,
         sandboxProfilePath,
+        signal,
       });
       return { text: res.text };
     },
@@ -612,7 +780,7 @@ const ENGINE_ADAPTERS: Record<Engine, EngineAdapter> = {
   GROK: {
     roleInSystem: false,
     supportsResume: true,
-    async execute({ prompt, cwd, timeoutMs, restrictions, sandboxProfilePath, onLine }) {
+    async execute({ prompt, cwd, timeoutMs, restrictions, sandboxProfilePath, onLine, signal }) {
       const res = await runGrok({
         prompt,
         cwd,
@@ -620,10 +788,11 @@ const ENGINE_ADAPTERS: Record<Engine, EngineAdapter> = {
         disableWebSearch: !restrictions.webSearch,
         onLine,
         sandboxProfilePath,
+        signal,
       });
       return { text: res.stdout };
     },
-    async verify({ prompt, cwd, timeoutMs, threadId, sandboxProfilePath }) {
+    async verify({ prompt, cwd, timeoutMs, threadId, sandboxProfilePath, signal }) {
       // Session resume keeps prior objections across rounds (CONCEDE/MAINTAIN).
       const sys =
         'You are an independent, cross-model verifier (Grok). Treat the artifact as a claim to be falsified, not assumed true. Do not modify any files — review only.';
@@ -634,21 +803,27 @@ const ENGINE_ADAPTERS: Record<Engine, EngineAdapter> = {
         resumeSessionId: threadId,
         timeoutMs,
         sandboxProfilePath,
+        signal,
       });
       return { text: res.stdout, threadId: res.sessionId, costInput: `${sys}\n\n${prompt}` };
     },
-    async decide({ prompt, systemAppend, cwd, timeoutMs, sandboxProfilePath }) {
+    async decide({ prompt, systemAppend, cwd, timeoutMs, sandboxProfilePath, signal }) {
       const res = await runGrok({
         prompt,
         systemAppend,
         cwd,
         timeoutMs,
         sandboxProfilePath,
+        signal,
       });
       return { text: res.stdout };
     },
   },
 };
+
+export function canUseSemanticRecall(restrictions: AgentRestrictions): boolean {
+  return restrictions.cloudEmbedding && restrictions.testIsolation !== true;
+}
 
 async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | null, round: number): Promise<string> {
   await guardBudget(ctx.manifest.agentId, ctx.costPolicy);
@@ -661,10 +836,12 @@ async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | 
 
   // Top-k semantic recall for execute only (verify path never injects recall).
   let recallBlock = '';
-  try {
-    recallBlock = await recall(ctx.manifest.agentId, ctx.manifest.agentDir, instruction, 4);
-  } catch {
-    recallBlock = '';
+  if (canUseSemanticRecall(ctx.manifest.restrictions)) {
+    try {
+      recallBlock = await recall(ctx.manifest.agentId, ctx.manifest.agentDir, instruction, 4);
+    } catch {
+      recallBlock = '';
+    }
   }
 
   const engine = ctx.manifest.engineExecute;
@@ -682,6 +859,7 @@ async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | 
     sandboxProfilePath,
     onLine,
     fullPermissions: step.config.permissions === 'full',
+    signal: ctx.signal,
   });
   await safeRecordCost({
     agentId: ctx.manifest.agentId,
@@ -844,6 +1022,7 @@ async function runVerifyStep(ctx: RunContext, rubric: string, artifact: string, 
     threadId,
     restrictions: ctx.manifest.restrictions,
     sandboxProfilePath,
+    signal: ctx.signal,
   });
   await safeRecordCost({
     agentId: ctx.manifest.agentId,
@@ -896,6 +1075,7 @@ async function callManagerDecision(ctx: RunContext, instruction: string, source:
     cwd: ctx.manifest.agentDir,
     timeoutMs: DECISION_TIMEOUT_MS,
     sandboxProfilePath,
+    signal: ctx.signal,
   });
   await safeRecordCost({
     agentId: ctx.manifest.agentId,
@@ -1005,6 +1185,12 @@ async function runToolStep(step: ToolStep, ctx: RunContext): Promise<StepResult>
   const args = resolveArgs(step.config.args, ctx);
   hub.publish('run.step', { runId: ctx.runId, stepKey: step.stepKey, type: step.type, round: 1, phase: 'executing' });
 
+  // Device-local LINE Desktop MCP — never server-local broker.
+  const lineTool = parseDeviceLineTool(step.config.tool);
+  if (lineTool) {
+    return runLineDesktopDeviceTool(step, ctx, lineTool.tool, args);
+  }
+
   let result: unknown;
   try {
     result = await runTool(ctx.manifest.agentDir, step.config.tool, args, {
@@ -1013,6 +1199,7 @@ async function runToolStep(step: ToolStep, ctx: RunContext): Promise<StepResult>
       cloudWrite: ctx.manifest.restrictions.cloudWrite,
       sendEmail: ctx.manifest.restrictions.sendEmail,
       runId: ctx.runId,
+      userId: ctx.triggeredBy,
     });
   } catch (e) {
     const reason = `TOOL_ERROR: ${e instanceof Error ? e.message : String(e)}`;
@@ -1093,6 +1280,7 @@ async function runAgentStep(step: AgentStep, ctx: RunContext): Promise<StepResul
       input: { message },
       triggeredBy: ctx.triggeredBy,
       depth: ctx.depth + 1,
+      signal: ctx.signal,
     });
 
     if (!outcome.ok) {
@@ -1201,7 +1389,6 @@ async function runComputerControlStep(step: ComputerControlStep, ctx: RunContext
   // desktop automation at all, regardless of the workflow definition.
   if (!ctx.manifest.restrictions.computerUse) {
     const reason = 'RESTRICTED: 此員工未開啟「電腦操控」權限（概況 → 限制設定），無法執行 COMPUTER_CONTROL 步驟。';
-    // Still reject (unchanged). Extra: fail-safe VIOLATION signal for FDE inbox.
     await recordViolation({
       agentId: ctx.manifest.agentId,
       runId: ctx.runId,
@@ -1213,169 +1400,368 @@ async function runComputerControlStep(step: ComputerControlStep, ctx: RunContext
     return { ok: false, stepKey: step.stepKey, type: step.type, output: '', rounds: 1, approved: false, reason, records: [] };
   }
 
-  // CODEX primary path: drive Computer Use MCP in-process (ADR 0005).
-  // On connect failure, fall through to the macOS App bridge below.
-  if (ctx.manifest.engineExecute === 'CODEX') {
-    const codexResult = await tryCodexComputerUse(step, ctx);
-    if (codexResult) return codexResult;
-  }
-
-  // Fallback (non-CODEX, or CODEX connect failure): dispatch to macOS App via WS.
-  return runComputerControlViaDesktopApp(step, ctx);
+  // Formal path: targeted DeviceTask only. Server-local connectComputerUse and
+  // public computer.control_requested broadcast are no longer primary.
+  return runComputerControlViaDevice(step, ctx);
 }
 
 /**
- * Execute COMPUTER_CONTROL via Codex Computer Use MCP.
- * Returns null only when the MCP process cannot be started (caller falls back).
- * Tool-list drift / permission / tool-call failures return a failed StepResult
- * with a clear message (no silent swallow).
+ * Targeted multi-device Computer Use. Fail-closed on eligibility / offline wake.
+ * Waits for DB terminal SUCCEEDED only — never treats DISPATCHED as success.
  */
-async function tryCodexComputerUse(step: ComputerControlStep, ctx: RunContext): Promise<StepResult | null> {
-  let client: Awaited<ReturnType<typeof connectComputerUse>> | null = null;
-  try {
-    try {
-      client = await connectComputerUse();
-    } catch (e) {
-      // Connect/spawn failure → allow macOS App fallback.
-      const msg = e instanceof Error ? e.message : String(e);
-      hub.publish('run.log', {
-        runId: ctx.runId,
-        stepKey: step.stepKey,
-        round: 1,
-        line: `CODEX Computer Use 連線失敗，改走 macOS App fallback: ${msg}`,
-      });
-      return null;
-    }
+async function runComputerControlViaDevice(
+  step: ComputerControlStep,
+  ctx: RunContext,
+): Promise<StepResult> {
+  const deviceId = step.config.deviceId?.trim();
+  if (!deviceId) {
+    const reason = 'COMPUTER_CONTROL requires config.deviceId (no public broadcast fallback)';
+    await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
+    return { ok: false, stepKey: step.stepKey, type: step.type, output: '', rounds: 1, approved: false, reason, records: [] };
+  }
 
-    try {
-      await assertToolsPresent(client, [...COMPUTER_USE_TOOLS]);
-    } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
-      await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
-      hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round: 1, line: reason });
-      return { ok: false, stepKey: step.stepKey, type: step.type, output: '', rounds: 1, approved: false, reason, records: [] };
-    }
-
-    hub.publish('run.step', {
-      runId: ctx.runId,
-      stepKey: step.stepKey,
-      type: step.type,
-      round: 1,
-      phase: 'executing',
-    });
-
-    const results: Record<string, unknown> = { via: 'codex-computer-use-mcp' };
-
-    // Always probe app inventory first.
-    try {
-      results.list_apps = await client.call('list_apps', {});
-    } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
-      await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
-      hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round: 1, line: reason });
-      return { ok: false, stepKey: step.stepKey, type: step.type, output: '', rounds: 1, approved: false, reason, records: [] };
-    }
-
-    // Optional: step.config may carry app / actions (forward-compatible).
-    const cfg = step.config as ComputerControlStep['config'] & {
-      app?: string;
-      actions?: Array<{ tool: string; args?: Record<string, unknown> }>;
-    };
-    const appName = typeof cfg.app === 'string' ? cfg.app.trim() : '';
-    if (appName) {
-      try {
-        results.get_app_state = await client.call('get_app_state', { app: appName });
-      } catch (e) {
-        const reason = e instanceof Error ? e.message : String(e);
-        await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
-        return { ok: false, stepKey: step.stepKey, type: step.type, output: JSON.stringify(results), rounds: 1, approved: false, reason, records: [] };
-      }
-    }
-
-    if (Array.isArray(cfg.actions)) {
-      const actionResults: unknown[] = [];
-      for (const action of cfg.actions) {
-        if (!action || typeof action.tool !== 'string') continue;
-        const toolName = action.tool;
-        if (!(COMPUTER_USE_TOOLS as readonly string[]).includes(toolName)) {
-          const reason = `未知的 Computer Use 工具: ${toolName}。允許: ${COMPUTER_USE_TOOLS.join(', ')}`;
-          await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
-          return { ok: false, stepKey: step.stepKey, type: step.type, output: JSON.stringify(results), rounds: 1, approved: false, reason, records: [] };
-        }
-        actionResults.push({
-          tool: toolName,
-          result: await client.call(toolName, action.args ?? {}),
-        });
-      }
-      results.actions = actionResults;
-    }
-
-    if (step.config.instructions) {
-      results.instructions = resolveTemplate(step.config.instructions, ctx);
-    }
-    results.skillId = step.config.skillId;
-
-    const output = JSON.stringify(results);
-    await save(ctx, `${step.stepKey}.r1.output.txt`, output);
-    await persistRunStep(ctx, step.stepKey, 1, 'approved', { output, approved: true });
-    return { ok: true, stepKey: step.stepKey, type: step.type, output, rounds: 1, approved: true, records: [] };
-  } catch (e) {
-    const reason = e instanceof Error ? e.message : String(e);
+  const requireScreenshot = step.config.checkpoint?.requireScreenshot !== false;
+  // Default checkpoint needs screen capture; eligibility enforces screenshot/screenRecording.
+  const elig = await checkDeviceEligibility({
+    deviceId,
+    agentId: ctx.manifest.agentId,
+    requirement: 'computer_use',
+    requireScreenCapture: requireScreenshot,
+  });
+  if (!elig.eligible) {
+    const reason = `DEVICE_NOT_ELIGIBLE: ${elig.reasonCode} — ${elig.reason}`;
     await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
     hub.publish('run.log', { runId: ctx.runId, stepKey: step.stepKey, round: 1, line: reason });
     return { ok: false, stepKey: step.stepKey, type: step.type, output: '', rounds: 1, approved: false, reason, records: [] };
-  } finally {
-    client?.close();
   }
-}
 
-/** Legacy path: publish computer.control_requested and wait for macOS App executor. */
-async function runComputerControlViaDesktopApp(step: ComputerControlStep, ctx: RunContext): Promise<StepResult> {
-  const taskId = ulid();
+  const instructions = resolveTemplate(step.config.instructions ?? '', ctx) || undefined;
+
+  let task;
   try {
-    await prisma.computerControlTask.create({
-      data: { id: taskId, runId: ctx.runId, stepKey: step.stepKey, skillId: step.config.skillId, status: 'PENDING' },
+    task = await createAndDispatchTask({
+      deviceId,
+      kind: 'COMPUTER_CONTROL',
+      agentId: ctx.manifest.agentId,
+      runId: ctx.runId,
+      stepKey: step.stepKey,
+      idempotencyKey: `${ctx.runId}:${step.stepKey}:computer-control`,
+      actorUserId: ctx.triggeredBy,
+      requestedByUserId: ctx.triggeredBy,
+      confirmationRequired: requireScreenshot,
+      payload: {
+        skillId: step.config.skillId,
+        instructions,
+        app: step.config.app,
+        checkpoint: {
+          requireScreenshot,
+          label: step.config.checkpoint?.label,
+        },
+      },
+      deadlineAt: new Date(Date.now() + (step.config.timeoutMs ?? COMPUTER_CONTROL_TIMEOUT_MS)),
     });
   } catch (e) {
     const reason = `COMPUTER_CONTROL_TASK_CREATE_ERROR: ${e instanceof Error ? e.message : String(e)}`;
+    await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
     return { ok: false, stepKey: step.stepKey, type: step.type, output: '', rounds: 1, approved: false, reason, records: [] };
   }
 
-  hub.publish('computer.control_requested', {
+  const woke = publishToDevice(deviceId, 'device.task', { taskId: task.id });
+  if (!woke) {
+    await cancelDeviceTask({
+      taskId: task.id,
+      actorUserId: ctx.triggeredBy,
+      reason: 'DEVICE_OFFLINE at wake',
+    });
+    const reason = 'DEVICE_OFFLINE';
+    await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
+    return { ok: false, stepKey: step.stepKey, type: step.type, output: '', rounds: 1, approved: false, reason, records: [] };
+  }
+
+  hub.publish('run.step', {
     runId: ctx.runId,
-    taskId,
     stepKey: step.stepKey,
-    skillId: step.config.skillId,
-    instructions: resolveTemplate(step.config.instructions ?? '', ctx) || null,
+    type: step.type,
+    round: 1,
+    phase: 'executing',
+    deviceId,
+    taskId: task.id,
   });
 
   const timeoutMs = step.config.timeoutMs ?? COMPUTER_CONTROL_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
-  let dispatched = false;
+  const terminal = await waitForDeviceTaskTerminal(task.id, timeoutMs);
 
-  while (Date.now() < deadline) {
-    const task = await prisma.computerControlTask.findUnique({ where: { id: taskId } }).catch(() => null);
-    if (!task) break;
-    if (task.dispatchedTo) dispatched = true;
-    if (task.status === 'DONE' || task.status === 'SUCCEEDED') {
-      const output = JSON.stringify(task.result ?? {});
-      await save(ctx, `${step.stepKey}.r1.output.txt`, output);
-      await persistRunStep(ctx, step.stepKey, 1, 'approved', { output, approved: true });
-      return { ok: true, stepKey: step.stepKey, type: step.type, output, rounds: 1, approved: true, records: [] };
-    }
-    if (task.status === 'FAILED' || task.status === 'ERROR') {
-      const reason = `COMPUTER_CONTROL_FAILED: ${JSON.stringify(task.result ?? {})}`;
-      await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
-      return { ok: false, stepKey: step.stepKey, type: step.type, output: '', rounds: 1, approved: false, reason, records: [] };
-    }
-    await sleep(1000);
+  if (terminal.status !== 'SUCCEEDED') {
+    const reason = `COMPUTER_CONTROL_${terminal.status}: ${JSON.stringify(terminal.error ?? terminal.result ?? {})}`;
+    await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
+    return {
+      ok: false,
+      stepKey: step.stepKey,
+      type: step.type,
+      output: JSON.stringify(terminal.result ?? {}),
+      rounds: 1,
+      approved: false,
+      reason,
+      records: [],
+    };
   }
 
-  const reason = dispatched ? 'COMPUTER_CONTROL_TIMEOUT' : 'NO_EXECUTOR';
-  await prisma.computerControlTask.update({ where: { id: taskId }, data: { status: 'TIMEOUT' } }).catch(() => {});
-  await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason });
-  return { ok: false, stepKey: step.stepKey, type: step.type, output: '', rounds: 1, approved: false, reason, records: [] };
+  // SUCCEEDED DeviceTask is not enough — cross-model verify gate (execute≠verify).
+  const artifacts = await prisma.deviceArtifact.findMany({
+    where: { taskId: terminal.id, deviceId },
+    orderBy: { seq: 'asc' },
+    take: 20,
+    select: {
+      id: true,
+      kind: true,
+      sha256: true,
+      mimeType: true,
+      sizeBytes: true,
+      redacted: true,
+      expiresAt: true,
+      seq: true,
+    },
+  });
+  const screenshots = artifacts.filter((a) => a.kind === 'SCREENSHOT');
+  const evidence = {
+    deviceId,
+    taskId: terminal.id,
+    status: terminal.status,
+    result: terminal.result ?? null,
+    confirmationArtifactId: terminal.confirmationArtifactId,
+    confirmedAt: terminal.confirmedAt,
+    screenshots,
+    artifacts,
+  };
+  const output = JSON.stringify(evidence);
+  await save(ctx, `${step.stepKey}.r1.output.txt`, output);
+
+  const rubric =
+    step.verifyRubric?.trim() ||
+    'Approve only if the device Computer Use task fully completed the instructed UI work on the target device, ' +
+      'result is coherent, and required screenshot evidence is present and consistent. Reject if only dispatched, ' +
+      'partial, missing screenshots when required, or contradictory.';
+
+  hub.publish('run.step', {
+    runId: ctx.runId,
+    stepKey: step.stepKey,
+    type: step.type,
+    round: 1,
+    phase: 'verifying',
+    deviceId,
+    taskId: terminal.id,
+  });
+
+  let verdict: VerdictResult;
+  try {
+    verdict = await runVerifyStep(
+      ctx,
+      rubric,
+      [
+        `[Device Computer Use evidence]`,
+        `deviceId=${deviceId}`,
+        `taskId=${terminal.id}`,
+        `skillId=${step.config.skillId}`,
+        `confirmationRequired=${requireScreenshot}`,
+        `result=${JSON.stringify(terminal.result ?? null)}`,
+        `screenshotArtifacts=${JSON.stringify(screenshots)}`,
+        `fullEvidence=${output}`,
+      ].join('\n'),
+      sourceForStep(ctx),
+      null,
+    );
+  } catch (e) {
+    const reason = `VERIFY_ERROR: ${e instanceof Error ? e.message : String(e)}`;
+    await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason, output });
+    return { ok: false, stepKey: step.stepKey, type: step.type, output, rounds: 1, approved: false, reason, records: [] };
+  }
+  await save(ctx, `${step.stepKey}.r1.verdict.md`, verdict.text);
+  const records: RoundRecord[] = [{ round: 1, approved: verdict.approved, verdict: verdict.text }];
+  await persistRunStep(ctx, step.stepKey, 1, verdict.approved ? 'approved' : 'rejected', {
+    output,
+    verdict: verdict.text,
+    approved: verdict.approved,
+  });
+  if (verdict.approved) {
+    return { ok: true, stepKey: step.stepKey, type: step.type, output, rounds: 1, approved: true, records };
+  }
+  return {
+    ok: false,
+    stepKey: step.stepKey,
+    type: step.type,
+    output,
+    rounds: 1,
+    approved: false,
+    reason: 'VERIFY_REJECTED',
+    lastVerdict: verdict.text,
+    records,
+  };
 }
+
+/** LINE Desktop via DeviceTask LINE_DESKTOP — not central MCP broker. */
+async function runLineDesktopDeviceTool(
+  step: ToolStep,
+  ctx: RunContext,
+  tool: string,
+  args: Record<string, unknown>,
+): Promise<StepResult> {
+  if (!ctx.manifest.restrictions.computerUse) {
+    const reason = 'RESTRICTED: LINE Desktop MCP requires computerUse restriction';
+    await recordViolation({
+      agentId: ctx.manifest.agentId,
+      runId: ctx.runId,
+      kind: 'computer_use',
+      detail: { stepKey: step.stepKey, tool, message: reason },
+    });
+    await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason, output: reason });
+    return { ok: false, stepKey: step.stepKey, type: step.type, output: reason, rounds: 1, approved: false, reason, records: [] };
+  }
+
+  const deviceId = step.config.deviceId?.trim();
+  if (!deviceId) {
+    const reason = 'device-mcp:line-desktop requires config.deviceId';
+    await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason, output: reason });
+    return { ok: false, stepKey: step.stepKey, type: step.type, output: reason, rounds: 1, approved: false, reason, records: [] };
+  }
+
+  if (isLineSendTool(tool)) {
+    const approved = await isRunApproved(ctx.runId);
+    if (!approved) {
+      const reason =
+        'LINE_SEND_REQUIRES_APPROVAL: send_message_* requires a real ApprovalRequest for this run (status=APPROVED)';
+      await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason, output: reason });
+      return { ok: false, stepKey: step.stepKey, type: step.type, output: reason, rounds: 1, approved: false, reason, records: [] };
+    }
+  }
+
+  const elig = await checkDeviceEligibility({
+    deviceId,
+    agentId: ctx.manifest.agentId,
+    requirement: { kind: 'line_tool', tool },
+  });
+  if (!elig.eligible) {
+    const reason = `DEVICE_NOT_ELIGIBLE: ${elig.reasonCode} — ${elig.reason}`;
+    await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason, output: reason });
+    return { ok: false, stepKey: step.stepKey, type: step.type, output: reason, rounds: 1, approved: false, reason, records: [] };
+  }
+
+  const operation = isLineSendTool(tool) ? 'send' : 'read';
+  let task;
+  try {
+    task = await createAndDispatchTask({
+      deviceId,
+      kind: 'LINE_DESKTOP',
+      agentId: ctx.manifest.agentId,
+      runId: ctx.runId,
+      stepKey: step.stepKey,
+      idempotencyKey: `${ctx.runId}:${step.stepKey}:line:${tool}`,
+      actorUserId: ctx.triggeredBy,
+      requestedByUserId: ctx.triggeredBy,
+      payload: {
+        operation,
+        tool,
+        args,
+      },
+    });
+  } catch (e) {
+    const reason = `LINE_TASK_CREATE_ERROR: ${e instanceof Error ? e.message : String(e)}`;
+    await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason, output: reason });
+    return { ok: false, stepKey: step.stepKey, type: step.type, output: reason, rounds: 1, approved: false, reason, records: [] };
+  }
+
+  const woke = publishToDevice(deviceId, 'device.task', { taskId: task.id });
+  if (!woke) {
+    await cancelDeviceTask({
+      taskId: task.id,
+      actorUserId: ctx.triggeredBy,
+      reason: 'DEVICE_OFFLINE at wake',
+    });
+    const reason = 'DEVICE_OFFLINE';
+    await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason, output: reason });
+    return { ok: false, stepKey: step.stepKey, type: step.type, output: reason, rounds: 1, approved: false, reason, records: [] };
+  }
+
+  const terminal = await waitForDeviceTaskTerminal(task.id, COMPUTER_CONTROL_TIMEOUT_MS);
+  if (terminal.status !== 'SUCCEEDED') {
+    const reason = `LINE_DESKTOP_${terminal.status}: ${JSON.stringify(terminal.error ?? {})}`;
+    await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason, output: reason });
+    return { ok: false, stepKey: step.stepKey, type: step.type, output: reason, rounds: 1, approved: false, reason, records: [] };
+  }
+
+  const evidence = {
+    deviceId,
+    taskId: terminal.id,
+    tool,
+    operation,
+    status: terminal.status,
+    result: terminal.result ?? null,
+  };
+  const output = JSON.stringify(evidence);
+  await save(ctx, `${step.stepKey}.r1.output.txt`, output);
+
+  // Always cross-model verify (execute≠verify). Default rubric if author omitted.
+  const rubric =
+    step.verifyRubric?.trim() ||
+    (isLineSendTool(tool)
+      ? 'Approve only if the LINE Desktop send completed as requested on the target device, ' +
+        'result is coherent, and no unauthorized extra sends are indicated. Reject partial/failed/ambiguous sends.'
+      : 'Approve only if the LINE Desktop read returned coherent chatroom/history data for the request on the ' +
+        'target device. Reject empty unexplained failures or device/task mismatch.');
+
+  hub.publish('run.step', { runId: ctx.runId, stepKey: step.stepKey, type: step.type, round: 1, phase: 'verifying' });
+  let verdict: VerdictResult;
+  try {
+    verdict = await runVerifyStep(
+      ctx,
+      rubric,
+      [
+        `[Device LINE Desktop evidence]`,
+        `deviceId=${deviceId}`,
+        `taskId=${terminal.id}`,
+        `tool=${tool}`,
+        `operation=${operation}`,
+        `result=${JSON.stringify(terminal.result ?? null)}`,
+      ].join('\n'),
+      sourceForStep(ctx),
+      null,
+    );
+  } catch (e) {
+    const reason = `VERIFY_ERROR: ${e instanceof Error ? e.message : String(e)}`;
+    await persistRunStep(ctx, step.stepKey, 1, 'error', { error: reason, output });
+    return { ok: false, stepKey: step.stepKey, type: step.type, output, rounds: 1, approved: false, reason, records: [] };
+  }
+  await save(ctx, `${step.stepKey}.r1.verdict.md`, verdict.text);
+  const records: RoundRecord[] = [{ round: 1, approved: verdict.approved, verdict: verdict.text }];
+  await persistRunStep(ctx, step.stepKey, 1, verdict.approved ? 'approved' : 'rejected', {
+    output,
+    verdict: verdict.text,
+    approved: verdict.approved,
+  });
+  if (verdict.approved) {
+    return { ok: true, stepKey: step.stepKey, type: step.type, output, rounds: 1, approved: true, records };
+  }
+  return {
+    ok: false,
+    stepKey: step.stepKey,
+    type: step.type,
+    output,
+    rounds: 1,
+    approved: false,
+    reason: 'VERIFY_REJECTED',
+    lastVerdict: verdict.text,
+    records,
+  };
+}
+
+// ── LEGACY_LOCAL_COMPUTER_USE (isolated; never called) ─────────────────────
+// Historical server-Mac Computer Use + public computer.control_requested path.
+// Formal COMPUTER_CONTROL always uses runComputerControlViaDevice above.
+// Kept only as documentation anchors so a future regression cannot silently
+// re-wire runComputerControlStep without deleting this notice.
+void function LEGACY_LOCAL_COMPUTER_USE_DO_NOT_CALL() {
+  // Intentionally empty — tryCodexComputerUse / runComputerControlViaDesktopApp removed
+  // from the callable surface. Do not reintroduce connectComputerUse here.
+};
 
 async function runStep(step: Step, ctx: RunContext): Promise<StepResult> {
   switch (step.type) {
@@ -1443,14 +1829,42 @@ async function routeDefects(failed: StepResult, candidates: string[], ctx: RunCo
  * RunStep row per round. Publishes run.started / run.step / run.log /
  * run.finished on the WS hub throughout.
  */
+/** True if workflow steps include device-mcp LINE send tools (high-risk). */
+async function workflowHasLineSendTools(workflowId: string | undefined): Promise<boolean> {
+  if (!workflowId) return false;
+  try {
+    const steps = await prisma.workflowStep.findMany({
+      where: { workflowId },
+      select: { type: true, config: true },
+    });
+    for (const s of steps) {
+      if (s.type !== 'TOOL') continue;
+      const cfg = (s.config ?? {}) as { tool?: string };
+      const tool = typeof cfg.tool === 'string' ? cfg.tool : '';
+      const parsed = parseDeviceLineTool(tool);
+      if (parsed && isLineSendTool(parsed.tool)) return true;
+    }
+    return false;
+  } catch {
+    // Fail-closed: treat as needing approval if we cannot scan.
+    return true;
+  }
+}
+
 export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
+  if (opts.signal?.aborted) throw new Error('Agent run aborted before start');
   const agentRow = await prisma.agent.findUnique({ where: { id: opts.agentId } });
   if (!agentRow || agentRow.deletedAt) throw errors.notFound(`Agent not found: ${opts.agentId}`);
 
-  // Pre-execution HITL gate: high-risk agents halt before any engine call.
+  // Pre-execution HITL gate: high-risk agents OR LINE send tools halt before any engine call.
   // Only a real DB ApprovalRequest with status APPROVED counts (fail-closed).
   const alreadyApproved = await isRunApproved(opts.runId ?? '', opts.approvedApprovalId);
-  if (requiresApproval(agentRow.riskTier, alreadyApproved)) {
+  const lineSendNeedsApproval = await workflowHasLineSendTools(opts.workflowId);
+  const needsHitl =
+    requiresApproval(agentRow.riskTier, alreadyApproved) ||
+    (lineSendNeedsApproval && !alreadyApproved);
+
+  if (needsHitl) {
     const runId = opts.runId ?? ulid();
     const runDir = path.join(paths.runs, runId);
     await mkdir(runDir, { recursive: true });
@@ -1465,18 +1879,31 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
         runDir,
       },
     });
+    const reasonParts: string[] = [];
+    if (requiresApproval(agentRow.riskTier, false)) {
+      reasonParts.push('高風險員工（riskTier=high）執行前需人工核准');
+    }
+    if (lineSendNeedsApproval) {
+      reasonParts.push(
+        '工作流含 LINE Desktop 傳送工具（send_message_manual/auto），需真 ApprovalRequest 核准後才可派送',
+      );
+    }
     const { resumeToken } = await createApproval({
       runId,
       agentId: agentRow.id,
-      reason: '高風險員工（riskTier=high）執行前需人工核准',
+      reason: reasonParts.join('；') || '執行前需人工核准',
       payload: {
         agentId: opts.agentId,
         workflowId: opts.workflowId,
         input: opts.input,
         triggeredBy: opts.triggeredBy,
+        lineSendTools: lineSendNeedsApproval,
       },
     });
-    await audit(opts.triggeredBy, 'run.awaiting_review', 'Run', runId, { agentId: agentRow.id });
+    await audit(opts.triggeredBy, 'run.awaiting_review', 'Run', runId, {
+      agentId: agentRow.id,
+      lineSendTools: lineSendNeedsApproval,
+    });
     hub.publish('run.step', { runId, agentId: agentRow.id, phase: 'awaiting_review' });
     hub.publish('approval.requested', { runId, agentId: agentRow.id, resumeToken });
     return {
@@ -1514,13 +1941,31 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
       .join('\n\n');
     chatPrompt = `以下是先前的對話紀錄，供你理解上下文：\n\n${transcript}\n\n───\n\n使用者最新訊息：\n${chatMessage}`;
   }
-  const manifest = await compileManifest(agentRow.id, opts.workflowId, agentDir, chatPrompt);
+  const manifest = await compileManifest(
+    agentRow.id,
+    opts.workflowId,
+    agentDir,
+    chatPrompt,
+    opts.forceVerify === true,
+    opts.builderTestSessionId
+      ? { sessionId: opts.builderTestSessionId, triggeredBy: opts.triggeredBy }
+      : undefined,
+  );
+  const runInput = manifest.builderTestDraftSkillIds?.length
+    ? {
+        ...(opts.input ?? {}),
+        builderTestEvidence: {
+          sessionId: opts.builderTestSessionId,
+          draftSkillIds: manifest.builderTestDraftSkillIds,
+        },
+      }
+    : (opts.input ?? {});
 
   // Sync the agent's cloud file targets into the workspace so EVERY run path
   // (chat, keyword workflow, schedule, test) can read live data from
   // data/cloud-files.md — not just the chat path. Best-effort.
   let hasCloudFiles = false;
-  if ((opts.depth ?? 0) === 0) {
+  if ((opts.depth ?? 0) === 0 && !opts.builderTestSessionId) {
     try {
       const { gatherAgentFileContext } = await import('../lib/filecontext.js');
       const fileCtx = await gatherAgentFileContext(agentRow.id);
@@ -1551,7 +1996,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
           agentId: agentRow.id,
           triggeredBy: opts.triggeredBy,
           status: 'RUNNING',
-          input: (opts.input ?? {}) as object,
+          input: runInput as object,
           runDir,
         },
       });
@@ -1564,7 +2009,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
         agentId: agentRow.id,
         triggeredBy: opts.triggeredBy,
         status: 'RUNNING',
-        input: (opts.input ?? {}) as object,
+        input: runInput as object,
         runDir,
       },
     });
@@ -1572,14 +2017,14 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
   await audit(opts.triggeredBy, 'run.start', 'Run', runId, { agentId: agentRow.id, workflowId: opts.workflowId ?? null });
   hub.publish('run.started', { runId, agentId: agentRow.id, workflowId: opts.workflowId ?? null, triggeredBy: opts.triggeredBy, startedAt: new Date().toISOString() });
 
-  const rawMessage = chatMessage ?? JSON.stringify(opts.input ?? {});
-  const identity = (opts.input?.identity as Record<string, unknown>) ?? {};
+  const rawMessage = chatMessage ?? JSON.stringify(runInput);
+  const identity = (runInput.identity as Record<string, unknown>) ?? {};
 
   const ctx: RunContext = {
     runId,
     runDir,
     manifest,
-    input: opts.input ?? {},
+    input: runInput,
     rawMessage,
     identity,
     approved: [],
@@ -1590,6 +2035,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
     triggeredBy: opts.triggeredBy,
     hasCloudFiles,
     costPolicy: (manifest as CompiledManifest & { costPolicy?: unknown }).costPolicy ?? agentRow.costPolicy ?? null,
+    signal: opts.signal,
   };
 
   const stepIndex = new Map(manifest.steps.map((s, idx) => [s.stepKey, idx]));
@@ -1603,6 +2049,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
   try {
     let i = 0;
     while (i < manifest.steps.length) {
+      if (opts.signal?.aborted) throw new Error('Agent run aborted');
       const step = manifest.steps[i] as Step;
       ctx.attempts[step.stepKey] = (ctx.attempts[step.stepKey] ?? 0) + 1;
 
@@ -1722,19 +2169,32 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
 
   // Deterministic memory precipitation (best-effort). Never fails the run.
   // Writes log.md always when memory enabled; embedding/Qdrant is best-effort.
-  try {
-    const summary = summarizeRun(outcome);
-    await ingestRunSummary(agentRow.id, agentDir, runId, summary);
-    const conversationId =
-      typeof opts.input?.conversationId === 'string' ? opts.input.conversationId : undefined;
-    if (conversationId) {
-      const lastOk = [...results].reverse().find((r) => r.ok && r.output?.trim());
-      const replyText = lastOk?.output ?? '';
-      const chatSum = summarizeChat(rawMessage, replyText);
-      await ingestChatSummary(agentRow.id, agentDir, conversationId, chatSum, runId);
+  if (!opts.builderTestSessionId) {
+    try {
+      const summary = summarizeRun(outcome);
+      await ingestRunSummary(agentRow.id, agentDir, runId, summary);
+      const conversationId =
+        typeof opts.input?.conversationId === 'string' ? opts.input.conversationId : undefined;
+      if (conversationId) {
+        const lastOk = [...results].reverse().find((r) => r.ok && r.output?.trim());
+        const replyText = lastOk?.output ?? '';
+        const chatSum = summarizeChat(rawMessage, replyText);
+        await ingestChatSummary(agentRow.id, agentDir, conversationId, chatSum, runId);
+      }
+    } catch (e) {
+      console.warn('[memory] post-run ingest failed (non-fatal)', e instanceof Error ? e.message : e);
     }
-  } catch (e) {
-    console.warn('[memory] post-run ingest failed (non-fatal)', e instanceof Error ? e.message : e);
+  }
+
+  // Builder fixtures are evaluation data, not production behavior: do not
+  // sediment them into the Agent's memory or self-improvement trace corpus.
+  if (!opts.builderTestSessionId) {
+    try {
+      const { ingestRunTrace } = await import('../lib/trace.js');
+      await ingestRunTrace({ agent: agentRow, manifest, outcome });
+    } catch (e) {
+      console.warn('[trace] post-run trace ingest failed (non-fatal)', e instanceof Error ? e.message : e);
+    }
   }
 
   return outcome;

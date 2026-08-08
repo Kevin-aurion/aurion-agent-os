@@ -70,7 +70,9 @@ async function resolveUserId(req: import('fastify').FastifyRequest): Promise<str
   const h = req.headers.authorization;
   const token = q || (h?.startsWith('Bearer ') ? h.slice(7) : undefined);
   if (!token) throw errors.unauthorized('Missing token');
-  return (await verifyAccess(token)).sub;
+  const claims = await verifyAccess(token);
+  if (claims.scope) throw errors.forbidden('Scoped OAuth tokens cannot authorize integrations');
+  return claims.sub;
 }
 
 export async function integrationRoutes(app: FastifyInstance) {

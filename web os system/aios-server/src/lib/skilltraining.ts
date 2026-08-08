@@ -2,6 +2,7 @@
 // Deterministic flow listing + Claude-drafted SKILL.md that always goes through
 // understandSkill → AWAITING_USER_CONFIRM (never auto-CONFIRMED).
 import { mkdir, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
@@ -15,6 +16,23 @@ import { slugify } from './slug.js';
 
 const DRAFT_REVIEW_STATUSES = new Set(['PENDING_UNDERSTANDING', 'AWAITING_USER_CONFIRM']);
 const DRAFT_TIMEOUT_MS = 5 * 60_000;
+const TRAINING_DEDUPE_TTL_MS = 10 * 60_000;
+
+type DraftSkillResult = {
+  skillId: string;
+  contentMd: string;
+  reviewStatus: string;
+  understanding: unknown;
+};
+
+// A proxy/tunnel may lose the HTTP response after the model-backed mutation
+// already succeeded. Share identical in-flight work and briefly cache the
+// result so a safe client retry cannot create a duplicate Skill.
+const trainingDraftsInFlight = new Map<string, Promise<DraftSkillResult>>();
+const recentTrainingDrafts = new Map<
+  string,
+  { expiresAt: number; result: DraftSkillResult }
+>();
 
 async function uniqueSlug(base: string): Promise<string> {
   let slug = base;
@@ -134,17 +152,45 @@ export async function draftSkillFromMessage(args: {
   message: string;
   skillId?: string;
   createdBy: string;
-}): Promise<{
-  skillId: string;
-  contentMd: string;
-  reviewStatus: string;
-  understanding: unknown;
-}> {
+}): Promise<DraftSkillResult> {
   const message = args.message.trim();
   if (!message) throw errors.badRequest('message is required');
 
+  const requestKey = createHash('sha256')
+    .update(`${args.agentId}\0${args.createdBy}\0${args.skillId ?? ''}\0${message}`)
+    .digest('hex');
+  const cached = recentTrainingDrafts.get(requestKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.result;
+  if (cached) recentTrainingDrafts.delete(requestKey);
+  const existingWork = trainingDraftsInFlight.get(requestKey);
+  if (existingWork) return existingWork;
+
+  const work = (async (): Promise<DraftSkillResult> => {
+
   const agent = await prisma.agent.findFirst({ where: { id: args.agentId, deletedAt: null } });
   if (!agent) throw errors.notFound('Agent not found');
+
+  // Validate an edit target before materializing or spending any model tokens.
+  // An arbitrary/foreign skillId must fail without exposing agent context to the
+  // drafting engine or creating filesystem side effects.
+  let existingDraft: { id: string; slug: string } | undefined;
+  if (args.skillId) {
+    const existing = await prisma.skill.findFirst({
+      where: { id: args.skillId, deletedAt: null },
+      select: { id: true, slug: true, reviewStatus: true },
+    });
+    if (!existing) throw errors.notFound('Skill draft not found');
+    if (!DRAFT_REVIEW_STATUSES.has(existing.reviewStatus)) {
+      throw errors.conflict(
+        `Skill is not an editable draft (status=${existing.reviewStatus})`,
+      );
+    }
+    const link = await prisma.agentSkill.findUnique({
+      where: { agentId_skillId: { agentId: args.agentId, skillId: existing.id } },
+    });
+    if (!link) throw errors.forbidden('Skill draft is not scoped to this agent');
+    existingDraft = existing;
+  }
 
   // Materialize agent dir for Claude cwd (role context + workspace).
   const agentDir = await materializeAgent(args.agentId);
@@ -193,27 +239,24 @@ export async function draftSkillFromMessage(args: {
   const name =
     typeof meta.name === 'string' && meta.name.trim() ? meta.name.trim() : firstLine;
 
-  // Prefer updating an existing draft skill when skillId is a PENDING/AWAITING draft.
+  // Prefer updating an existing draft when skillId is provided — fail-closed:
+  // skill must exist, still be a draft, and already be linked to *this* agent.
+  // Arbitrary skillId must not edit another agent's (or unlinked) draft.
   let skillId: string | undefined;
-  if (args.skillId) {
-    const existing = await prisma.skill.findFirst({
-      where: { id: args.skillId, deletedAt: null },
+  if (existingDraft) {
+    skillId = existingDraft.id;
+    await writeSkillFile(existingDraft.slug, contentMd);
+    await prisma.skill.update({
+      where: { id: existingDraft.id },
+      data: {
+        contentMd,
+        name,
+        // Reset so understand pipeline re-runs cleanly.
+        reviewStatus: 'PENDING_UNDERSTANDING',
+        understanding: Prisma.DbNull,
+        generator: 'oral-training',
+      },
     });
-    if (existing && DRAFT_REVIEW_STATUSES.has(existing.reviewStatus)) {
-      skillId = existing.id;
-      await writeSkillFile(existing.slug, contentMd);
-      await prisma.skill.update({
-        where: { id: existing.id },
-        data: {
-          contentMd,
-          name,
-          // Reset so understand pipeline re-runs cleanly.
-          reviewStatus: 'PENDING_UNDERSTANDING',
-          understanding: Prisma.DbNull,
-          generator: 'oral-training',
-        },
-      });
-    }
   }
 
   if (!skillId) {
@@ -261,4 +304,17 @@ export async function draftSkillFromMessage(args: {
     reviewStatus: skill.reviewStatus,
     understanding: skill.understanding,
   };
+  })();
+
+  trainingDraftsInFlight.set(requestKey, work);
+  try {
+    const result = await work;
+    recentTrainingDrafts.set(requestKey, {
+      expiresAt: Date.now() + TRAINING_DEDUPE_TTL_MS,
+      result,
+    });
+    return result;
+  } finally {
+    trainingDraftsInFlight.delete(requestKey);
+  }
 }

@@ -1,0 +1,13 @@
+interface:
+  display_name: "Build AIOS Agent"
+  short_description: "Build governed AI employees through natural conversation"
+  default_prompt: "Use $build-aios-agent to interview me naturally, save every meaningful turn, and build a governed AIOS employee asynchronously."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "aios"
+      description: "AIOS MCP server for durable Builder synchronization and review state"
+      transport: "streamable_http"
+      url: "https://aurion-aios-mcp.lazyoffice.app/mcp"
+policy:
+  allow_implicit_invocation: true

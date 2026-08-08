@@ -38,6 +38,11 @@ import {
   Wrench,
   X,
   XCircle,
+  MonitorSmartphone,
+  Wifi,
+  WifiOff,
+  Link2,
+  Unlink,
 } from 'lucide-react';
 import { API, ApiError } from '@/lib/api';
 import { useAuth, isFdeRole } from '@/lib/auth';
@@ -45,6 +50,15 @@ import { useAwp, type AwpFrame } from '@/lib/awp';
 import { AppShell } from '@/components/AppShell';
 import { EmptyState, Field, PageHeader, Spinner, StatusBadge } from '@/components/ui';
 import { cn } from '@/lib/cn';
+import {
+  type AgentDeviceBinding,
+  type SafeDevice,
+  deviceStatusLabel,
+  errorMessage as deviceErrorMessage,
+  platformLabel,
+  relativeTime as deviceRelativeTime,
+  parseCapabilities,
+} from '@/lib/devices';
 
 // ---------- Types ----------
 
@@ -240,6 +254,7 @@ interface RunStep {
 const TABS = [
   { key: 'overview', label: '概況', icon: Settings2 },
   { key: 'skills', label: '技能', icon: Wrench },
+  { key: 'devices', label: '裝置', icon: MonitorSmartphone },
   { key: 'files', label: '雲端檔案', icon: Cloud },
   { key: 'workflows', label: '工作流', icon: Workflow },
   { key: 'runs', label: '執行紀錄', icon: Activity },
@@ -315,6 +330,7 @@ export default function EmployeeDetailPage() {
 
           {tab === 'overview' && <OverviewTab agent={agent} />}
           {tab === 'skills' && <SkillsTab agent={agent} />}
+          {tab === 'devices' && <DevicesTab agent={agent} />}
           {tab === 'files' && <FileTargetsTab agent={agent} />}
           {tab === 'workflows' && <WorkflowsTab agent={agent} />}
           {tab === 'runs' && <RunsTab agent={agent} />}
@@ -324,6 +340,227 @@ export default function EmployeeDetailPage() {
         </>
       )}
     </AppShell>
+  );
+}
+
+// ---------- 裝置 Devices (bind / unbind; offline bindings preserved) ----------
+
+function DevicesTab({ agent }: { agent: AgentDetail }) {
+  const qc = useQueryClient();
+  const { user } = useAuth();
+  const isFde = isFdeRole(user?.role);
+  const [bindDeviceId, setBindDeviceId] = useState('');
+  const [flash, setFlash] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useAwp(['run.*', 'agent.status'], (frame) => {
+    if (frame.kind !== 'event') return;
+    void qc.invalidateQueries({ queryKey: ['agent-devices', agent.id] });
+    void qc.invalidateQueries({ queryKey: ['devices'] });
+  });
+
+  const bindingsQ = useQuery({
+    queryKey: ['agent-devices', agent.id],
+    queryFn: () => API.get<AgentDeviceBinding[]>(`/api/agents/${agent.id}/devices`),
+    // FDE-only endpoint; MEMBER sees empty with message.
+    enabled: isFde,
+    refetchInterval: 12_000,
+  });
+
+  const allDevicesQ = useQuery({
+    queryKey: ['devices'],
+    queryFn: () => API.get<SafeDevice[]>('/api/devices'),
+    enabled: isFde,
+    staleTime: 15_000,
+  });
+
+  const bindMut = useMutation({
+    mutationFn: (deviceId: string) =>
+      API.post(`/api/agents/${agent.id}/devices`, { deviceId }),
+    onSuccess: () => {
+      setFlash('已綁定裝置');
+      setErr(null);
+      setBindDeviceId('');
+      void qc.invalidateQueries({ queryKey: ['agent-devices', agent.id] });
+    },
+    onError: (e) => {
+      setFlash(null);
+      setErr(deviceErrorMessage(e));
+    },
+  });
+
+  const unbindMut = useMutation({
+    mutationFn: (deviceId: string) => API.del(`/api/agents/${agent.id}/devices/${deviceId}`),
+    onSuccess: () => {
+      setFlash('已解除綁定');
+      setErr(null);
+      void qc.invalidateQueries({ queryKey: ['agent-devices', agent.id] });
+    },
+    onError: (e) => {
+      setFlash(null);
+      setErr(deviceErrorMessage(e));
+    },
+  });
+
+  if (!isFde) {
+    return (
+      <EmptyState
+        title="僅 FDE 可管理裝置綁定"
+        hint="操作者無法啟用或變更裝置綁定；請由 FDE 在管理中心處理，或提交提案。"
+      />
+    );
+  }
+
+  const bindings = bindingsQ.data ?? [];
+  const boundIds = new Set(bindings.map((b) => b.deviceId));
+  const bindable = (allDevicesQ.data ?? []).filter(
+    (d) => d.status === 'ACTIVE' && !boundIds.has(d.id),
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className="card space-y-3 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h3 className="font-medium">已綁定裝置</h3>
+            <p className="mt-1 text-xs text-muted">
+              電腦操控與 LINE 桌面步驟只能打到「已綁定 + 線上 + 能力合格」的裝置。離線綁定會保留顯示，不會自動替換。
+            </p>
+          </div>
+          <Link href="/admin/devices" className="btn-ghost text-xs">
+            管理全部裝置
+          </Link>
+        </div>
+
+        {flash && <p className="text-xs text-emerald-400" role="status">{flash}</p>}
+        {err && (
+          <p className="text-xs text-rose-400" role="alert">
+            {err}
+          </p>
+        )}
+
+        {bindingsQ.isLoading && (
+          <div className="flex justify-center py-8" role="status">
+            <Spinner />
+          </div>
+        )}
+        {bindingsQ.isError && (
+          <p className="text-sm text-rose-400">載入失敗：{deviceErrorMessage(bindingsQ.error)}</p>
+        )}
+        {!bindingsQ.isLoading && bindings.length === 0 && (
+          <EmptyState title="尚未綁定裝置" hint="下方選擇 ACTIVE 裝置進行綁定" />
+        )}
+
+        <ul className="space-y-2">
+          {bindings.map((b) => {
+            const d = b.device;
+            const online = d.online === true;
+            const caps = parseCapabilities(d.capabilities);
+            return (
+              <li
+                key={b.deviceId}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border px-3 py-3"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">{d.name}</span>
+                    <StatusBadge status={String(d.status)} />
+                    <span
+                      className={cn(
+                        'badge',
+                        online ? 'bg-emerald-500/15 text-emerald-400' : 'bg-zinc-500/15 text-zinc-400',
+                      )}
+                    >
+                      {online ? (
+                        <>
+                          <Wifi className="mr-1 h-3 w-3" /> 線上
+                        </>
+                      ) : (
+                        <>
+                          <WifiOff className="mr-1 h-3 w-3" /> 離線（綁定保留）
+                        </>
+                      )}
+                    </span>
+                  </div>
+                  <div className="mt-1 text-[11px] text-muted">
+                    {platformLabel(d.platform)} · {deviceStatusLabel(String(d.status))} · 心跳{' '}
+                    {deviceRelativeTime(d.lastSeenAt)}
+                    {d.tokenPrefix ? ` · token ${d.tokenPrefix}…` : ''}
+                  </div>
+                  {caps?.features && (
+                    <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-muted">
+                      {caps.features.computerUse && <span className="badge bg-black/10 dark:bg-white/10">Computer Use</span>}
+                      {caps.features.codexApp && <span className="badge bg-black/10 dark:bg-white/10">Codex App</span>}
+                      {caps.features.codexCli && <span className="badge bg-black/10 dark:bg-white/10">Codex CLI</span>}
+                      {caps.features.lineDesktop && <span className="badge bg-black/10 dark:bg-white/10">LINE Desktop</span>}
+                      {caps.features.screenshot && <span className="badge bg-black/10 dark:bg-white/10">截圖</span>}
+                      {caps.features.screenRecording && <span className="badge bg-black/10 dark:bg-white/10">錄製</span>}
+                      {caps.features.accessibility && <span className="badge bg-black/10 dark:bg-white/10">輔助使用</span>}
+                    </div>
+                  )}
+                  {!online && (
+                    <p className="mt-1 text-[11px] text-amber-300">
+                      離線裝置仍保留綁定，工作流步驟若指定此裝置將無法執行，需明確改選線上裝置。
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="btn-ghost text-rose-400"
+                  disabled={unbindMut.isPending}
+                  onClick={() => {
+                    if (!window.confirm(`解除與此員工綁定「${d.name}」？`)) return;
+                    unbindMut.mutate(b.deviceId);
+                  }}
+                >
+                  <Unlink className="h-4 w-4" /> 解除綁定
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+
+      <div className="card space-y-3 p-5">
+        <h3 className="font-medium">綁定新裝置</h3>
+        <div className="flex flex-wrap gap-2">
+          <select
+            className="input max-w-md"
+            value={bindDeviceId}
+            onChange={(e) => setBindDeviceId(e.target.value)}
+            aria-label="選擇要綁定的裝置"
+          >
+            <option value="">— 選擇 ACTIVE 裝置 —</option>
+            {bindable.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name} · {platformLabel(d.platform)}
+                {d.online === true ? ' · 線上' : ' · 離線'}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={!bindDeviceId || bindMut.isPending}
+            onClick={() => bindMut.mutate(bindDeviceId)}
+          >
+            <Link2 className="h-4 w-4" /> 綁定
+          </button>
+        </div>
+        {allDevicesQ.isError && (
+          <p className="text-xs text-rose-400">無法載入裝置清單：{deviceErrorMessage(allDevicesQ.error)}</p>
+        )}
+        {!allDevicesQ.isLoading && bindable.length === 0 && (
+          <p className="text-xs text-muted">
+            沒有可綁定的 ACTIVE 裝置。請先到{' '}
+            <Link href="/admin/devices" className="text-brand hover:underline">
+              裝置管理
+            </Link>{' '}
+            註冊並完成 enrollment。
+          </p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -2053,7 +2290,7 @@ function TrainingTab({ agent }: { agent: AgentDetail }) {
     {
       id: 'welcome',
       kind: 'system',
-      text: '用聊天描述要教這位員工的流程，或按「有哪些流程？」查看現況。也可開始錄製桌面操作。',
+      text: '用聊天描述要教這位員工的流程，或按「有哪些流程？」查看現況。也可開始錄製桌面操作。若流程含 COMPUTER_CONTROL 或 device-mcp:line-desktop，請先在「裝置」分頁綁定裝置，並於工作流步驟明確選擇線上可用裝置。',
     },
   ]);
   const [draftSkillId, setDraftSkillId] = useState<string | null>(null);
@@ -2185,12 +2422,16 @@ function TrainingTab({ agent }: { agent: AgentDetail }) {
     setActionError(null);
     try {
       await API.post(`/api/skills/${skillId}/confirm`);
-      // Oral/recording training already links the skill; mount is best-effort if not linked.
+      // Pre-linked drafts: attach is idempotent. Only ignore exact CONFLICT (duplicate link).
+      // Surface CODEX gate / other errors — never claim attached after a real failure.
       try {
         await API.post(`/api/agents/${agent.id}/skills`, { skillId });
       } catch (e) {
-        // Already linked or not CONFIRMED-path only — ignore conflict-like failures.
-        if (!(e instanceof ApiError)) throw e;
+        if (e instanceof ApiError && e.code === 'CONFLICT') {
+          // already linked
+        } else {
+          throw e;
+        }
       }
       setMessages((prev) =>
         prev.map((m) =>
@@ -2241,7 +2482,7 @@ function TrainingTab({ agent }: { agent: AgentDetail }) {
     setRecBusy(true);
     setActionError(null);
     try {
-      await API.post('/api/recording/start');
+      await API.post('/api/recording/start', { agentId: agent.id });
       setRecordingWanted(true);
       pushMsg({
         id: crypto.randomUUID(),
@@ -2260,7 +2501,7 @@ function TrainingTab({ agent }: { agent: AgentDetail }) {
     setRecBusy(true);
     setActionError(null);
     try {
-      await API.post('/api/recording/stop');
+      const stopped = await API.post<{ sessionId: string }>('/api/recording/stop');
       setRecordingWanted(false);
       pushMsg({ id: crypto.randomUUID(), kind: 'system', text: '錄製已停止，正在匯入為技能草稿…' });
       const draftingId = crypto.randomUUID();
@@ -2272,7 +2513,7 @@ function TrainingTab({ agent }: { agent: AgentDetail }) {
         reviewStatus?: string;
         understanding?: unknown;
         contentMd?: string;
-      }>(`/api/agents/${agent.id}/recording/to-skill`, {});
+      }>(`/api/agents/${agent.id}/recording/to-skill`, { sessionId: stopped.sessionId });
       const skillId = result.skillId ?? result.id;
       if (!skillId) throw new Error('recording/to-skill 未回傳 skillId');
       let name = result.name ?? parseSkillNameFromMd(result.contentMd ?? '');

@@ -14,6 +14,7 @@ export interface RunCodexOpts {
   onLine?: (line: string) => void; // raw --json lines, as they arrive
   /** Opt-in L6 write sandbox profile path; forwarded to execCli (not codex --sandbox). */
   sandboxProfilePath?: string;
+  signal?: AbortSignal;
 }
 
 export interface RunCodexResult {
@@ -64,13 +65,15 @@ export async function runCodex(opts: RunCodexOpts): Promise<RunCodexResult> {
     ? ['exec', 'resume', opts.resumeThreadId as string, '--json', '--skip-git-repo-check', '-']
     : ['exec', '--json', '--skip-git-repo-check', '--sandbox', opts.sandbox ?? 'workspace-write', '-'];
 
-  const { code, stdout, stderr, timedOut } = await execCli(config.engines.codexPath, args, {
+  const { code, stdout, stderr, timedOut, aborted } = await execCli(config.engines.codexPath, args, {
     cwd: opts.cwd,
     input: opts.prompt,
     timeoutMs: opts.timeoutMs,
     sandboxProfilePath: opts.sandboxProfilePath,
     onLine: opts.onLine ? (line, stream) => { if (stream === 'stdout') opts.onLine!(line); } : undefined,
+    signal: opts.signal,
   });
+  if (aborted) throw new Error('codex aborted');
   if (timedOut) throw new Error(`codex timed out after ${opts.timeoutMs}ms`);
   if (code !== 0) throw new Error(`codex exit ${code}: ${(stderr || stdout).slice(0, 2000)}`);
 

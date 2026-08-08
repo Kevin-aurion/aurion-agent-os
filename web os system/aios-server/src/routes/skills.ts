@@ -14,6 +14,7 @@ import { understandSkill } from '../skills/understand.js';
 import { buildSkillFromRequirement } from '../skills/build.js';
 import { assertInsideRoot } from '../lib/safepath.js';
 import { slugify } from '../lib/slug.js';
+import { parseSkillManifest } from '../lib/skillmanifest.js';
 
 // ── Helpers: slugs & frontmatter ────────────────────────────────────────────
 
@@ -341,15 +342,14 @@ export async function skillRoutes(app: FastifyInstance) {
     }
   });
 
+  // FDE-only. Applies CODEX gate for RECORDED / COMPUTER_CONTROL when pre-linked.
   app.post('/api/skills/:id/confirm', { preHandler: requireTrainer }, async (req, reply) => {
     try {
       const { id } = idParamSchema.parse(req.params);
-      const skill = await prisma.skill.findUnique({ where: { id } });
-      if (!skill || skill.deletedAt) throw errors.notFound('Skill not found');
-      const updated = await prisma.skill.update({
-        where: { id },
-        data: { reviewStatus: 'CONFIRMED', confirmedBy: req.user!.sub, confirmedAt: new Date() },
-      });
+      const { confirmAwaitingSkill } = await import('../lib/skillgate.js');
+      // Direct confirm: skill must be AWAITING_USER_CONFIRM; CODEX gate on all links.
+      // (Pre-linked RECORDED drafts activate on confirm without a separate attach.)
+      const updated = await confirmAwaitingSkill(id, req.user!.sub);
       await audit(req.user!.sub, 'skill.confirm', 'Skill', id);
       return ok(updated);
     } catch (e) {
@@ -381,6 +381,64 @@ export async function skillRoutes(app: FastifyInstance) {
       });
       await audit(req.user!.sub, 'skill.build', 'Skill', skillId, { engine: body.engine, executionEnv });
       return ok(await prisma.skill.findUnique({ where: { id: skillId } }));
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  });
+
+  // Progressive disclosure: read skill L1 metadata (auth).
+  app.get('/api/skills/:id/metadata', { preHandler: requireAuth }, async (req, reply) => {
+    try {
+      const { id } = idParamSchema.parse(req.params);
+      const skill = await prisma.skill.findUnique({ where: { id } });
+      if (!skill || skill.deletedAt) throw errors.notFound('Skill not found');
+      return ok(parseSkillManifest(skill));
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  });
+
+  // Progressive disclosure: FDE merges metadata into Skill.assets.metadata (no confirm side-effects).
+  const metadataPatchSchema = z.object({
+    description: z.string().optional(),
+    whenToUse: z.string().optional(),
+    whenNotToUse: z.string().optional(),
+    requiredTools: z.array(z.string()).optional(),
+    conflictsWith: z.array(z.string()).optional(),
+    sideEffects: z.array(z.string()).optional(),
+    riskTier: z.enum(['low', 'medium', 'high']).optional(),
+    tokenBudget: z.number().int().positive().max(8000).optional(),
+    evalSuiteId: z.string().nullable().optional(),
+  });
+
+  app.patch('/api/skills/:id/metadata', { preHandler: requireTrainer }, async (req, reply) => {
+    try {
+      const { id } = idParamSchema.parse(req.params);
+      const body = metadataPatchSchema.parse(req.body);
+      const skill = await prisma.skill.findUnique({ where: { id } });
+      if (!skill || skill.deletedAt) throw errors.notFound('Skill not found');
+
+      const prevAssets =
+        skill.assets && typeof skill.assets === 'object' && !Array.isArray(skill.assets)
+          ? ({ ...(skill.assets as Record<string, unknown>) } as Record<string, unknown>)
+          : ({} as Record<string, unknown>);
+      const prevMeta =
+        prevAssets.metadata && typeof prevAssets.metadata === 'object' && !Array.isArray(prevAssets.metadata)
+          ? ({ ...(prevAssets.metadata as Record<string, unknown>) } as Record<string, unknown>)
+          : ({} as Record<string, unknown>);
+
+      // Shallow merge only provided fields into assets.metadata — never touch contentMd / reviewStatus.
+      const nextMeta = { ...prevMeta, ...body };
+      const nextAssets = { ...prevAssets, metadata: nextMeta };
+
+      const updated = await prisma.skill.update({
+        where: { id },
+        data: { assets: nextAssets as object },
+      });
+      await audit(req.user!.sub, 'skill.metadata_update', 'Skill', id, {
+        fields: Object.keys(body),
+      });
+      return ok(parseSkillManifest(updated));
     } catch (e) {
       return sendError(reply, e);
     }

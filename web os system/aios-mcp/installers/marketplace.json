@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "aurion-aios",
+  "description": "Aurion AIOS customer-side Claude integrations. All services run on the central AIOS host.",
+  "owner": {
+    "name": "Aurion"
+  },
+  "plugins": [
+    {
+      "name": "aurion-aios-builder",
+      "description": "Build AI employees in Claude and synchronize them to Aurion AIOS over its hosted OAuth Remote MCP.",
+      "version": "1.2.1",
+      "author": {
+        "name": "Aurion"
+      },
+      "source": "./plugins/aurion-aios-builder",
+      "category": "productivity",
+      "homepage": "https://aurion-aios.lazyoffice.app/agent-builds"
+    }
+  ]
+}

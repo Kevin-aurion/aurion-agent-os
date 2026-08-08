@@ -85,7 +85,8 @@ export async function authRoutes(app: FastifyInstance) {
   app.get('/api/auth/me', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const user = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.sub } });
-      return ok(publicUser(user));
+      const visible = publicUser(user);
+      return ok(req.user!.scope ? { ...visible, role: req.user!.role } : visible);
     } catch (e) {
       return sendError(reply, e);
     }

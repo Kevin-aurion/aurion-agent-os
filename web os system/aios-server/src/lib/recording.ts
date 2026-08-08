@@ -19,6 +19,7 @@ import {
   EVENT_STREAM_TOOLS,
   type McpClient,
 } from './codexmcp.js';
+import { hub } from '../ws/hub.js';
 
 const CODEX_SKILL_TIMEOUT_MS = 10 * 60_000;
 
@@ -309,7 +310,8 @@ export async function buildSkillFromRecording(args: {
   // if FDE routes a non-CODEX agent — mount gate will block later.
   const meta = args.metadataPath ?? '(unknown — check most recent Record & Replay session)';
   const events = args.eventsPath ?? '(unknown — check most recent Record & Replay session)';
-  const hintLine = args.hint?.trim() ? `\nUser hint: ${args.hint.trim()}` : '';
+  const safeHint = args.hint?.trim() ? redactSecrets(args.hint.trim()) : '';
+  const hintLine = safeHint ? `\nUser hint: ${safeHint}` : '';
 
   const prompt = [
     'The Record & Replay recording has just been stopped.',
@@ -348,3 +350,371 @@ export async function buildSkillFromRecording(args: {
   const mdPath = await resolveImportedSkillMdPath(codexText, beforeMs);
   return importSkillFromMarkdown(mdPath, args.agentId, args.createdBy);
 }
+
+// ── Durable RecordingService (server-owned sessions, opaque ids) ─────────────
+
+export interface RecordingDeps {
+  startRecording: typeof startRecording;
+  recordingStatus: typeof recordingStatus;
+  stopRecording: typeof stopRecording;
+  buildSkillFromRecording: typeof buildSkillFromRecording;
+}
+
+/** Safe client-facing session view — NEVER includes metadataPath/eventsPath. */
+export interface SafeRecordingSession {
+  id: string;
+  agentId: string | null;
+  status: string;
+  artifactId: string | null;
+  skillId: string | null;
+  createdAt: Date;
+  stoppedAt: Date | null;
+  compiledAt: Date | null;
+}
+
+function toSafeSession(row: {
+  id: string;
+  agentId: string | null;
+  status: string;
+  artifactId: string | null;
+  skillId: string | null;
+  createdAt: Date;
+  stoppedAt: Date | null;
+  compiledAt: Date | null;
+}): SafeRecordingSession {
+  return {
+    id: row.id,
+    agentId: row.agentId,
+    status: row.status,
+    artifactId: row.artifactId,
+    skillId: row.skillId,
+    createdAt: row.createdAt,
+    stoppedAt: row.stoppedAt,
+    compiledAt: row.compiledAt,
+  };
+}
+
+function publishProgress(userId: string, payload: Record<string, unknown>): void {
+  try {
+    hub.publishToUser(userId, 'recording.progress', payload);
+  } catch (e) {
+    console.warn('[recording] progress publish failed (fail-safe):', e);
+  }
+}
+
+/**
+ * Server-owned durable recording sessions. Clients receive only opaque ids;
+ * real artifact paths stay on the host. Injectable deps so tests can drive
+ * without live Computer Use (ADR 0005 tools/call timeouts).
+ */
+export class RecordingService {
+  /** Host-global single active recorder (in-memory). */
+  private activeSessionId: string | null = null;
+
+  constructor(
+    private readonly deps: RecordingDeps = {
+      startRecording,
+      recordingStatus,
+      stopRecording,
+      buildSkillFromRecording,
+    },
+  ) {}
+
+  /**
+   * Mark non-terminal sessions INTERRUPTED after process restart.
+   * Fail-safe at startup: DB errors are logged, never fatal.
+   */
+  async recoverInterrupted(): Promise<number> {
+    this.activeSessionId = null;
+    try {
+      const result = await prisma.recordingSession.updateMany({
+        where: { status: { in: ['RECORDING', 'COMPILING'] } },
+        data: { status: 'INTERRUPTED', note: 'server restart' },
+      });
+      return result.count;
+    } catch (e) {
+      console.warn('[recording] recoverInterrupted failed (fail-safe):', e);
+      return 0;
+    }
+  }
+
+  async start(
+    userId: string,
+    agentId: string,
+  ): Promise<{ sessionId: string; agentId: string; status: string; raw?: unknown }> {
+    // Host-global single active recorder.
+    if (this.activeSessionId) {
+      const active = await prisma.recordingSession.findUnique({
+        where: { id: this.activeSessionId },
+      });
+      if (active && active.status === 'RECORDING') {
+        if (active.userId !== userId) {
+          throw errors.conflict('另一位使用者正在錄製，請稍後再試');
+        }
+        if (active.agentId !== agentId) {
+          throw errors.conflict('目前錄製已綁定另一位 Agent，請先結束該次錄製');
+        }
+        // Idempotent re-join for the same user.
+        let raw: unknown;
+        try {
+          const r = await this.deps.startRecording();
+          raw = r.raw;
+        } catch {
+          // Re-join probe is best-effort; session row is still authoritative.
+        }
+        return { sessionId: active.id, agentId, status: 'RECORDING', raw };
+      }
+      // Stale in-memory pointer — clear and continue.
+      this.activeSessionId = null;
+    }
+
+    // Also check DB for any RECORDING session owned by another user (host-global).
+    const otherActive = await prisma.recordingSession.findFirst({
+      where: { status: 'RECORDING', userId: { not: userId } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (otherActive) {
+      throw errors.conflict('另一位使用者正在錄製，請稍後再試');
+    }
+
+    // Same user already RECORDING in DB (e.g. after partial restart of in-memory only).
+    const ownActive = await prisma.recordingSession.findFirst({
+      where: { status: 'RECORDING', userId },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (ownActive) {
+      if (ownActive.agentId !== agentId) {
+        throw errors.conflict('目前錄製已綁定另一位 Agent，請先結束該次錄製');
+      }
+      this.activeSessionId = ownActive.id;
+      let raw: unknown;
+      try {
+        const r = await this.deps.startRecording();
+        raw = r.raw;
+      } catch {
+        // best-effort
+      }
+      return { sessionId: ownActive.id, agentId, status: 'RECORDING', raw };
+    }
+
+    // Supersede prior uncompiled stopped captures so a fresh recording is required
+    // (matches the previous Map.delete(userId) on start).
+    await prisma.recordingSession.updateMany({
+      where: { userId, status: 'STOPPED' },
+      data: { status: 'INTERRUPTED', note: 'superseded by new recording' },
+    });
+
+    const id = ulid();
+    await prisma.recordingSession.create({
+      data: {
+        id,
+        userId,
+        agentId,
+        status: 'RECORDING',
+      },
+    });
+    // Claim before the async MCP call so two concurrent starts cannot both pass.
+    this.activeSessionId = id;
+
+    try {
+      const result = await this.deps.startRecording();
+      publishProgress(userId, { sessionId: id, status: 'RECORDING' });
+      return { sessionId: id, agentId, status: 'RECORDING', raw: result.raw };
+    } catch (e) {
+      await prisma.recordingSession.update({
+        where: { id },
+        data: {
+          status: 'FAILED',
+          note: e instanceof Error ? e.message : String(e),
+        },
+      });
+      if (this.activeSessionId === id) this.activeSessionId = null;
+      throw e;
+    }
+  }
+
+  async status(
+    userId: string,
+    sessionId?: string,
+  ): Promise<{ session: SafeRecordingSession | null; live?: unknown }> {
+    let row;
+    if (sessionId) {
+      row = await prisma.recordingSession.findUnique({ where: { id: sessionId } });
+      if (!row) return { session: null };
+      if (row.userId !== userId) {
+        throw errors.forbidden('無權存取此錄製工作階段');
+      }
+    } else {
+      row = await prisma.recordingSession.findFirst({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!row) return { session: null };
+    }
+
+    const session = toSafeSession(row);
+    let live: unknown;
+    if (row.status === 'RECORDING') {
+      try {
+        live = await this.deps.recordingStatus();
+      } catch {
+        // fail-safe: omit live probe
+      }
+    }
+    return live !== undefined ? { session, live } : { session };
+  }
+
+  async stop(
+    userId: string,
+    sessionId: string,
+  ): Promise<{ sessionId: string; artifactId: string | null; status: string }> {
+    const row = await prisma.recordingSession.findUnique({ where: { id: sessionId } });
+    if (!row) throw errors.notFound('錄製工作階段不存在');
+    if (row.userId !== userId) {
+      throw errors.forbidden('無權操作此錄製工作階段');
+    }
+
+    // Idempotent: already terminal / past stop — do not call MCP again.
+    if (row.status !== 'RECORDING') {
+      return {
+        sessionId: row.id,
+        artifactId: row.artifactId,
+        status: row.status,
+      };
+    }
+
+    const result = await this.deps.stopRecording();
+    const artifactId = ulid();
+    const updated = await prisma.recordingSession.update({
+      where: { id: sessionId },
+      data: {
+        status: 'STOPPED',
+        artifactId,
+        metadataPath: result.metadataPath ?? null,
+        eventsPath: result.eventsPath ?? null,
+        stoppedAt: new Date(),
+      },
+    });
+
+    if (this.activeSessionId === sessionId) this.activeSessionId = null;
+    publishProgress(userId, {
+      sessionId,
+      status: 'STOPPED',
+      artifactId,
+    });
+
+    return {
+      sessionId: updated.id,
+      artifactId: updated.artifactId,
+      status: updated.status,
+    };
+  }
+
+  async compileToDraft(
+    userId: string,
+    sessionId: string,
+    agentId: string,
+    hint?: string,
+  ): Promise<{ skillId: string; reviewStatus: string; sessionId: string }> {
+    const row = await prisma.recordingSession.findUnique({ where: { id: sessionId } });
+    if (!row) throw errors.notFound('錄製工作階段不存在');
+    if (row.userId !== userId) {
+      throw errors.forbidden('無權操作此錄製工作階段');
+    }
+    if (!row.agentId) {
+      throw errors.badRequest('這是舊版錄製工作階段，請重新錄製以綁定 Agent');
+    }
+    if (row.agentId !== agentId) {
+      throw errors.conflict('此錄製屬於另一位 Agent，無法匯入目前 Agent');
+    }
+
+    // Idempotent: already compiled.
+    if (row.skillId) {
+      const skill = await prisma.skill.findUnique({ where: { id: row.skillId } });
+      return {
+        skillId: row.skillId,
+        reviewStatus: skill?.reviewStatus ?? 'AWAITING_USER_CONFIRM',
+        sessionId: row.id,
+      };
+    }
+
+    if (row.status !== 'STOPPED' && row.status !== 'RECORDED') {
+      throw errors.badRequest('請先結束錄製');
+    }
+
+    await prisma.recordingSession.update({
+      where: { id: sessionId },
+      data: { status: 'COMPILING' },
+    });
+    publishProgress(userId, { sessionId, status: 'COMPILING' });
+
+    try {
+      const result = await this.deps.buildSkillFromRecording({
+        agentId,
+        createdBy: userId,
+        hint,
+        metadataPath: row.metadataPath ?? undefined,
+        eventsPath: row.eventsPath ?? undefined,
+      });
+
+      await prisma.recordingSession.update({
+        where: { id: sessionId },
+        data: {
+          status: 'RECORDED',
+          skillId: result.skillId,
+          compiledAt: new Date(),
+        },
+      });
+      publishProgress(userId, {
+        sessionId,
+        status: 'RECORDED',
+        skillId: result.skillId,
+      });
+
+      return {
+        skillId: result.skillId,
+        reviewStatus: result.reviewStatus,
+        sessionId: row.id,
+      };
+    } catch (e) {
+      await prisma.recordingSession.update({
+        where: { id: sessionId },
+        data: {
+          status: 'FAILED',
+          note: e instanceof Error ? e.message : String(e),
+        },
+      });
+      throw e;
+    }
+  }
+
+  /** Caller's RECORDING session, or the in-memory active one if it belongs to them. */
+  async currentActiveSessionFor(userId: string): Promise<SafeRecordingSession | null> {
+    if (this.activeSessionId) {
+      const active = await prisma.recordingSession.findUnique({
+        where: { id: this.activeSessionId },
+      });
+      if (active && active.userId === userId && active.status === 'RECORDING') {
+        return toSafeSession(active);
+      }
+    }
+    const row = await prisma.recordingSession.findFirst({
+      where: { userId, status: 'RECORDING' },
+      orderBy: { createdAt: 'desc' },
+    });
+    return row ? toSafeSession(row) : null;
+  }
+
+  /** Caller's most recent STOPPED or RECORDED session (for to-skill resolution). */
+  async latestStoppedSessionFor(userId: string): Promise<SafeRecordingSession | null> {
+    const row = await prisma.recordingSession.findFirst({
+      where: { userId, status: { in: ['STOPPED', 'RECORDED'] } },
+      orderBy: { createdAt: 'desc' },
+    });
+    return row ? toSafeSession(row) : null;
+  }
+}
+
+export const recordingService = new RecordingService();
+// Fire-and-forget recovery on module load — never block import.
+void recordingService.recoverInterrupted().catch(() => {});

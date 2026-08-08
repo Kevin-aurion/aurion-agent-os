@@ -166,8 +166,10 @@ async function main() {
     );
     console.log('redactor OK; reviewStatus=', skill!.reviewStatus);
 
-    // ── 4. Route guards ────────────────────────────────────────────────────
-    console.log('\n── [4] route guards (start/stop trainer; status auth) ──');
+    // ── 4. Route guards (draft capture = requireAuth; never auto-start in tests) ──
+    // Workbench Phase 1: MEMBER may use start/stop/to-skill for inert drafts; FDE alone confirms.
+    // Do NOT call start here (would invoke event_stream_start).
+    console.log('\n── [4] route guards (auth required; unauth 401) ──');
     const app = Fastify({ logger: false });
     await app.register(recordingRoutes);
 
@@ -179,25 +181,26 @@ async function main() {
     console.log('status no auth:', s0.statusCode);
     assert(s0.statusCode === 401, `status unauth expected 401, got ${s0.statusCode}`);
 
-    // start as MEMBER → 403
-    const stMember = await app.inject({
-      method: 'POST',
-      url: '/api/recording/start',
+    // start/stop without auth → 401 (must not reach MCP)
+    const stUnauth = await app.inject({ method: 'POST', url: '/api/recording/start' });
+    assert(stUnauth.statusCode === 401, `start unauth expected 401, got ${stUnauth.statusCode}`);
+    const spUnauth = await app.inject({ method: 'POST', url: '/api/recording/stop' });
+    assert(spUnauth.statusCode === 401, `stop unauth expected 401, got ${spUnauth.statusCode}`);
+
+    // MEMBER may call status (auth ok) — may succeed or return clear MCP error; never starts recording
+    const sMember = await app.inject({
+      method: 'GET',
+      url: '/api/recording/status',
       headers: { authorization: `Bearer ${memberToken}` },
     });
-    console.log('start as MEMBER:', stMember.statusCode, stMember.body.slice(0, 120));
-    assert(stMember.statusCode === 403, `start member expected 403, got ${stMember.statusCode}`);
+    console.log('status as MEMBER:', sMember.statusCode, sMember.body.slice(0, 200));
+    assert(
+      sMember.statusCode === 200 || sMember.statusCode === 500 || sMember.statusCode === 503,
+      `MEMBER status unexpected ${sMember.statusCode}`,
+    );
+    assert(sMember.statusCode !== 403, 'MEMBER must not be forbidden from draft-capture status');
 
-    // stop as MEMBER → 403
-    const spMember = await app.inject({
-      method: 'POST',
-      url: '/api/recording/stop',
-      headers: { authorization: `Bearer ${memberToken}` },
-    });
-    console.log('stop as MEMBER:', spMember.statusCode);
-    assert(spMember.statusCode === 403, `stop member expected 403, got ${spMember.statusCode}`);
-
-    // status as authenticated (trainer) — may succeed or return clear MCP error; never starts recording
+    // status as authenticated (trainer)
     const sOk = await app.inject({
       method: 'GET',
       url: '/api/recording/status',

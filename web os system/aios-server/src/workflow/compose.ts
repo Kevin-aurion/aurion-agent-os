@@ -38,6 +38,8 @@ const FlatStepSchema = z
     skillId: z.string().optional(),
     instructions: z.string().optional(),
     timeoutMs: z.number().optional(),
+    deviceId: z.string().optional(),
+    app: z.string().optional(),
     prompt: z.string().optional(), // alias for DO instruction
     config: z.record(z.unknown()).optional(),
   })
@@ -101,6 +103,10 @@ function normalizeFlatStep(raw: unknown): NormalizedStep | null {
         (s.args as Record<string, string> | undefined) ??
         (nested.args as Record<string, string> | undefined);
       config = args ? { tool, args } : { tool };
+      const deviceId = pickStr(flat, nested, 'deviceId');
+      if (deviceId) config.deviceId = deviceId;
+      // device-mcp:* tools require deviceId (fail-closed at normalize if missing).
+      if (tool.startsWith('device-mcp:') && !deviceId) return null;
       break;
     }
     case 'AGENT': {
@@ -134,10 +140,13 @@ function normalizeFlatStep(raw: unknown): NormalizedStep | null {
     }
     case 'COMPUTER_CONTROL': {
       const skillId = pickStr(flat, nested, 'skillId');
-      if (!skillId) return null;
-      config = { skillId };
+      const deviceId = pickStr(flat, nested, 'deviceId');
+      if (!skillId || !deviceId) return null; // deviceId required — no public broadcast path
+      config = { skillId, deviceId };
       const instructions = pickStr(flat, nested, 'instructions');
       if (instructions) config.instructions = instructions;
+      const app = pickStr(flat, nested, 'app');
+      if (app) config.app = app;
       const timeoutMs =
         typeof s.timeoutMs === 'number'
           ? s.timeoutMs
@@ -212,11 +221,11 @@ function buildComposePrompt(agentContext: string, requirement: string): string {
     '',
     '## Step types and required flat fields',
     '- DO: instruction (string, required). Optional: permissions ("full"|"restricted"), skipVerify (boolean), verifyRubric (string).',
-    '- TOOL: tool (string, required; currently mainly "upload_to_cloud"). Optional: args (object of string values).',
+    '- TOOL: tool (string, required). Optional: args, deviceId. For device-local LINE use tool "device-mcp:line-desktop:<tool>" with deviceId (required). Central MCP remains "mcp:<serverId>:<tool>".',
     '- AGENT: agentSlug (string, required). Optional: brief (string).',
     '- CONDITION: expr (string, required). Optional: onTrue (stepKey), onFalse (stepKey).',
     '- NOTIFY: message (string, required). Optional: channel ("LINE"), bindingId, to.',
-    '- COMPUTER_CONTROL: skillId (string, required). Optional: instructions, timeoutMs (number).',
+    '- COMPUTER_CONTROL: skillId + deviceId (both required — target enrolled device). Optional: instructions, timeoutMs, app, checkpoint.',
     '',
     '## Rules',
     '- stepKey: short alphanumeric (and underscore) keys; must be unique within steps.',

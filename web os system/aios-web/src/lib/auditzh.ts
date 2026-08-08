@@ -39,6 +39,12 @@ const ACTION_ZH: Record<string, string> = {
   'cloud.createSampleFile': '建立雲端範例檔案',
   'cloud.createSpreadsheet': '建立雲端試算表',
   'integration.connected': '帳號連動成功',
+  'reflection.cycle.finished': '完成反思整理',
+  'reflection.cycle.failed': '反思整理失敗',
+  'reflection.suggestion.proposed': '送交反思優化建議',
+  'reflection.suggestion.dismissed': '忽略反思優化建議',
+  'proposal.approved': '核准變更提案',
+  'proposal.rejected': '駁回變更提案',
 };
 
 const ENTITY_ZH: Record<string, string> = {
@@ -50,6 +56,9 @@ const ENTITY_ZH: Record<string, string> = {
   Conversation: '對話',
   CloudFileRef: '雲端檔案',
   ChannelBinding: '頻道綁定',
+  ReflectionCycle: '反思整理',
+  ReflectionSuggestion: '反思優化建議',
+  ChangeProposal: '變更提案',
 };
 
 /** Traditional-Chinese label for an audit action code. Falls back to the raw code when unknown. */

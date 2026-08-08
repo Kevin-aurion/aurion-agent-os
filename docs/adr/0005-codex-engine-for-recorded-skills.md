@@ -1,6 +1,6 @@
 # ADR 0005 — 錄製／Computer Use 技能強制 CODEX 主引擎，經 Codex App 的 MCP 驅動
 
-**狀態**：已接受（2026-07）。**依賴已實機驗證。**
+**狀態**：已接受（2026-07）。**握手與 `tools/list` 已實機驗證；live `tools/call` 尚未端對端通過（見文末「已知限制（Slice 6 更新）」）。**
 
 ## 實機驗證的事實（2026-07-25）
 Codex App 隨附的 MCP 伺服器**確實存在且可用**（先前誤以為只有 `codex mcp-server` 的 `codex`/`codex-reply`，該判斷已作廢）：
@@ -43,3 +43,11 @@ Codex App 隨附的 MCP 伺服器**確實存在且可用**（先前誤以為只�
 ## 後果 / 風險
 - 依賴 **Proprietary** 外掛與 Codex App 版本；App 更新可能改變工具介面 → 橋接層需版本偵測與明確失敗訊息。
 - Computer Use 走 accessibility，需系統「輔助使用」權限；失敗要能清楚回報而非靜默。
+
+## 已知限制（Slice 6 更新，2026-07-27）
+
+**誠實現況**：MCP 握手與 `tools/list`（Computer Use 約 10 工具、Record & Replay 3 工具）已實機驗證可用；但**真正的 `tools/call` 在現況下會 timeout**（`codex exec` 亦約 10 分鐘無回應）。研判需 **Codex/ChatGPT App UI 端確認**或特定授權脈絡才會放行。
+
+- **本 ADR 不宣稱 live Computer Use 端對端成功**；產品文件與測試不得誇大「電腦操控已 live 可用」。桌面授權阻擋時應精確如實回報上述 timeout 條件。
+- 可獨立驗收的部分：`RECORDED` 匯入路徑與治理閘（`origin=RECORDED` → `AWAITING_USER_CONFIRM` → FDE 確認、`redactSecrets`、掛載時強制 `engineExecute=CODEX`）。
+- 待上游授權／UI 脈絡打通後，再補 live `tools/call` 端對端證據，並更新本節。

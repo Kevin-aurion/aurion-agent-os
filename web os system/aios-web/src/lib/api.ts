@@ -7,6 +7,7 @@ type Envelope<T> = { success: true; data: T } | { success: false; error: { code:
 
 const ACCESS_KEY = 'aios.access';
 const REFRESH_KEY = 'aios.refresh';
+export const AUTH_EXPIRED_EVENT = 'aios:auth-expired';
 
 export const tokens = {
   get access() { return typeof window === 'undefined' ? null : localStorage.getItem(ACCESS_KEY); },
@@ -18,6 +19,7 @@ export const tokens = {
   clear() {
     localStorage.removeItem(ACCESS_KEY);
     localStorage.removeItem(REFRESH_KEY);
+    window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
   },
 };
 
@@ -25,18 +27,86 @@ class ApiError extends Error {
   constructor(public code: string, message: string) { super(message); }
 }
 
-async function refreshAccess(): Promise<boolean> {
+let refreshInFlight: Promise<boolean> | null = null;
+
+function jwtExpiresWithin(token: string | null, withinMs: number): boolean {
+  if (!token) return true;
+  try {
+    const encoded = token.split('.')[1]!.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = encoded.padEnd(Math.ceil(encoded.length / 4) * 4, '=');
+    const payload = JSON.parse(
+      atob(padded),
+    ) as { exp?: number };
+    return typeof payload.exp !== 'number' || payload.exp * 1000 <= Date.now() + withinMs;
+  } catch {
+    return true;
+  }
+}
+
+async function performRefresh(accessBeforeWaiting: string | null): Promise<boolean> {
   const refresh = tokens.refresh;
-  if (!refresh) return false;
-  const res = await fetch('/api/auth/refresh', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ refresh, client: 'web' }),
+  if (!refresh) {
+    tokens.clear();
+    return false;
+  }
+
+  // Another tab may have completed the rotation while this tab waited for the
+  // shared lock. Reuse its fresh access token instead of rotating again.
+  if (
+    tokens.access &&
+    tokens.access !== accessBeforeWaiting &&
+    !jwtExpiresWithin(tokens.access, 10_000)
+  ) {
+    return true;
+  }
+
+  try {
+    const res = await fetch('/api/auth/refresh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ refresh, client: 'web' }),
+    });
+    const body = (await res.json().catch(() => null)) as
+      | Envelope<{ access: string; refresh: string }>
+      | null;
+    if (!res.ok || !body) {
+      if (res.status === 401 || res.status === 403) tokens.clear();
+      return false;
+    }
+    if (!body.success) {
+      if (res.status === 401 || res.status === 403) tokens.clear();
+      return false;
+    }
+    tokens.set(body.data.access, body.data.refresh);
+    return true;
+  } catch {
+    // A temporary network outage is not proof that the session is invalid.
+    // Preserve the refresh token so the next request can retry.
+    return false;
+  }
+}
+
+/** One refresh per tab and, when supported, one refresh across all tabs. */
+export function refreshAccess(accessBeforeWaiting = tokens.access): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight;
+  const run = async () => {
+    if (typeof navigator !== 'undefined' && navigator.locks) {
+      return navigator.locks.request('aios-auth-refresh', () =>
+        performRefresh(accessBeforeWaiting),
+      );
+    }
+    return performRefresh(accessBeforeWaiting);
+  };
+  refreshInFlight = run().finally(() => {
+    refreshInFlight = null;
   });
-  const body = (await res.json()) as Envelope<{ access: string; refresh: string }>;
-  if (!body.success) { tokens.clear(); return false; }
-  tokens.set(body.data.access, body.data.refresh);
-  return true;
+  return refreshInFlight;
+}
+
+/** Ensure long-lived connections do not start with an almost-expired JWT. */
+export async function ensureFreshAccess(withinMs = 60_000): Promise<boolean> {
+  if (!jwtExpiresWithin(tokens.access, withinMs)) return true;
+  return refreshAccess();
 }
 
 /** Normalize an endpoint to the same-origin `/api/*` prefix the Next rewrite
@@ -52,11 +122,13 @@ export async function api<T = unknown>(rawPath: string, init: RequestInit = {}, 
   if (!headers.has('content-type') && init.body && !(init.body instanceof FormData)) {
     headers.set('content-type', 'application/json');
   }
-  if (tokens.access) headers.set('authorization', `Bearer ${tokens.access}`);
+  const accessForRequest = tokens.access;
+  if (accessForRequest) headers.set('authorization', `Bearer ${accessForRequest}`);
 
   const res = await fetch(path, { ...init, headers });
-  if (res.status === 401 && retry && (await refreshAccess())) {
-    return api<T>(path, init, false);
+  if (res.status === 401 && retry) {
+    if (await refreshAccess(accessForRequest)) return api<T>(path, init, false);
+    if (!tokens.refresh) tokens.clear();
   }
   const body = (await res.json().catch(() => ({ success: false, error: { code: 'PARSE', message: 'bad response' } }))) as Envelope<T>;
   if (!body.success) throw new ApiError(body.error.code, body.error.message);
