@@ -121,6 +121,7 @@ enum ProposalTarget {
   SKILL
   RESTRICTION
   IDENTITY_CARD
+  SCHEDULE
 }
 
 enum ReflectionCycleStatus {

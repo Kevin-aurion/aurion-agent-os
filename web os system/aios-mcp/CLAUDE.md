@@ -36,7 +36,7 @@
 - 每 **10 分鐘** 用單次 refresh token **主動輪替**；持久化於 `AIOS_MCP_STATE_DIR`（預設 `~/.aios-mcp`）
 - 遇 **401** 強制刷新後**重試一次**
 - 憑證在 `.env`：`AIOS_MCP_EMAIL` / `AIOS_MCP_PASSWORD`（**MEMBER 角色即足夠**）
-- 客戶端建置用途設定 `AIOS_MCP_PROFILE=builder`，只註冊十五個 Agent Builder／Hook 工具與 resources；`full` 才註冊完整 provider 能力
+- 客戶端用途設定 `AIOS_MCP_PROFILE=builder`，只註冊二十一個 Agent Builder／Hook／Runtime 工具與 Builder resources；`full` 才註冊完整 provider 能力
 
 ## 工具模組（`src/tools/`）
 
@@ -49,6 +49,7 @@
 | **`recording`**（slice4） | 錄製起停／狀態／轉技能 → aios-server 錄製 API（如 `/api/recording/*`、`/api/agents/:id/recording/to-skill`）；產物仍停在 **待確認**、依 **user 隔離**；不接受前端任意本機路徑 |
 | **`googleworkspace`** | Gmail／Drive 唯讀工具；草稿／寄信／Drive 寫入另走 FDE + 真核准 Run + Agent restriction 的 fail-closed route |
 | **`agentbuilder`** | ChatGPT/Claude/Codex/Cursor 建置對話逐輪同步、檔案、完整 Agent/Skill/Memory/Workflow/Test shadow draft、狀態、送 FDE 審核與初審後測試；不得 approve／confirm／activate |
+| **`agentruntime`** | 列出登入帳號自己的 ACTIVE Agent、讀能力、冪等呼叫與查 Run；排程只建立 `SCHEDULE` ChangeProposal，FDE 核准前不生效 |
 
 Resources 在 `src/resources/`（agents / skills / workflows / memory / system / agentbuilder）；prompt `build-aios-agent` 在 `src/prompts/`。
 

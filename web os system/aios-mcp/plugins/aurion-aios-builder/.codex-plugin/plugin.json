@@ -1,7 +1,7 @@
 {
   "name": "aurion-aios-builder",
-  "version": "1.2.1",
-  "description": "Build governed AI employees through natural conversations and synchronize durable drafts to Aurion AIOS.",
+  "version": "1.3.0",
+  "description": "Build governed AI employees, invoke approved employees, and request FDE-reviewed schedules through Aurion AIOS.",
   "author": {
     "name": "Aurion",
     "url": "https://aurion-aios.lazyoffice.app/agent-builds"
@@ -24,13 +24,16 @@
     "capabilities": [
       "Adaptive agent interviews",
       "Agent and Skill drafting",
-      "Governed testing and review"
+      "Governed testing and review",
+      "Approved Agent invocation",
+      "FDE-reviewed recurring schedules"
     ],
     "websiteURL": "https://aurion-aios.lazyoffice.app/agent-builds",
     "defaultPrompt": [
       "Help me build an AI employee for a recurring business task.",
       "Continue one of my unfinished AI employee builds.",
-      "Review and improve the latest draft of my AI employee."
+      "Review and improve the latest draft of my AI employee.",
+      "Use one of my approved AIOS employees to complete this task."
     ],
     "brandColor": "#7B83FF"
   }

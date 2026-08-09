@@ -17,6 +17,7 @@ Fastify 路由，全部掛在 `/api/*`。多數以 `requireAuth` preHandler 保�
 - `dashboard.ts` — 總覽統計。
 - `auth.ts` — 登入 / token。
 - `mcpoauth.ts` — 公開 Agent Builder Remote MCP 的 OAuth 2.1 邊界：discovery、DCR、Claude／ChatGPT hosted callback、登入／同意、authorization code + PKCE S256、RFC 8707 resource audience、refresh rotation、revoke。OAuth 回應依協議直接回 JSON／HTML，不包 `ok()`；scope 固定 `aios:agent-builder`，不可取得 FDE 生效能力。
+- `agentruntime.ts` — 公開 Remote MCP 的帳號隔離 Runtime：只列/讀/呼叫登入者自己的 ACTIVE Agent；Run 以 idempotency key 去重；高風險沿用 HITL。排程只能建立 `SCHEDULE` ChangeProposal，FDE 核准前不得生效。
 - `health.ts` — 健康檢查。
 
 ## 注意

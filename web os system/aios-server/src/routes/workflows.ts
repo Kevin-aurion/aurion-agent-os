@@ -23,6 +23,9 @@ export const TriggerSchema = z
     topic: z.string().optional(),
     secret: z.string().optional(), // plaintext, only ever accepted in — never persisted
     secretHash: z.string().optional(),
+    timezone: z.string().min(1).max(120).optional(),
+    input: z.record(z.unknown()).optional(),
+    scheduleEnabled: z.boolean().optional(),
   })
   .passthrough();
 
@@ -58,14 +61,22 @@ export async function syncSchedule(workflowId: string, trigger: Record<string, u
     return;
   }
   const cron = String(trigger.cron);
+  const timezone =
+    typeof trigger.timezone === 'string' && trigger.timezone.trim()
+      ? trigger.timezone.trim()
+      : config.tz;
+  const scheduleEnabled = enabled && trigger.scheduleEnabled !== false;
   const existing = await prisma.schedule.findFirst({ where: { workflowId } });
   let scheduleId: string;
   if (existing) {
-    await prisma.schedule.update({ where: { id: existing.id }, data: { cron, enabled } });
+    await prisma.schedule.update({
+      where: { id: existing.id },
+      data: { cron, timezone, enabled: scheduleEnabled },
+    });
     scheduleId = existing.id;
   } else {
     const created = await prisma.schedule.create({
-      data: { id: ulid(), workflowId, cron, timezone: config.tz, enabled },
+      data: { id: ulid(), workflowId, cron, timezone, enabled: scheduleEnabled },
     });
     scheduleId = created.id;
   }

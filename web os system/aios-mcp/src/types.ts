@@ -60,6 +60,77 @@ export interface ScheduleInfo {
   nextFireAt: string | null;
 }
 
+export interface AgentRuntimeWorkflow {
+  id: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  inputSchema: unknown;
+  stepCount: number;
+  triggerType: unknown;
+  schedule: ScheduleInfo | null;
+}
+
+export interface AgentRuntimeSummary {
+  id: string;
+  name: string;
+  description: string;
+  department: string;
+  riskTier: string;
+  approvalRequired: boolean;
+  confirmedSkillCount: number;
+  workflows: AgentRuntimeWorkflow[];
+  updatedAt: string;
+}
+
+export interface AgentRuntimeDetail {
+  id: string;
+  name: string;
+  description: string;
+  department: string;
+  identityCard: unknown;
+  riskTier: string;
+  approvalRequired: boolean;
+  skills: Array<{
+    id: string;
+    name: string;
+    kind: string;
+    origin: string;
+    executionEnv: string;
+    understanding: unknown;
+  }>;
+  workflows: AgentRuntimeWorkflow[];
+}
+
+export interface AgentRuntimeRun {
+  id: string;
+  agentId: string;
+  workflowId: string | null;
+  status: RunStatus;
+  input: unknown;
+  output: unknown;
+  stoppedAt: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  steps: Array<{
+    stepKey: string;
+    round: number;
+    status: string;
+    output: string | null;
+    approved: boolean | null;
+    error: string | null;
+    startedAt: string;
+    endedAt: string | null;
+  }>;
+}
+
+export interface ScheduleProposalResponse {
+  proposalId: string;
+  status: 'PENDING';
+  deduplicated: boolean;
+  note: string;
+}
+
 /** Shape of GET /api/agents/:agentId/workflows items (serializeWorkflowSummary). */
 export interface WorkflowSummary {
   id: string;

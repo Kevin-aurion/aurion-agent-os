@@ -35,9 +35,16 @@ export async function runWorkflow(
 ): Promise<RunOutcome> {
   const workflow = await prisma.workflow.findUnique({
     where: { id: workflowId },
-    include: { steps: { orderBy: { position: 'asc' } } },
+    include: {
+      agent: { select: { status: true, deletedAt: true } },
+      steps: { orderBy: { position: 'asc' } },
+    },
   });
   if (!workflow || workflow.deletedAt) throw errors.notFound(`Workflow not found: ${workflowId}`);
+  if (!workflow.enabled) throw errors.conflict(`Workflow is not enabled: ${workflowId}`);
+  if (workflow.agent.deletedAt || workflow.agent.status !== 'ACTIVE') {
+    throw errors.conflict(`Workflow Agent is not active: ${workflow.agentId}`);
+  }
   if (workflow.steps.length === 0) throw errors.badRequest(`Workflow ${workflowId} has no steps configured`);
 
   hub.publish('workflow.triggered', {

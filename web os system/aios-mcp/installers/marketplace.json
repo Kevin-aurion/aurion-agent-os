@@ -8,8 +8,8 @@
   "plugins": [
     {
       "name": "aurion-aios-builder",
-      "description": "Build AI employees in Claude and synchronize them to Aurion AIOS over its hosted OAuth Remote MCP.",
-      "version": "1.2.1",
+      "description": "Build AI employees, invoke approved employees, and request governed schedules over the hosted AIOS OAuth Remote MCP.",
+      "version": "1.3.0",
       "author": {
         "name": "Aurion"
       },

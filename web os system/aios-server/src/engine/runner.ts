@@ -1855,6 +1855,9 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
   if (opts.signal?.aborted) throw new Error('Agent run aborted before start');
   const agentRow = await prisma.agent.findUnique({ where: { id: opts.agentId } });
   if (!agentRow || agentRow.deletedAt) throw errors.notFound(`Agent not found: ${opts.agentId}`);
+  if (agentRow.status !== 'ACTIVE' && !opts.builderTestSessionId) {
+    throw errors.conflict(`Agent is not active: ${opts.agentId}`);
+  }
 
   // Pre-execution HITL gate: high-risk agents OR LINE send tools halt before any engine call.
   // Only a real DB ApprovalRequest with status APPROVED counts (fail-closed).

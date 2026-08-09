@@ -49,6 +49,7 @@ const TARGET_ZH: Record<string, string> = {
   AGENT: 'Agent 指引',
   RESTRICTION: '限制',
   IDENTITY_CARD: '身份卡',
+  SCHEDULE: '排程',
 };
 
 function sourceLabel(source: string) {

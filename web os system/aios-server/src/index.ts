@@ -27,6 +27,7 @@ import { identityRoutes } from './routes/identity.js';
 import { docparseRoutes } from './routes/docparse.js';
 import { trainingRoutes } from './routes/training.js';
 import { agentBuilderRoutes } from './routes/agentbuilder.js';
+import { agentRuntimeRoutes } from './routes/agentruntime.js';
 import { voiceRoutes } from './routes/voice.js';
 import { mcpRoutes } from './routes/mcp.js';
 import { googleWorkspaceRoutes } from './routes/googleworkspace.js';
@@ -54,6 +55,7 @@ const featureRoutes = [
   docparseRoutes,
   trainingRoutes,
   agentBuilderRoutes,
+  agentRuntimeRoutes,
   voiceRoutes,
   mcpRoutes,
   googleWorkspaceRoutes,

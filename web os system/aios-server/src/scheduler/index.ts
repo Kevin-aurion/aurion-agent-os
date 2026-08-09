@@ -82,7 +82,10 @@ function computeNextFireAt(cronExpr: string, tz: string, from = new Date()): Dat
  */
 export async function syncSchedule(scheduleId: string): Promise<void> {
   if (!runsQueue) return; // scheduler not running (e.g. Redis down) — no-op
-  const schedule = await prisma.schedule.findUnique({ where: { id: scheduleId } });
+  const schedule = await prisma.schedule.findUnique({
+    where: { id: scheduleId },
+    include: { workflow: { select: { trigger: true } } },
+  });
   if (!schedule) {
     await removeSchedule(scheduleId);
     return;
@@ -97,6 +100,16 @@ export async function syncSchedule(scheduleId: string): Promise<void> {
   if (!nextFireAt) return; // bad cron expression — leave existing scheduler alone
 
   try {
+    const trigger =
+      schedule.workflow.trigger &&
+      typeof schedule.workflow.trigger === 'object' &&
+      !Array.isArray(schedule.workflow.trigger)
+        ? (schedule.workflow.trigger as Record<string, unknown>)
+        : {};
+    const scheduledInput =
+      trigger.input && typeof trigger.input === 'object' && !Array.isArray(trigger.input)
+        ? trigger.input
+        : undefined;
     await runsQueue.upsertJobScheduler(
       schedulerId(schedule.id),
       { pattern: schedule.cron, tz },
@@ -104,6 +117,7 @@ export async function syncSchedule(scheduleId: string): Promise<void> {
         name: 'workflow-run',
         data: {
           workflowId: schedule.workflowId,
+          ...(scheduledInput ? { input: scheduledInput } : {}),
           triggeredBy: 'schedule',
           scheduleId: schedule.id,
         },

@@ -41,10 +41,17 @@ try {
     'submit_agent_build_for_fde_review',
     'submit_agent_build_test_data',
     'run_agent_build_test',
+    'list_available_agents',
+    'get_agent_capabilities',
+    'invoke_agent',
+    'get_agent_run',
+    'list_agent_schedules',
+    'request_agent_schedule',
   ]) assert(names.has(required), `missing MCP tool: ${required}`);
 
   const prompts = await client.listPrompts();
   assert(prompts.prompts.some((prompt) => prompt.name === 'build-aios-agent'));
+  assert(prompts.prompts.some((prompt) => prompt.name === 'use-aios-agent'));
   const prompt = await client.getPrompt({
     name: 'build-aios-agent',
     arguments: { request: '建立一位客戶回饋整理員工', source: 'CLAUDE_DESKTOP' },

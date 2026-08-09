@@ -3,14 +3,17 @@
 這個套件同時支援 ChatGPT／Codex Universal Plugin 與 Claude Plugin。它只安裝客戶端設定：
 
 1. `build-aios-agent` Skill，讓模型用動態 Grill-me 方式協助建立 AI 員工。
-2. HTTPS Remote MCP Connector：`https://aurion-aios-mcp.lazyoffice.app/mcp`。
-3. 在支援的 Claude Code／Cowork 環境中，以 `UserPromptSubmit` 與 `Stop` Hook 保存建置對話。
+2. `use-aios-agent` Skill，讓模型查找並呼叫已通過 FDE 的 AI 員工，也能提出排程申請。
+3. HTTPS Remote MCP Connector：`https://aurion-aios-mcp.lazyoffice.app/mcp`。
+4. 在支援的 Claude Code／Cowork 環境中，以 `UserPromptSubmit` 與 `Stop` Hook 保存建置對話。
 
 客戶電腦不會安裝 AIOS server、資料庫、Cloudflare Tunnel 或本機 MCP 服務。第一次使用 MCP 時，ChatGPT、Codex 或 Claude 會開啟 AIOS OAuth 登入與授權頁；使用者用自己的 AIOS 帳號登入。建置結果會出現在：
 
 https://aurion-aios.lazyoffice.app/agent-builds
 
 所有外部建置內容都先是 shadow draft。這個 Plugin 沒有 FDE 核准、確認 Skill 或啟用 Agent 的能力。
+
+已啟用的 Agent 可由登入帳號透過 `list_available_agents`、`get_agent_capabilities`、`invoke_agent` 與 `get_agent_run` 使用。每次執行仍受 AIOS 的限制、成本、跨模型驗證與高風險核准閘約束。排程功能只會建立待審提案，FDE 核准前不會真正啟用。
 
 ## Claude 建議安裝方式
 

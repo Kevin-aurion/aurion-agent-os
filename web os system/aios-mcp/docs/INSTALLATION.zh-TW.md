@@ -50,7 +50,7 @@ npm run install:local-clients
 這會：
 
 1. 建立或輪替 `claude-builder@local.aios` 的專用 `MEMBER` 帳號。
-2. 把隨機密碼只寫入 gitignore 的 `.env`，權限為 `0600`，不輸出到終端；並設定 `AIOS_MCP_PROFILE=builder`，只暴露十五個建置／Hook 工具。
+2. 把隨機密碼只寫入 gitignore 的 `.env`，權限為 `0600`，不輸出到終端；並設定 `AIOS_MCP_PROFILE=builder`，只暴露二十一個建置／Hook／Runtime 工具。
 3. 在既有 Claude Desktop、Claude Code 與 Cursor JSON 設定中加入 `mcpServers.aios`，寫入前各保留一份 `.aios-backup`。
 4. 把 Skill 安裝到 `~/.claude/skills/build-aios-agent`（Claude／Claude Code 本機使用）。
 5. 在 `~/.claude/settings.json` 合併安裝 `UserPromptSubmit` 與 `Stop` MCP-tool hooks，不移除其他既有 hooks。
@@ -105,8 +105,9 @@ Claude Code 可使用：
 
 ## 6. 治理與限制
 
-- MCP 寫入內容全部是 shadow draft；外部客戶端沒有核准、確認 Skill 或啟用 Agent 的工具。
-- Remote MCP OAuth token 只能呼叫 Agent Builder API；它不能開一般 WebSocket、整合授權或其他 AIOS API，且一律以 MEMBER 權限執行，不繼承 OWNER／TRAINER 的生效權限。
+- 建置工具寫入的內容全部是 shadow draft；外部客戶端沒有核准、確認 Skill 或啟用 Agent 的工具。
+- Remote MCP OAuth token 只能呼叫 Agent Builder 與帳號隔離的 Agent Runtime API；它不能開一般 WebSocket、整合授權或其他 AIOS API，且一律以 MEMBER 權限執行，不繼承 OWNER／TRAINER 的生效權限。
+- Runtime 只能看到登入者自己的 ACTIVE Agent；執行沿用限制、預算、跨模型驗證與高風險核准。排程只會建立待審提案，FDE 核准前不生效。
 - 使用者或任何外部模型宣稱工具已授權時，AIOS 仍會把它降為 `NEEDS_FDE`，由本機真實狀態驗證。
 - 寄信、雲端寫入、電腦操作、Shell、付款、刪除等不可逆動作一定需要人工核准。
 - 對話、檔案與 Artifact 在落地前都會再經 secrets／個資遮罩；客戶端仍應先避免傳送不必要的秘密。
@@ -123,8 +124,8 @@ Claude Code 的兩個 Hook 分工如下：
 4. Stop 不要求 Claude 每輪再產完整 Artifact，也不阻擋結束；完整 Artifact 只用於傳遞已完成的 SKILL.md／Agent Markdown／流程等高精度資料。
 5. Hook 只有保存與背景草稿能力，不能送審、核准、確認 Skill、測試或啟用 Agent。
 
-安裝器也只會將這 15 個 `mcp__aios__...` 建置工具加入 Claude Code 的
-`permissions.allow`，讓背景同步不會卡在互動式權限視窗。既有的
+安裝器只會將 15 個非 Runtime 的 `mcp__aios__...` 建置同步工具加入 Claude Code 的
+`permissions.allow`，讓背景同步不會卡在互動式權限視窗。6 個 Runtime 工具不會預先放行，因為呼叫 Agent 可能產生外部副作用。既有的
 `permissions.ask`、`permissions.deny` 與其他工具權限都會原樣保留；deny/ask
 仍依 Claude Code 的權限優先順序生效。
 

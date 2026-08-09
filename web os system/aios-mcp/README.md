@@ -1,6 +1,6 @@
 # aios-mcp
 
-MCP provider exposing the central **aios-server** as tools, resources, and an Agent Builder prompt. ChatGPT, Codex, Claude, and Cursor clients connect to the hosted OAuth Remote MCP at `https://aurion-aios-mcp.lazyoffice.app/mcp`; they do **not** install an AIOS server, database, tunnel, Node process, or local MCP service.
+MCP provider exposing the central **aios-server** as tools, resources, Agent Builder, and approved-Agent Runtime prompts. ChatGPT, Codex, Claude, and Cursor clients connect to the hosted OAuth Remote MCP at `https://aurion-aios-mcp.lazyoffice.app/mcp`; they do **not** install an AIOS server, database, tunnel, Node process, or local MCP service.
 
 The MCP process is a REST client of aios-server. External Builder writes are stored as inert, versioned shadow drafts: the MCP exposes no approve, confirm, rollback, or activation tool. FDE review and test/finalization remain inside AIOS.
 
@@ -47,7 +47,7 @@ The provisioner creates or rotates a dedicated `MEMBER` account, keeps its gener
 | `AIOS_MCP_BASE_URL` | `http://127.0.0.1:8700` | aios-server base URL |
 | `AIOS_MCP_EMAIL` / `AIOS_MCP_PASSWORD` | — | Required only for stdio or shared-secret HTTP mode; dedicated local AIOS account |
 | `AIOS_MCP_CLIENT_NAME` | `mcp` | `client` string for login/refresh sessions |
-| `AIOS_MCP_PROFILE` | `full` | `builder` exposes only the fifteen Agent Builder/Stop-guard tools; local customer installation uses this least-privilege profile |
+| `AIOS_MCP_PROFILE` | `full` | `builder` exposes only the twenty-one Agent Builder/Stop-guard/Agent Runtime tools; local customer installation uses this least-privilege profile |
 | `AIOS_MCP_STATE_DIR` | `~/.aios-mcp` | Where the rotated refresh token persists (`session.json`, mode 0600) |
 | `AIOS_MCP_TRANSPORT` | `stdio` | `stdio` or `http` |
 | `AIOS_MCP_HTTP_PORT` | `8701` | HTTP transport port (loopback only) |
@@ -124,8 +124,8 @@ node dist/index.js
 ```
 
 - The process still binds **127.0.0.1:8701 only**. Cloudflare Tunnel on the AIOS host publishes only the required `/mcp`, OAuth, discovery, and health routes.
-- OAuth uses authorization-code + PKCE S256, dynamic client registration, short access tokens, rotating refresh sessions, and per-user AIOS authorization. The issued token is route-scoped to Agent Builder APIs and MEMBER-effective even when an FDE account authorizes it. No shared customer password is embedded in a package.
-- Unauthenticated MCP requests return OAuth protected-resource metadata. Only the fifteen Builder tools are exposed publicly; approval, Skill confirmation, rollback and activation are absent.
+- OAuth uses authorization-code + PKCE S256, dynamic client registration, short access tokens, rotating refresh sessions, and per-user AIOS authorization. The issued token is route-scoped to Agent Builder and account-owned Agent Runtime APIs and MEMBER-effective even when an FDE account authorizes it. No shared customer password is embedded in a package.
+- Unauthenticated MCP requests return OAuth protected-resource metadata. Only the twenty-one Builder/Runtime tools are exposed publicly; approval, Skill confirmation, rollback and activation are absent.
 - stdio and http are mutually exclusive per process — run two processes if both are needed.
 
 ## Tools
@@ -171,6 +171,12 @@ node dist/index.js
 | `submit_agent_build_for_fde_review` | 僅送到 `AWAITING_FDE`；即使 OWNER 憑證也不會自動核准 |
 | `submit_agent_build_test_data` / `run_agent_build_test` | FDE 初審後提供資料並實跑；測試通過仍需 FDE 最終啟用 |
 | `guard_agent_build_stop` | Claude Code Stop hook：補記最後回答與漏掉的使用者原話；不等待 Artifact、不阻止對話結束 |
+| `list_available_agents` | 只列登入帳號自己、已 ACTIVE 的可呼叫員工 |
+| `get_agent_capabilities` | 讀取已確認技能、啟用流程、輸入規格與風險，不暴露草稿內容 |
+| `invoke_agent` | 以 idempotency key 呼叫員工；保留限制、預算、跨模型驗證與高風險 HITL |
+| `get_agent_run` | 追蹤 MCP 呼叫結果，不洩露主機 `runDir` |
+| `list_agent_schedules` | 查看該員工可用流程與目前排程狀態 |
+| `request_agent_schedule` | 只建立 `SCHEDULE` 待審提案；FDE 核准前不生效 |
 
 Async note: `run_workflow`, `test_workflow`, and `converse_with_agent` return immediately with ids; the work completes in the background — poll `get_run(runId)` / `list_messages(conversationId)`.
 
@@ -185,14 +191,17 @@ Async note: `run_workflow`, `test_workflow`, and `converse_with_agent` return im
 - `aios-builds://list` — 目前登入者的 Agent 建置記錄
 - `aios-build://{sessionId}` — 對話、版本、草稿、FDE 與測試狀態
 
-## Agent Builder prompt and Skill
+## Agent Builder / Runtime prompts and Skills
 
 - MCP prompt: `build-aios-agent`
+- MCP prompt: `use-aios-agent`
 - Skill source: `skills/build-aios-agent/`
+- Runtime Skill source: `skills/use-aios-agent/`
 - Restricted GitHub Marketplace: `Kevin-aurion/aurion-aios-plugin-marketplace`
 - Claude Plugin: `releases/aurion-aios-builder-plugin.zip`
 - Cross-platform one-click bundle: `releases/aurion-aios-one-click-install.zip`
 - Claude Chat Skill fallback: `releases/build-aios-agent.skill.zip`
+- Runtime Skill fallback: `releases/use-aios-agent.skill.zip`
 
 The Skill performs a contextual Grill-me interview. In clients without lifecycle hooks it calls MCP explicitly. The Plugin provides deterministic `UserPromptSubmit` and `Stop` hooks where Claude supports them, so routine turns are captured independently of whether the model remembers to call the Skill.
 
@@ -200,4 +209,4 @@ The GitHub Marketplace is the preferred Claude distribution channel. Run `npm ru
 
 For Claude Code, `npm run install:local-clients` also installs the user-scoped `aios` MCP entry plus two MCP-tool hooks. `UserPromptSubmit` conservatively detects explicit Agent/AI employee/Skill-building requests, starts or resumes the bound session, persists the exact prompt and immediately queues asynchronous shadow evolution. `Stop` mirrors `last_assistant_message` and safely recovers a missed user prompt from Claude's transcript. The background worker compiles Agent/Skill/Memory/Workflow/Test drafts from the durable transcript; Stop never waits for a model-authored artifact and never blocks the response.
 
-The installer pre-approves only the fifteen `mcp__aios__...` builder tools in Claude Code so background synchronization does not stall on a permission dialog. Existing ask/deny rules and all unrelated tool permissions are preserved.
+The installer pre-approves only the fifteen non-runtime `mcp__aios__...` builder synchronization tools in Claude Code so background capture does not stall on a permission dialog. The six Runtime tools are intentionally not pre-approved because invoking an Agent can have side effects. Existing ask/deny rules and all unrelated tool permissions are preserved.
