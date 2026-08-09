@@ -18,7 +18,7 @@
 - `org/` — 組織圖與權限（OWNER/TRAINER/MEMBER；Kevin 為 OWNER 最高管理）。
 - `audit/` — 中文稽核紀錄。
 - `proposals/` — FDE 提案審核。
-- `agent-builds/` — **獨立 Agent 建置入口**；同一組登入、單一側欄。FDE 看全部，MEMBER 只看本人。對話／版本由背景自動更新；可送交 FDE、建立 PAUSED + `AWAITING_USER_CONFIRM` 待測草稿、提交測試資料並呼叫真實跨模型隔離試跑；不提供最終自動啟用。
+- `agent-builds/` — **獨立 Agent 建置入口**；同一組登入、單一側欄，而且所有角色（包含 OWNER/TRAINER）都只看該登入帳號自己的 Agent 建置。FDE 跨帳號檢視留在 `proposals/` 管理頁。對話／版本由背景自動更新；可送交 FDE、建立 PAUSED + `AWAITING_USER_CONFIRM` 待測草稿、提交測試資料並呼叫真實跨模型隔離試跑；不提供最終自動啟用。
 - `admin/devices/` — 多裝置執行平台管理。
 
 ## 三表面（Agent Workbench + Builder Portal）
@@ -26,7 +26,7 @@
 |---|---|---|
 | 工作台 | `/work` | 全部角色日常使用 |
 | 管理中心 | `/admin` + 既有管理路由 | FDE（OWNER/TRAINER）|
-| Agent 建置入口 | `/agent-builds` | 全部角色（本人／FDE 全域視圖）|
+| Agent 建置入口 | `/agent-builds` | 全部角色（僅本人）|
 
 AppShell 依路徑切 shell；MEMBER 進管理路由會被導回 `/work`（後端 guard 仍是權威）。
 

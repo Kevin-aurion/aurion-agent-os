@@ -22,6 +22,7 @@ import {
   attachBuilderSourceFile,
   listBuilderReviewQueue,
   listBuilderEvolutionSessions,
+  listAllBuilderEvolutionSessions,
   listBuilderSessions,
   getBuilderDraft,
   saveBuilderDraft,
@@ -364,13 +365,21 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     },
   );
 
-  /** Dedicated build portal: FDE sees all; members see only their own builds. */
+  /** Account-scoped build portal: every role sees only this login's builds. */
   app.get('/api/agent-builder/evolution-queue', { preHandler: requireAuth }, async (req, reply) => {
     try {
       return ok(await listBuilderEvolutionSessions({
         userId: req.user!.sub,
-        role: req.user!.role,
       }));
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  });
+
+  /** Separate FDE ledger. Never use this endpoint from the customer portal. */
+  app.get('/api/agent-builder/admin/evolution-queue', { preHandler: requireTrainer }, async (req, reply) => {
+    try {
+      return ok(await listAllBuilderEvolutionSessions({ viewerUserId: req.user!.sub }));
     } catch (e) {
       return sendError(reply, e);
     }

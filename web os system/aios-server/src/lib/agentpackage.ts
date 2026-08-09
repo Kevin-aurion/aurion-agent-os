@@ -225,7 +225,6 @@ export async function buildAgentPackage(opts: {
   const agent = await prisma.agent.findFirst({
     where: {
       id: agentId,
-      createdBy: session.userId,
       deletedAt: null,
       systemManaged: false,
     },

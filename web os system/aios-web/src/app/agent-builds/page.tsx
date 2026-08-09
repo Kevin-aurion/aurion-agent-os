@@ -592,13 +592,13 @@ export default function AgentBuildsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const builds = useQuery({
-    queryKey: ['agent-builder-evolutions'],
+    queryKey: ['agent-builder-evolutions', 'mine'],
     queryFn: () => API.get<BuilderSession[]>('/api/agent-builder/evolution-queue'),
     enabled: Boolean(user),
     refetchInterval: 5_000,
   });
   useAwp(['agent-builder.*'], () => {
-    void queryClient.invalidateQueries({ queryKey: ['agent-builder-evolutions'] });
+    void queryClient.invalidateQueries({ queryKey: ['agent-builder-evolutions', 'mine'] });
   });
 
   const sessions = builds.data ?? [];

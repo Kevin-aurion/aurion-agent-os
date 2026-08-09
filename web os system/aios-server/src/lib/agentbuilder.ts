@@ -1915,18 +1915,17 @@ export async function listBuilderReviewQueue(): Promise<SessionDto[]> {
   return rows.map((row) => toSessionDto(row, { includeDraft: false }));
 }
 
-/** Role-aware evolution ledger. FDE sees the whole queue; members see only
- * their own builds. Draft input fields remain excluded from this portal. */
+/** Account-scoped evolution ledger for /agent-builds.
+ * Every role, including OWNER/TRAINER, sees only builds owned by that login. */
 export async function listBuilderEvolutionSessions(opts: {
   userId: string;
-  role: UserRole | string;
 }): Promise<SessionDto[]> {
   const rows = await prisma.agentBuildSession.findMany({
     where: {
       // Legacy front-end Builder sessions predate append-only evolution rows.
       // Keep completed ACTIVE Agents visible so they can still be exported.
       OR: [{ iterations: { some: {} } }, { status: 'ACTIVE' }],
-      ...(!isFde(opts.role) ? { userId: opts.userId } : {}),
+      userId: opts.userId,
     },
     orderBy: { updatedAt: 'desc' },
     take: 100,
@@ -1934,7 +1933,26 @@ export async function listBuilderEvolutionSessions(opts: {
   });
   return rows.map((row) => ({
     ...toSessionDto(row, { includeDraft: false }),
-    ownedByCurrentUser: row.userId === opts.userId,
+    ownedByCurrentUser: true,
+  }));
+}
+
+/** FDE-only global ledger. This must only be exposed from a trainer-guarded
+ * admin endpoint and must never back the account-scoped /agent-builds page. */
+export async function listAllBuilderEvolutionSessions(opts: {
+  viewerUserId: string;
+}): Promise<SessionDto[]> {
+  const rows = await prisma.agentBuildSession.findMany({
+    where: {
+      OR: [{ iterations: { some: {} } }, { status: 'ACTIVE' }],
+    },
+    orderBy: { updatedAt: 'desc' },
+    take: 100,
+    include: { iterations: { orderBy: { sequence: 'desc' }, take: 50 } },
+  });
+  return rows.map((row) => ({
+    ...toSessionDto(row, { includeDraft: false }),
+    ownedByCurrentUser: row.userId === opts.viewerUserId,
   }));
 }
 

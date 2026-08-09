@@ -35,6 +35,7 @@ const ids = {
   schedule: ulid(),
   activeSession: ulid(),
   draftSession: ulid(),
+  foreignSession: ulid(),
   iteration: ulid(),
 };
 const suffix = ids.agent.slice(-8).toLowerCase();
@@ -75,7 +76,9 @@ async function createFixtures() {
       engineExecute: 'CLAUDE_CODE',
       restrictions: { webSearch: true, cloudWrite: false, credential: secret },
       status: 'ACTIVE',
-      createdBy: ids.owner,
+      // Legacy Builder approvals created the customer Agent under the FDE
+      // actor. The owning ACTIVE session must still be able to export it.
+      createdBy: ids.trainer,
     },
   });
   await prisma.skill.createMany({
@@ -172,12 +175,22 @@ async function createFixtures() {
       builtAgentId: ids.agent,
     },
   });
+  await prisma.agentBuildSession.create({
+    data: {
+      id: ids.foreignSession,
+      userId: ids.foreign,
+      status: 'ACTIVE',
+      transcript: [],
+    },
+  });
   agentDir = await materializeAgent(ids.agent);
   await writeFile(path.join(agentDir, 'memory', 'wiki', `${emailSecret}.md`), `memory ${secret} ${emailSecret}\n`);
 }
 
 async function cleanup() {
-  await prisma.agentBuildSession.deleteMany({ where: { id: { in: [ids.activeSession, ids.draftSession] } } }).catch(() => {});
+  await prisma.agentBuildSession.deleteMany({
+    where: { id: { in: [ids.activeSession, ids.draftSession, ids.foreignSession] } },
+  }).catch(() => {});
   await prisma.agent.deleteMany({ where: { id: ids.agent } }).catch(() => {});
   await prisma.skill.deleteMany({ where: { id: { in: [ids.confirmedSkill, ids.pendingSkill] } } }).catch(() => {});
   await prisma.user.deleteMany({ where: { id: { in: [ids.owner, ids.foreign, ids.trainer, ids.scopedOwner] } } }).catch(() => {});
@@ -270,6 +283,40 @@ try {
   assert.equal(scopedOwner.statusCode, 404, 'scoped OAuth OWNER must not inherit cross-user FDE access');
   const fde = await app.inject({ method: 'GET', url: activeUrl, headers: { authorization: `Bearer ${trainerToken}` } });
   assert.equal(fde.statusCode, 200, 'unscoped FDE may export an inspected customer session');
+
+  const ownerQueue = await app.inject({
+    method: 'GET',
+    url: '/api/agent-builder/evolution-queue',
+    headers: { authorization: `Bearer ${ownerToken}` },
+  });
+  assert.equal(ownerQueue.statusCode, 200);
+  const ownerBuildIds = (ownerQueue.json().data as Array<{ id: string }>).map((row) => row.id);
+  assert(ownerBuildIds.includes(ids.activeSession), 'owner portal must include its own ACTIVE build');
+  assert(!ownerBuildIds.includes(ids.foreignSession), 'owner portal must exclude another account build');
+  const trainerQueue = await app.inject({
+    method: 'GET',
+    url: '/api/agent-builder/evolution-queue',
+    headers: { authorization: `Bearer ${trainerToken}` },
+  });
+  assert.equal(trainerQueue.statusCode, 200);
+  const trainerBuildIds = (trainerQueue.json().data as Array<{ id: string }>).map((row) => row.id);
+  assert(!trainerBuildIds.includes(ids.activeSession), 'FDE role must not widen the customer portal queue');
+  assert(!trainerBuildIds.includes(ids.foreignSession), 'FDE role must remain account-scoped in the customer portal');
+  const adminQueue = await app.inject({
+    method: 'GET',
+    url: '/api/agent-builder/admin/evolution-queue',
+    headers: { authorization: `Bearer ${trainerToken}` },
+  });
+  assert.equal(adminQueue.statusCode, 200);
+  const adminBuildIds = (adminQueue.json().data as Array<{ id: string }>).map((row) => row.id);
+  assert(adminBuildIds.includes(ids.activeSession), 'FDE admin ledger must include customer builds');
+  assert(adminBuildIds.includes(ids.foreignSession), 'FDE admin ledger must include other account builds');
+  const foreignAdminQueue = await app.inject({
+    method: 'GET',
+    url: '/api/agent-builder/admin/evolution-queue',
+    headers: { authorization: `Bearer ${foreignToken}` },
+  });
+  assert.equal(foreignAdminQueue.statusCode, 403, 'member must not access the FDE global ledger');
   const draft = await app.inject({
     method: 'GET',
     url: `/api/agent-builder/sessions/${ids.draftSession}/export`,
