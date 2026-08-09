@@ -22,8 +22,9 @@ import {
   Save,
   ChevronRight,
   X,
+  Download,
 } from 'lucide-react';
-import { API } from '@/lib/api';
+import { API, downloadToDevice } from '@/lib/api';
 import { useAuth, isFdeRole } from '@/lib/auth';
 import { Spinner } from '@/components/ui';
 import { cn } from '@/lib/cn';
@@ -102,6 +103,7 @@ export function AgentBuilderPanel(props: {
   const [busy, setBusy] = useState(false);
   /** Separate flag for long-running real test (blocks double submit). */
   const [testing, setTesting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [testData, setTestData] = useState('');
   const [testExpected, setTestExpected] = useState('');
@@ -516,6 +518,19 @@ export function AgentBuilderPanel(props: {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function exportAgent() {
+    if (!session || session.status !== 'ACTIVE' || exporting) return;
+    setExporting(true);
+    setError(null);
+    try {
+      await downloadToDevice(`/api/agent-builder/sessions/${session.id}/export`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -1316,13 +1331,19 @@ export function AgentBuilderPanel(props: {
               已啟用，可以開始交代工作
             </div>
             {openAgentId ? (
-              <Link
-                href={`/work?agent=${encodeURIComponent(openAgentId)}`}
-                className="btn-primary inline-flex justify-center text-sm"
-                onClick={() => props.onActivated?.(openAgentId)}
-              >
-                開啟這位員工
-              </Link>
+              <div className="flex flex-wrap justify-center gap-2">
+                <Link
+                  href={`/work?agent=${encodeURIComponent(openAgentId)}`}
+                  className="btn-primary inline-flex justify-center text-sm"
+                  onClick={() => props.onActivated?.(openAgentId)}
+                >
+                  開啟這位員工
+                </Link>
+                <button type="button" className="btn-ghost border border-border text-sm" disabled={exporting} onClick={() => void exportAgent()}>
+                  {exporting ? <Spinner /> : <Download className="h-4 w-4" />}
+                  匯出 ZIP
+                </button>
+              </div>
             ) : (
               <button type="button" className="btn-ghost text-sm" onClick={props.onClose}>
                 返回工作台

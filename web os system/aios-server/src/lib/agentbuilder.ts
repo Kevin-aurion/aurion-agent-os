@@ -1923,7 +1923,9 @@ export async function listBuilderEvolutionSessions(opts: {
 }): Promise<SessionDto[]> {
   const rows = await prisma.agentBuildSession.findMany({
     where: {
-      iterations: { some: {} },
+      // Legacy front-end Builder sessions predate append-only evolution rows.
+      // Keep completed ACTIVE Agents visible so they can still be exported.
+      OR: [{ iterations: { some: {} } }, { status: 'ACTIVE' }],
       ...(!isFde(opts.role) ? { userId: opts.userId } : {}),
     },
     orderBy: { updatedAt: 'desc' },
