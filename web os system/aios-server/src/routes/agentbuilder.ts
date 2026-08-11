@@ -9,6 +9,7 @@ import { z } from 'zod';
 import { ok, errors, sendError } from '../lib/http.js';
 import { requireAuth, requireTrainer } from '../lib/guard.js';
 import { fileToText } from '../lib/filecontext.js';
+import { buildAgentPackage } from '../lib/agentpackage.js';
 import {
   createBuilderSession,
   getBuilderSession,
@@ -22,6 +23,7 @@ import {
   attachBuilderTestFixture,
   listBuilderReviewQueue,
   listBuilderEvolutionSessions,
+  listAllBuilderEvolutionSessions,
   listBuilderSessions,
   getBuilderDraft,
   saveBuilderDraft,
@@ -220,7 +222,7 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     }
   });
 
-  /** Claude Code Stop hook: mirror final text and require one final full snapshot. */
+  /** Claude Code Stop hook: mirror the final turn and queue a governed Shadow reflection. */
   app.post('/api/agent-builder/external/stop-guard', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const body = externalStopGuardSchema.parse(req.body);
@@ -372,13 +374,21 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     },
   );
 
-  /** Dedicated build portal: FDE sees all; members see only their own builds. */
+  /** Account-scoped build portal: every role sees only this login's builds. */
   app.get('/api/agent-builder/evolution-queue', { preHandler: requireAuth }, async (req, reply) => {
     try {
       return ok(await listBuilderEvolutionSessions({
         userId: req.user!.sub,
-        role: req.user!.role,
       }));
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  });
+
+  /** Separate FDE ledger. Never use this endpoint from the customer portal. */
+  app.get('/api/agent-builder/admin/evolution-queue', { preHandler: requireTrainer }, async (req, reply) => {
+    try {
+      return ok(await listAllBuilderEvolutionSessions({ viewerUserId: req.user!.sub }));
     } catch (e) {
       return sendError(reply, e);
     }
@@ -459,6 +469,30 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
         role: req.user!.role,
       });
       return ok(session);
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  });
+
+  /** Download an ACTIVE, FDE-approved Agent as a portable, redacted ZIP package. */
+  app.get('/api/agent-builder/sessions/:id/export', { preHandler: requireAuth }, async (req, reply) => {
+    try {
+      const { id } = req.params as { id: string };
+      const exported = await buildAgentPackage({
+        sessionId: id,
+        userId: req.user!.sub,
+        // A public Builder OAuth token may be owned by an OWNER account, but
+        // it remains customer-scoped and must never inherit cross-user FDE access.
+        role: req.user!.scope ? 'MEMBER' : req.user!.role,
+      });
+      const encoded = encodeURIComponent(exported.filename);
+      return reply
+        .header('cache-control', 'no-store')
+        .header('content-disposition', `attachment; filename="agent-package.zip"; filename*=UTF-8''${encoded}`)
+        .header('content-length', String(exported.buffer.length))
+        .header('x-content-type-options', 'nosniff')
+        .type('application/zip')
+        .send(exported.buffer);
     } catch (e) {
       return sendError(reply, e);
     }

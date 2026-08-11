@@ -8,7 +8,7 @@
   "plugins": [
     {
       "name": "lazyoffice-aios-builder",
-      "description": "Build AI employees in Claude and synchronize them to Lazyoffice AIOS over its hosted OAuth Remote MCP.",
+      "description": "Build AI employees, invoke approved employees, and request governed schedules over the hosted Lazyoffice AIOS OAuth Remote MCP.",
       "version": "1.4.0",
       "author": {
         "name": "Lazyoffice"

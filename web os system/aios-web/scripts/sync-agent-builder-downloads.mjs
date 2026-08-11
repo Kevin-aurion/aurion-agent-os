@@ -11,6 +11,7 @@ const destinationRoot = path.join(webRoot, 'public', 'downloads', 'agent-builder
 const files = [
   ['lazyoffice-aios-builder-plugin.zip', path.join(releasesRoot, 'lazyoffice-aios-builder-plugin.zip')],
   ['build-aios-agent.skill.zip', path.join(releasesRoot, 'build-aios-agent.skill.zip')],
+  ['use-aios-agent.skill.zip', path.join(releasesRoot, 'use-aios-agent.skill.zip')],
   ['lazyoffice-aios-one-click-install.zip', path.join(releasesRoot, 'lazyoffice-aios-one-click-install.zip')],
   ['SHA256SUMS.txt', path.join(releasesRoot, 'SHA256SUMS.txt')],
   ['REMOTE-MCP-URL.txt', path.join(releasesRoot, 'REMOTE-MCP-URL.txt')],

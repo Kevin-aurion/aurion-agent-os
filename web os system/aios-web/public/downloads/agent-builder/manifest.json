@@ -1,25 +1,30 @@
 {
-  "generatedAt": "2026-08-11T17:29:42.560Z",
+  "generatedAt": "2026-08-11T17:47:03.723Z",
   "files": [
     {
       "name": "lazyoffice-aios-builder-plugin.zip",
-      "bytes": 19440,
-      "sha256": "6480d4c12bd275a3efccb48a1cef0965a06394876e53aa5f05f5998d4404400a"
+      "bytes": 22786,
+      "sha256": "037e16835606a81b59ba13fd091d08818c871d38a2fcbd4104f1d80be58051a1"
     },
     {
       "name": "build-aios-agent.skill.zip",
       "bytes": 8477,
-      "sha256": "a9cc6838b22145d59e62e997a19b6daf4fbe3f4619029b1e4ee77f18884e8cee"
+      "sha256": "6476243e4acfae332f696cc843dd7f062dd00bba7bef26439142ea38d3c8d26f"
+    },
+    {
+      "name": "use-aios-agent.skill.zip",
+      "bytes": 2725,
+      "sha256": "6a544ffb319f9c0e5127ee727be9c24311c7a9729ced12e88d902b22afa3a49e"
     },
     {
       "name": "lazyoffice-aios-one-click-install.zip",
-      "bytes": 34421,
-      "sha256": "492e3313638bfddb2f50f6e25c6fa4ff94da350a7e2e2833d56576c6535a172f"
+      "bytes": 41226,
+      "sha256": "211a747ee96cceefde528532cd901d0bda0ff7442abc48a80bc00f1e6b7089e4"
     },
     {
       "name": "SHA256SUMS.txt",
-      "bytes": 298,
-      "sha256": "36fe9a1dfd9fdc5de22185a100d3cab08212f9eccde7cf01f673dcd651ff9861"
+      "bytes": 389,
+      "sha256": "25d855740a89e7de58c33f174e105cda53f782f04aa44df08181e92569ab1716"
     },
     {
       "name": "REMOTE-MCP-URL.txt",
@@ -33,8 +38,8 @@
     },
     {
       "name": "AIOS-Agent-Builder-Installation-Guide.zh-TW.md",
-      "bytes": 9235,
-      "sha256": "9ba0a4d151c9f53fc2af8b22ee715de6591406e8d76a5162ef0c56d8df01d879"
+      "bytes": 9800,
+      "sha256": "ae21a0b4e2a30c9c8e704a3db4bda8e983557db8398e42de718d833073bfe2b6"
     }
   ]
 }

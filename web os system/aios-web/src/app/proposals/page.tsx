@@ -156,8 +156,8 @@ export default function ProposalsPage() {
   });
 
   const builderEvolutions = useQuery({
-    queryKey: ['agent-builder-evolutions'],
-    queryFn: () => API.get<BuilderSession[]>('/api/agent-builder/evolution-queue'),
+    queryKey: ['agent-builder-evolutions', 'admin'],
+    queryFn: () => API.get<BuilderSession[]>('/api/agent-builder/admin/evolution-queue'),
     enabled: isFde,
     refetchInterval: 3_000,
   });

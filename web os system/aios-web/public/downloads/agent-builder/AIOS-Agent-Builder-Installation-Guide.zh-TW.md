@@ -50,18 +50,18 @@ npm run install:local-clients
 這會：
 
 1. 建立或輪替 `claude-builder@local.aios` 的專用 `MEMBER` 帳號。
-2. 把隨機密碼只寫入 gitignore 的 `.env`，權限為 `0600`，不輸出到終端；並設定 `AIOS_MCP_PROFILE=builder`，只暴露十二個建置／Hook 工具。
+2. 把隨機密碼只寫入 gitignore 的 `.env`，權限為 `0600`，不輸出到終端；並設定 `AIOS_MCP_PROFILE=builder`，只暴露十九個建置／Hook／Runtime 工具（13 builder + 6 runtime）。
 3. 在既有 Claude Desktop、Claude Code 與 Cursor JSON 設定中加入 `mcpServers.aios`，寫入前各保留一份 `.aios-backup`。
-4. 把 Skill 安裝到 `~/.claude/skills/build-aios-agent`（Claude／Claude Code 本機使用）。
+4. 把 Skill 安裝到 `~/.claude/skills/build-aios-agent` 與 `~/.claude/skills/use-aios-agent`（Claude／Claude Code 本機使用）。
 5. 中央主機的本機 stdio 開發安裝與客戶端 GitHub Plugin 是不同路徑；客戶端 Plugin 使用內建的 `SessionStart`、`UserPromptSubmit`、`PostToolUse`、`Stop` command hooks，不會修改全域 hooks 或保存 OAuth credential。
 
 完成後重新啟動 Claude Desktop 與 Cursor。AIOS 後端必須保持在 `127.0.0.1:8700`；MCP 不會自行啟動後端。
 
 ## 3. Claude Plugin／Skill 檔案
 
-完整 Plugin 位於 `releases/lazyoffice-aios-builder-plugin.zip`；跨平台安裝包位於 `releases/lazyoffice-aios-one-click-install.zip`；純 Skill 位於 `releases/build-aios-agent.skill.zip`。
+完整 Plugin 位於 `releases/lazyoffice-aios-builder-plugin.zip`；跨平台安裝包位於 `releases/lazyoffice-aios-one-click-install.zip`；建置 Skill 位於 `releases/build-aios-agent.skill.zip`；Runtime Skill 位於 `releases/use-aios-agent.skill.zip`。
 
-在 Claude Desktop 的自訂／Skills 頁面上傳這個 zip。壓縮檔根層已包含 `build-aios-agent/` Skill 資料夾。若桌面版帳號尚未顯示自訂 Skill 功能，仍可使用 MCP prompt `build-aios-agent`；Claude Code 則會直接讀取安裝到 `~/.claude/skills/` 的版本。
+在 Claude Desktop 的自訂／Skills 頁面上傳對應 zip。壓縮檔根層包含 `build-aios-agent/` 與 `use-aios-agent/` Skill 資料夾。若桌面版帳號尚未顯示自訂 Skill 功能，仍可使用 MCP prompt `build-aios-agent`／`use-aios-agent`；Claude Code 則會直接讀取安裝到 `~/.claude/skills/` 的版本。
 
 ## 4. 使用者怎麼開始
 
@@ -79,14 +79,15 @@ npm run install:local-clients
 6. 使用者明確確認後才送 FDE 審核。
 7. FDE 初審後，要求測試資料、實跑，再由 FDE 最終啟用。
 
-登入 `https://aios-new.lazyoffice.app/agent-builds` 可在獨立入口看到外部對話、每次迭代、Agent／Skill、記憶、流程與測試；一般使用者只看本人，FDE 可看全部並建立待測草稿。
+登入 `https://aios-new.lazyoffice.app/agent-builds` 可在獨立入口看到外部對話、每次迭代、Agent／Skill、記憶、流程與測試；**所有角色（含 FDE）都只看該登入帳號自己的建置**。FDE 跨帳號審核走管理頁／admin evolution-queue。
 
 公開 Remote MCP 以 OAuth 對應每位 AIOS 使用者；每個人的建置資料仍依登入身分隔離。沒有共用 Builder 密碼。
 
 ## 5. 治理與限制
 
-- MCP 寫入內容全部是 shadow draft；外部客戶端沒有核准、確認 Skill 或啟用 Agent 的工具。
-- Remote MCP OAuth token 只能呼叫 Agent Builder API；它不能開一般 WebSocket、整合授權或其他 AIOS API，且一律以 MEMBER 權限執行，不繼承 OWNER／TRAINER 的生效權限。
+- 建置工具寫入的內容全部是 shadow draft；外部客戶端沒有核准、確認 Skill 或啟用 Agent 的工具。
+- Remote MCP OAuth token 只能呼叫 Agent Builder 與帳號隔離的 Agent Runtime API；它不能開一般 WebSocket、整合授權或其他 AIOS API，且一律以 MEMBER 權限執行，不繼承 OWNER／TRAINER 的生效權限。
+- Runtime 只能看到登入者自己的 ACTIVE Agent；執行沿用限制、預算、跨模型驗證與高風險核准。排程只會建立待審提案，FDE 核准前不生效。
 - 使用者或任何外部模型宣稱工具已授權時，AIOS 仍會把它降為 `NEEDS_FDE`，由本機真實狀態驗證。
 - 寄信、雲端寫入、電腦操作、Shell、付款、刪除等不可逆動作一定需要人工核准。
 - 對話、檔案與 Artifact 在落地前都會再經 secrets／個資遮罩；客戶端仍應先避免傳送不必要的秘密。
@@ -105,8 +106,8 @@ Claude Code Plugin 的 Hook 行為如下：
 6. command hook 不讀取 OAuth Token、不直接連線遠端服務，也不將使用者 prompt、助手回答或 credential 寫入狀態檔。
 7. 完整 Artifact 仍由 Skill 透過 `upsert_agent_build_snapshot`／`sync_agent_build_artifact` 傳遞；Hook 與外部 MCP 都不能自行送審、核准、確認 Skill、測試或啟用 Agent。
 
-安裝器也只會將這 12 個 `mcp__aios__...` 建置工具加入 Claude Code 的
-`permissions.allow`，讓背景同步不會卡在互動式權限視窗。既有的
+安裝器只會將 13 個非 Runtime 的 `mcp__aios__...` 建置同步工具加入 Claude Code 的
+`permissions.allow`，讓背景同步不會卡在互動式權限視窗。6 個 Runtime 工具不會預先放行，因為呼叫 Agent 可能產生外部副作用。既有的
 `permissions.ask`、`permissions.deny` 與其他工具權限都會原樣保留；deny/ask
 仍依 Claude Code 的權限優先順序生效。
 

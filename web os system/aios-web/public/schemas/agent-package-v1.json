@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aios-new.lazyoffice.app/schemas/agent-package-v1.json",
+  "title": "LazyOffice AIOS Portable Agent Package",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "kind",
+    "schemaVersion",
+    "packageId",
+    "exportedAt",
+    "source",
+    "agent",
+    "skills",
+    "workflows",
+    "memory",
+    "tests",
+    "governance",
+    "checksums"
+  ],
+  "properties": {
+    "kind": { "const": "lazyoffice.aios.agent-package" },
+    "schemaVersion": { "const": "1.0" },
+    "packageId": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "exportedAt": { "type": "string", "format": "date-time" },
+    "source": { "type": "object" },
+    "agent": { "type": "object" },
+    "skills": { "type": "array" },
+    "workflows": { "type": "array" },
+    "memory": { "type": "object" },
+    "tests": { "type": "object" },
+    "governance": { "type": "object" },
+    "checksums": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+    }
+  }
+}

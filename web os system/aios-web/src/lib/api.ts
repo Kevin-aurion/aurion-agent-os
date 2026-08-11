@@ -135,6 +135,52 @@ export async function api<T = unknown>(rawPath: string, init: RequestInit = {}, 
   return body.data;
 }
 
+function downloadFilename(disposition: string | null): string {
+  if (!disposition) return 'agent-package.zip';
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (encoded) {
+    try { return decodeURIComponent(encoded); } catch { /* use fallback */ }
+  }
+  return disposition.match(/filename="?([^";]+)"?/i)?.[1] ?? 'agent-package.zip';
+}
+
+async function download(rawPath: string, retry = true): Promise<{ blob: Blob; filename: string }> {
+  const path = normalize(rawPath);
+  const headers = new Headers();
+  const accessForRequest = tokens.access;
+  if (accessForRequest) headers.set('authorization', `Bearer ${accessForRequest}`);
+  const res = await fetch(path, { headers });
+  if (res.status === 401 && retry) {
+    if (await refreshAccess(accessForRequest)) return download(path, false);
+    if (!tokens.refresh) tokens.clear();
+  }
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as Envelope<unknown> | null;
+    if (body && !body.success) throw new ApiError(body.error.code, body.error.message);
+    throw new ApiError(`HTTP_${res.status}`, `下載失敗（${res.status}）`);
+  }
+  return {
+    blob: await res.blob(),
+    filename: downloadFilename(res.headers.get('content-disposition')),
+  };
+}
+
+export async function downloadToDevice(path: string): Promise<string> {
+  const result = await download(path);
+  const url = URL.createObjectURL(result.blob);
+  try {
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = result.filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+  return result.filename;
+}
+
 // Convenience verbs.
 export const API = {
   get: <T>(p: string) => api<T>(p),
@@ -143,6 +189,7 @@ export const API = {
   put: <T>(p: string, body?: unknown) => api<T>(p, { method: 'PUT', body: JSON.stringify(body) }),
   del: <T>(p: string) => api<T>(p, { method: 'DELETE' }),
   upload: <T>(p: string, form: FormData) => api<T>(p, { method: 'POST', body: form }),
+  download,
 };
 
 export { ApiError };

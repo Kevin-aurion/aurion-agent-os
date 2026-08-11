@@ -9,7 +9,9 @@ function assertScopedRoute(req: FastifyRequest, claims: AccessClaims): void {
   const route = req.routeOptions.url ?? '';
   const allowed =
     claims.scope === MCP_BUILDER_SCOPE &&
-    (route === '/api/auth/me' || route.startsWith('/api/agent-builder/'));
+    (route === '/api/auth/me' ||
+      route.startsWith('/api/agent-builder/') ||
+      route.startsWith('/api/agent-runtime/'));
   if (!allowed) throw errors.forbidden('This OAuth token is restricted to Agent Builder APIs');
 }
 

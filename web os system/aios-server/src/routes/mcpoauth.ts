@@ -74,7 +74,7 @@ function loginPage(opts: { ticket: string; clientName: string; error?: string })
       <input id="password" name="password" type="password" required autocomplete="current-password" />
       <button type="submit">同意並連接</button>
     </form>
-    <div class="notice">此連線只提供 Agent Builder 草稿工具。Claude 無法自行核准、確認 Skill 或啟用 Agent；正式生效仍需 FDE。</div>
+    <div class="notice">此連線提供 Agent Builder 草稿工具，以及您帳號內已啟用 AI 員工的呼叫與排程提案。Claude 無法自行核准、確認 Skill、啟用 Agent 或啟用排程；高風險執行與所有排程仍需 FDE。</div>
   </main>
 </body>
 </html>`;

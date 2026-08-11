@@ -13,7 +13,7 @@ import { registerAllPrompts } from './prompts/index.js';
 import { runStdio } from './transports/stdio.js';
 import { runHttp } from './transports/http.js';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -29,6 +29,8 @@ async function main(): Promise<void> {
           'For ChatGPT or other clients without lifecycle hooks, start_agent_build immediately, then call upsert_agent_build_snapshot before each assistant reply that changes the draft.',
           'All synchronized content is an inert shadow draft. Never claim an Agent or Skill is active unless get_agent_build returns ACTIVE.',
           'Never bypass FDE review, Skill confirmation, real testing or final activation gates.',
+          'For using an existing employee, call list_available_agents, then get_agent_capabilities, invoke_agent with a stable idempotency key, and poll get_agent_run.',
+          'request_agent_schedule creates only a pending proposal; never claim the schedule is active until an FDE approves it and list_agent_schedules shows it enabled.',
         ].join(' '),
       },
     );

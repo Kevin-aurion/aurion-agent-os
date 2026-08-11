@@ -1975,16 +1975,38 @@ export async function listBuilderReviewQueue(): Promise<SessionDto[]> {
   return hydrateSessionDtos(rows, () => false);
 }
 
-/** Role-aware evolution ledger. FDE sees the whole queue; members see only
- * their own builds. Draft input fields remain excluded from this portal. */
+/** Account-scoped evolution ledger for /agent-builds.
+ * Every role, including OWNER/TRAINER, sees only builds owned by that login. */
 export async function listBuilderEvolutionSessions(opts: {
   userId: string;
-  role: UserRole | string;
 }): Promise<SessionDto[]> {
   const rows = await prisma.agentBuildSession.findMany({
     where: {
-      iterations: { some: {} },
-      ...(!isFde(opts.role) ? { userId: opts.userId } : {}),
+      // Legacy front-end Builder sessions predate append-only evolution rows.
+      // Keep completed ACTIVE Agents visible so they can still be exported.
+      OR: [{ iterations: { some: {} } }, { status: 'ACTIVE' }],
+      userId: opts.userId,
+    },
+    orderBy: { updatedAt: 'desc' },
+    take: 100,
+    include: { iterations: { orderBy: { sequence: 'desc' }, take: 50 } },
+  });
+  // Account portal: rows are already filtered by userId.
+  const sessions = await hydrateSessionDtos(rows, () => false);
+  return sessions.map((session) => ({
+    ...session,
+    ownedByCurrentUser: true,
+  }));
+}
+
+/** FDE-only global ledger. This must only be exposed from a trainer-guarded
+ * admin endpoint and must never back the account-scoped /agent-builds page. */
+export async function listAllBuilderEvolutionSessions(opts: {
+  viewerUserId: string;
+}): Promise<SessionDto[]> {
+  const rows = await prisma.agentBuildSession.findMany({
+    where: {
+      OR: [{ iterations: { some: {} } }, { status: 'ACTIVE' }],
     },
     orderBy: { updatedAt: 'desc' },
     take: 100,
@@ -1993,7 +2015,7 @@ export async function listBuilderEvolutionSessions(opts: {
   const sessions = await hydrateSessionDtos(rows, () => false);
   return sessions.map((session, index) => ({
     ...session,
-    ownedByCurrentUser: rows[index]!.userId === opts.userId,
+    ownedByCurrentUser: rows[index]!.userId === opts.viewerUserId,
   }));
 }
 

@@ -11,6 +11,7 @@ import {
   CircleDot,
   Clock3,
   Database,
+  Download,
   FileCheck2,
   FlaskConical,
   GitBranch,
@@ -33,7 +34,7 @@ import {
   type BuilderIteration,
   type BuilderSession,
 } from '@/components/workbench/types';
-import { API } from '@/lib/api';
+import { API, downloadToDevice } from '@/lib/api';
 import { useAuth, isFdeRole } from '@/lib/auth';
 import { useAwp } from '@/lib/awp';
 import { cn } from '@/lib/cn';
@@ -338,8 +339,11 @@ function BuildActions({
     mutationFn: () => API.post(`/api/agent-builder/sessions/${session.id}/finalize`, {}),
     onSuccess: refresh,
   });
-  const pending = submitReview.isPending || approveBuild.isPending || finalizeBuild.isPending;
-  const error = submitReview.error ?? approveBuild.error ?? finalizeBuild.error;
+  const exportPackage = useMutation({
+    mutationFn: () => downloadToDevice(`/api/agent-builder/sessions/${session.id}/export`),
+  });
+  const pending = submitReview.isPending || approveBuild.isPending || finalizeBuild.isPending || exportPackage.isPending;
+  const error = submitReview.error ?? approveBuild.error ?? finalizeBuild.error ?? exportPackage.error;
   const latestReady = [...session.iterations].reverse().find((iteration) => iteration.status === 'READY' && iteration.harness);
   const latestReflection = [...session.iterations].reverse().find((iteration) => iteration.triggerKind === 'reflection');
   const reflectionCount = session.iterations.filter((iteration) => iteration.triggerKind === 'reflection').length;
@@ -380,6 +384,12 @@ function BuildActions({
             <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled={pending} onClick={() => finalizeBuild.mutate()}>
               {finalizeBuild.isPending ? <Spinner /> : <ShieldCheck className="h-3.5 w-3.5" />}
               FDE 正式放行
+            </button>
+          )}
+          {session.status === 'ACTIVE' && (
+            <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled={pending} onClick={() => exportPackage.mutate()}>
+              {exportPackage.isPending ? <Spinner /> : <Download className="h-3.5 w-3.5" />}
+              匯出 Agent ZIP
             </button>
           )}
         </div>
@@ -477,12 +487,12 @@ function BuildCard({ session, open, onToggle, isFde }: { session: BuilderSession
 
       {open && (
         <div className="space-y-6 border-t border-border px-5 py-5">
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-4 py-3">
+          <div className={cn('flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3', session.status === 'ACTIVE' ? 'border-emerald-500/25 bg-emerald-500/[0.06]' : 'border-amber-500/25 bg-amber-500/[0.06]')}>
             <div className="flex items-start gap-2 text-sm">
-              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+              <ShieldCheck className={cn('mt-0.5 h-4 w-4 shrink-0', session.status === 'ACTIVE' ? 'text-emerald-500' : 'text-amber-500')} />
               <div>
-                <div className="font-medium">目前是受治理的建置草稿</div>
-                <div className="mt-0.5 text-xs leading-relaxed text-muted">顯示在此不代表已啟用；正式建立、技能確認與上線仍必須經 FDE 審核。</div>
+                <div className="font-medium">{session.status === 'ACTIVE' ? '已通過治理並啟用' : '目前是受治理的建置草稿'}</div>
+                <div className="mt-0.5 text-xs leading-relaxed text-muted">{session.status === 'ACTIVE' ? '可匯出成標準資料夾結構的 ZIP；憑證與啟用排程不會被帶出。' : '顯示在此不代表已啟用；正式建立、技能確認與上線仍必須經 FDE 審核。'}</div>
               </div>
             </div>
             {isFde && (
@@ -572,13 +582,13 @@ export default function AgentBuildsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const builds = useQuery({
-    queryKey: ['agent-builder-evolutions'],
+    queryKey: ['agent-builder-evolutions', 'mine'],
     queryFn: () => API.get<BuilderSession[]>('/api/agent-builder/evolution-queue'),
     enabled: Boolean(user),
     refetchInterval: 5_000,
   });
   useAwp(['agent-builder.*'], () => {
-    void queryClient.invalidateQueries({ queryKey: ['agent-builder-evolutions'] });
+    void queryClient.invalidateQueries({ queryKey: ['agent-builder-evolutions', 'mine'] });
   });
 
   const sessions = builds.data ?? [];

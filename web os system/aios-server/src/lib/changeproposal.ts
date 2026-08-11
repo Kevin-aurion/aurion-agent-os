@@ -9,13 +9,14 @@ import { contentHash, createSkillVersion } from './skillversion.js';
 import { parseIdentityCard } from './identitycard.js';
 import { confirmAwaitingSkill } from './skillgate.js';
 import { redactSecrets } from '../memory/redactor.js';
+import { applyApprovedScheduleProposal } from './scheduleproposal.js';
 
 export type CreateProposalArgs = {
   agentId: string;
   runId?: string;
   source: 'OPERATOR' | 'VIOLATION' | 'SEMANTIC' | 'TRAJECTORY' | 'REFLECTION';
   proposedBy: string;
-  targetType: 'AGENT' | 'SKILL' | 'RESTRICTION' | 'IDENTITY_CARD';
+  targetType: 'AGENT' | 'SKILL' | 'RESTRICTION' | 'IDENTITY_CARD' | 'SCHEDULE';
   targetId?: string;
   proposedChange: unknown;
   severity?: string;
@@ -369,6 +370,20 @@ export async function approveProposal(
       action: 'append_role_guidance',
     });
     return { proposal: result };
+  }
+
+  // ── SCHEDULE: only an FDE approval materializes the Workflow/Schedule ──
+  if (existing.targetType === 'SCHEDULE') {
+    const result = await applyApprovedScheduleProposal(existing, decidedBy);
+    await audit(decidedBy, 'proposal.approved', 'ChangeProposal', id, {
+      agentId: existing.agentId,
+      targetType: existing.targetType,
+      targetId: existing.targetId,
+      resultingVersionId: null,
+      source: existing.source,
+      action: result.action,
+    });
+    return { proposal: result.proposal };
   }
 
   // ── RESTRICTION / IDENTITY_CARD ───────────────────────────────────────────

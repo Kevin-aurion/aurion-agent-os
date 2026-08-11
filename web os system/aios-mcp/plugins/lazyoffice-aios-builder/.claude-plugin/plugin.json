@@ -1,6 +1,6 @@
 {
   "name": "lazyoffice-aios-builder",
-  "description": "Build AIOS employees naturally and synchronize supported lifecycle turns to the hosted Lazyoffice AIOS Remote MCP.",
+  "description": "Build AIOS employees naturally, invoke approved employees, and request governed schedules through the hosted Lazyoffice AIOS Remote MCP.",
   "version": "1.4.0",
   "author": {
     "name": "Lazyoffice"

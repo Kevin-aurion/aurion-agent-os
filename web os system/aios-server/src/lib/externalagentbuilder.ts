@@ -737,28 +737,30 @@ export async function createExternalBuilderSession(opts: {
   externalConversationId?: string;
   externalConversationTitle?: string;
   requestedAgentName?: string;
+  targetAgentId?: string;
 }): Promise<{ session: SessionDto; deduplicated: boolean }> {
   const initialRequest = cleanString(opts.initialRequest, 12_000);
   if (!initialRequest) throw errors.badRequest('initialRequest is required');
   const conversationId = cleanString(opts.externalConversationId ?? ulid(), 160);
 
-  const recent = await prisma.agentBuildSession.findMany({
-    where: { userId: opts.userId },
-    orderBy: { createdAt: 'desc' },
-    take: 100,
-    include: { iterations: { orderBy: { sequence: 'asc' }, take: 100 } },
-  });
-  const existing = recent.find((row) => {
-    const brief = asBrief(row.brief);
-    return brief.externalSource === opts.source && brief.externalConversationId === conversationId;
-  });
-  if (existing) return { session: toSessionDto(existing), deduplicated: true };
-
+  let target: { id: string; name: string } | null = null;
+  if (opts.targetAgentId) {
+    target = await prisma.agent.findFirst({
+      where: {
+        id: opts.targetAgentId,
+        createdBy: opts.userId,
+        deletedAt: null,
+        systemManaged: false,
+      },
+      select: { id: true, name: true },
+    });
+    if (!target) throw errors.notFound('Target agent not found');
+  }
   const inference = inferFromPrompt(initialRequest);
   const brief = deepRedactSecrets({
     ...inference.brief,
-    requestedAgentName: cleanString(opts.requestedAgentName, 120) || inference.brief.requestedAgentName,
-    requestedStrategy: 'create',
+    requestedAgentName: cleanString(opts.requestedAgentName, 120) || target?.name || inference.brief.requestedAgentName,
+    requestedStrategy: target ? 'reuse' : 'create',
     externalSource: opts.source,
     externalConversationId: conversationId,
     externalConversationTitle: cleanString(opts.externalConversationTitle, 240) || undefined,
@@ -772,20 +774,59 @@ export async function createExternalBuilderSession(opts: {
     externalEventId: eventId,
   }];
   const id = ulid();
-  const row = await prisma.agentBuildSession.create({
-    data: {
-      id,
-      userId: opts.userId,
-      status: 'DISCOVERY',
-      transcript: transcript as Prisma.InputJsonValue,
-      brief: brief as Prisma.InputJsonValue,
-      progress: buildProgress(inference.answered, null) as Prisma.InputJsonValue,
-    },
+  // Concurrent Claude lifecycle hooks can race; hold an advisory lock and
+  // re-check so the same owner+conversation never creates two sessions.
+  const persisted = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw<Array<{ locked: number }>>`
+      WITH conversation_lock AS (
+        SELECT pg_advisory_xact_lock(
+          hashtext(${opts.userId}),
+          hashtext(${`${opts.source}:${conversationId}`})
+        )
+      )
+      SELECT 1::int AS "locked" FROM conversation_lock
+    `;
+    const existingIds = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id"
+      FROM "AgentBuildSession"
+      WHERE "userId" = ${opts.userId}
+        AND "brief"->>'externalSource' = ${opts.source}
+        AND "brief"->>'externalConversationId' = ${conversationId}
+      ORDER BY "createdAt" DESC
+      LIMIT 1
+    `;
+    if (existingIds[0]) {
+      const existing = await tx.agentBuildSession.findUniqueOrThrow({
+        where: { id: existingIds[0].id },
+        include: { iterations: { orderBy: { sequence: 'asc' }, take: 100 } },
+      });
+      return { row: existing, created: false as const };
+    }
+    const row = await tx.agentBuildSession.create({
+      data: {
+        id,
+        userId: opts.userId,
+        status: 'DISCOVERY',
+        transcript: transcript as Prisma.InputJsonValue,
+        brief: brief as Prisma.InputJsonValue,
+        progress: buildProgress(inference.answered, null) as Prisma.InputJsonValue,
+        targetAgentId: target?.id ?? null,
+        strategy: target ? 'reuse' : 'create',
+      },
+      include: { iterations: { orderBy: { sequence: 'asc' }, take: 100 } },
+    });
+    return { row, created: true as const };
   });
+  if (!persisted.created) {
+    return { session: toSessionDto(persisted.row), deduplicated: true };
+  }
+  const row = persisted.row;
   await audit(opts.userId, 'agent_builder.external_session_created', 'AgentBuildSession', id, {
     source: opts.source,
     externalConversationId: conversationId,
   });
+  // Local evolution ledger: first message seeds a background iteration so
+  // reflection/training history stays continuous after remote idempotency merge.
   const iteration = await createBuilderEvolutionIteration({
     sessionId: id,
     triggerKind: 'message',

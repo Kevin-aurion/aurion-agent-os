@@ -40,17 +40,26 @@ try {
     'submit_agent_build_for_fde_review',
     'submit_agent_build_test_data',
     'run_agent_build_test',
+    'list_available_agents',
+    'get_agent_capabilities',
+    'invoke_agent',
+    'get_agent_run',
+    'list_agent_schedules',
+    'request_agent_schedule',
   ]) assert(names.has(required), `missing MCP tool: ${required}`);
 
   const prompts = await client.listPrompts();
   assert(prompts.prompts.some((prompt) => prompt.name === 'build-aios-agent'));
+  assert(prompts.prompts.some((prompt) => prompt.name === 'use-aios-agent'));
   const prompt = await client.getPrompt({
     name: 'build-aios-agent',
     arguments: { request: '建立一位客戶回饋整理員工', source: 'CLAUDE_DESKTOP' },
   });
   assert(JSON.stringify(prompt).includes('start_agent_build'));
 
-  const conversationId = `stdio-e2e-${Date.now()}`;
+  // Avoid pure digit runs (Date.now) — redactor collapses them to [REDACTED_CARD]
+  // and reuses one external conversation across E2E invocations.
+  const conversationId = `stdio-e2e-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const started = resultJson(await client.callTool({
     name: 'start_agent_build',
     arguments: {
@@ -89,7 +98,9 @@ try {
   }));
   assert.equal(duplicate.deduplicated, true);
 
-  const blockedStop = resultJson(await client.callTool({
+  // Stop is non-blocking: mirrors final assistant text and may queue Shadow
+  // reflection; the Claude hook state machine owns bounded continuation.
+  const firstStop = resultJson(await client.callTool({
     name: 'guard_agent_build_stop',
     arguments: {
       externalConversationId: conversationId,
@@ -98,8 +109,10 @@ try {
       source: 'CLAUDE_CODE',
     },
   }));
-  assert.equal(blockedStop.decision, 'block');
-  assert.equal(blockedStop.artifactFresh, false);
+  assert.equal(firstStop.matched, true);
+  assert.equal(firstStop.finalMessageSynced, true);
+  assert.equal(firstStop.artifactFresh, false);
+  assert.equal(firstStop.decision, undefined);
 
   const upload = resultJson(await client.callTool({
     name: 'upload_agent_build_file',
@@ -201,7 +214,7 @@ try {
       'turn sync and idempotent retry',
       'file upload',
       'complete artifact sync',
-      'Stop guard blocks once then allows after artifact sync',
+      'Stop syncs final text (non-blocking) then remains non-blocking after artifact sync',
       'build resource read',
       'submit stops at FDE review',
     ],

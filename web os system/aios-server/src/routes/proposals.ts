@@ -11,9 +11,10 @@ import {
   rejectProposal,
 } from '../lib/changeproposal.js';
 import { requireVisibleAgent } from '../lib/agentaccess.js';
+import { createScheduleProposal } from '../lib/scheduleproposal.js';
 
 const createBodySchema = z.object({
-  targetType: z.enum(['AGENT', 'SKILL', 'RESTRICTION', 'IDENTITY_CARD']),
+  targetType: z.enum(['AGENT', 'SKILL', 'RESTRICTION', 'IDENTITY_CARD', 'SCHEDULE']),
   targetId: z.string().min(1).optional(),
   proposedChange: z.unknown(),
   severity: z.string().min(1).optional(),
@@ -28,6 +29,17 @@ export async function proposalRoutes(app: FastifyInstance) {
       const { id: agentId } = req.params as { id: string };
       const body = createBodySchema.parse(req.body);
       await requireVisibleAgent(agentId, req.user!);
+
+      if (body.targetType === 'SCHEDULE') {
+        if (!body.targetId) throw errors.badRequest('SCHEDULE proposal requires targetId (workflowId)');
+        const result = await createScheduleProposal({
+          agentId,
+          workflowId: body.targetId,
+          proposedBy: req.user!.sub,
+          change: body.proposedChange,
+        });
+        return reply.send(ok(result.proposal));
+      }
 
       const proposal = await createProposal({
         agentId,

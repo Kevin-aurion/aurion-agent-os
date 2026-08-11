@@ -54,7 +54,7 @@ if (targetExists && !(await exists(markerPath))) {
 }
 
 const sourcePlugin = path.join(packageRoot, 'plugins', pluginName);
-const canonicalSkill = path.join(packageRoot, 'skills', 'build-aios-agent');
+const canonicalSkillNames = ['build-aios-agent', 'use-aios-agent'];
 const sourceMarketplace = JSON.parse(
   await readFile(path.join(packageRoot, 'installers', 'marketplace.json'), 'utf8'),
 );
@@ -109,9 +109,12 @@ await mkdir(path.join(targetRoot, 'plugins'), { recursive: true });
 const targetPlugin = path.join(targetRoot, 'plugins', pluginName);
 await rm(targetPlugin, { recursive: true, force: true });
 await cp(sourcePlugin, targetPlugin, { recursive: true });
-await rm(path.join(targetPlugin, 'skills', 'build-aios-agent'), { recursive: true, force: true });
 await mkdir(path.join(targetPlugin, 'skills'), { recursive: true });
-await cp(canonicalSkill, path.join(targetPlugin, 'skills', 'build-aios-agent'), { recursive: true });
+for (const skillName of canonicalSkillNames) {
+  const targetSkill = path.join(targetPlugin, 'skills', skillName);
+  await rm(targetSkill, { recursive: true, force: true });
+  await cp(path.join(packageRoot, 'skills', skillName), targetSkill, { recursive: true });
+}
 
 await writeFile(
   path.join(targetRoot, '.claude-plugin', 'marketplace.json'),

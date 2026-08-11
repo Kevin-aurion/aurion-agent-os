@@ -7,7 +7,7 @@ Fastify 路由，全部掛在 `/api/*`。多數以 `requireAuth` preHandler 保�
 - `workflows.ts` — 工作流 CRUD 與觸發設定（`schedule`/`keyword`/`manual`）；`syncSchedule` 通知即時排程；`kickOffRun` 預先產生 `runId`。
 - `skills.ts` — 技能。**`/api/skills/build` 為非同步**。`POST /:id/confirm` 僅 FDE；走 `confirmAwaitingSkill`（AWAITING + CODEX 閘）。
 - `training.ts` — 口述訓練。`train/message` 為 **requireAuth**（MEMBER 可建 inert 草稿）；永不 auto-confirm。`skillId` 必須已掛在該 agent。
-- `agentbuilder.ts` — **Agent Builder**（CEO 友善工廠）。`external-snapshot` 供無 lifecycle hook 客戶端同步完整草稿；`external/prompt-hook` 保存 prompt，`external/stop-guard` 於完整 user/assistant pair 後排入 Shadow 反思。`POST /sessions/:id/shadow-chat` 是 Claude MCP 對話試教（safe mode、無工具、無外部副作用）。`GET /evolution-queue` 後臺只顯示版本／反思／FDE 放行；正式 finalize 仍需 PASSED 且只有 FDE。
+- `agentbuilder.ts` — **Agent Builder**（CEO 友善工廠）。`external-snapshot` 供無 lifecycle hook 客戶端可重試同步完整草稿；`external/prompt-hook` 保存 prompt 並排入背景演進，`external/stop-guard` 於完整 user/assistant pair 後排入 Shadow 反思（不阻塞等 Artifact）。`POST /sessions/:id/shadow-chat` 是 Claude MCP 對話試教（safe mode、無工具、無外部副作用）。`GET /agents` 僅列登入帳號建立的非系統 Agent；草稿可 PATCH 名稱，live Agent 改名只能建立 ChangeProposal 待 FDE 核准。上傳 `?useAsTemplate=true` 會在建置時產生 Skill template asset。`GET /evolution-queue` 永遠只回登入帳號本人的建置（含版本／反思／FDE 放行）；FDE 全域紀錄改走 trainer-only `GET /admin/evolution-queue`。背景 READY 僅 shadow 草稿，FDE 才能建立 PAUSED Agent + `AWAITING_USER_CONFIRM` 技能；正式 finalize 仍需 PASSED 且只有 FDE。`GET /sessions/:id/export` 匯出可攜 Agent package（不含憑證／啟用排程）。
 - `voice.ts` — 語音轉錄 **requireAuth**（草稿輔助；redact 後回傳）。
 - `recording.ts` — 錄製 start/status/stop/to-skill 皆 **requireAuth**（草稿）；host-global 錄製 session 由後端按 user + 開始時選定的 Agent 持有，to-skill 只接受 opaque sessionId、不接受前端指定本機產物路徑；永不 auto-confirm。
 - `conversations.ts` — 對話。**擁有者隔離**：list 只回 `userId=req.user.sub`；GET/POST messages 與 WS `chat.send` 皆驗證 `conversation.userId`。
@@ -17,6 +17,7 @@ Fastify 路由，全部掛在 `/api/*`。多數以 `requireAuth` preHandler 保�
 - `dashboard.ts` — 總覽統計。
 - `auth.ts` — 登入 / token。
 - `mcpoauth.ts` — 公開 Agent Builder Remote MCP 的 OAuth 2.1 邊界：discovery、DCR、Claude／ChatGPT hosted callback、登入／同意、authorization code + PKCE S256、RFC 8707 resource audience、refresh rotation、revoke。OAuth 回應依協議直接回 JSON／HTML，不包 `ok()`；scope 固定 `aios:agent-builder`，不可取得 FDE 生效能力。
+- `agentruntime.ts` — 公開 Remote MCP 的帳號隔離 Runtime：只列/讀/呼叫登入者自己的 ACTIVE Agent；Run 以 idempotency key 去重；高風險沿用 HITL。排程只能建立 `SCHEDULE` ChangeProposal，FDE 核准前不得生效。
 - `health.ts` — 健康檢查。
 
 ## 注意

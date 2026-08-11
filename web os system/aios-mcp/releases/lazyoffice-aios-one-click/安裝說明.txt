@@ -1,5 +1,5 @@
-Lazyoffice AIOS Agent Builder 一鍵安裝
-=================================
+Lazyoffice AIOS Agent Builder／Runtime 一鍵安裝
+=============================================
 
 這個安裝包不會在客戶電腦安裝 AIOS server、資料庫、Tunnel 或本機 MCP 服務。
 它只會安裝 Claude Plugin，並連線至 Lazyoffice 的公開 OAuth Remote MCP：
@@ -19,9 +19,11 @@ Windows：右鍵「Install-Lazyoffice-AIOS.ps1」，選擇使用 PowerShell 執�
 3. 第一次使用會開啟 AIOS 登入與 OAuth 授權頁；請使用自己的 AIOS 帳號。
 4. 對話與背景 Agent／Skill 草稿會傳回中央 AIOS。
 5. 到 https://aios-new.lazyoffice.app/agent-builds 查看。
+6. 若要使用既有員工，直接說「請用我的 AIOS 員工……」；Claude 會列出自己的已啟用員工並在執行後追蹤結果。
+7. 若要求定期執行，Claude 只會送出排程提案；必須由 FDE 核准後才生效。
 
 如果只使用 Claude Chat 而沒有 Claude Code CLI：
 1. 在 Claude 的 Connectors 設定加入上面的 Remote MCP URL，完成登入授權。
-2. 上傳同包內的 build-aios-agent.skill.zip。
+2. 建立員工時上傳同包內的 build-aios-agent.skill.zip；使用既有員工時上傳 use-aios-agent.skill.zip。
 
 注意：Claude Chat 自訂 Skill ZIP 本身不能自動新增 Connector；這是 Claude 平台目前的產品邊界。

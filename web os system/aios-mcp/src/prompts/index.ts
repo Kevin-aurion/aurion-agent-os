@@ -31,4 +31,32 @@ export function registerAllPrompts(server: McpServer): void {
       }],
     }),
   );
+
+  server.registerPrompt(
+    'use-aios-agent',
+    {
+      title: 'Use an approved AIOS employee',
+      description: 'Select and invoke an ACTIVE AIOS employee, or submit an FDE-governed schedule proposal.',
+      argsSchema: {
+        request: z.string().min(1).describe('The work or recurring cadence the user wants an existing employee to perform.'),
+      },
+    },
+    async ({ request }) => ({
+      messages: [{
+        role: 'user',
+        content: {
+          type: 'text',
+          text: [
+            `請使用我已通過 FDE 的 AIOS 員工處理：${request}`,
+            '',
+            '先呼叫 list_available_agents；若無法唯一判定員工，列出候選並詢問，不要猜測。',
+            '選定後呼叫 get_agent_capabilities，依輸入規格補齊必要資料，再用穩定 idempotencyKey 呼叫 invoke_agent。',
+            '使用 get_agent_run 追蹤到終態；QUEUED/RUNNING 不代表完成，AWAITING_REVIEW 代表等待 FDE。',
+            '若需求是定期執行，先呼叫 list_agent_schedules，再以 request_agent_schedule 送出提案。',
+            '排程提案在 FDE 核准前不生效，不得聲稱已經排程完成。',
+          ].join('\n'),
+        },
+      }],
+    }),
+  );
 }
