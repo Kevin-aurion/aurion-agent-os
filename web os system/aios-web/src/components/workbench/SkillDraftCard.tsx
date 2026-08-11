@@ -2,6 +2,11 @@
 
 import { AlertTriangle } from 'lucide-react';
 import { Spinner, StatusBadge } from '@/components/ui';
+import {
+  deriveDraftGaps,
+  draftCardActions,
+  draftNextAction,
+} from '@/lib/teachjourney';
 import type { SkillUnderstanding } from './types';
 
 export function UnderstandingList({
@@ -58,7 +63,9 @@ export function SkillDraftCard({
   onPropose: (skillId: string, name: string) => void;
 }) {
   const u = understanding;
-  const showAction = reviewStatus !== 'CONFIRMED' && !statusNote?.includes('提案');
+  const gaps = deriveDraftGaps(u);
+  const nextAction = draftNextAction({ reviewStatus, isFde, statusNote });
+  const { showConfirm, showPropose } = draftCardActions({ isFde, reviewStatus, statusNote });
 
   return (
     <div className="card space-y-3 border-brand/20 p-4">
@@ -89,10 +96,26 @@ export function SkillDraftCard({
           )}
         </>
       )}
+      {gaps.length > 0 && (
+        <div className="space-y-1 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-muted">
+            <AlertTriangle className="h-3.5 w-3.5 text-amber-400/80" />
+            資訊缺口
+          </div>
+          <ul className="space-y-1">
+            {gaps.map((g, idx) => (
+              <li key={idx} className="flex items-start gap-1.5 text-sm text-muted">
+                <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-amber-400/60" />
+                <span>{g}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {statusNote && <p className="text-sm text-emerald-400">{statusNote}</p>}
-      {showAction && (
+      {(showConfirm || showPropose) && (
         <div className="flex justify-end gap-2 pt-1">
-          {isFde ? (
+          {showConfirm && (
             <button
               type="button"
               className="btn-primary"
@@ -102,7 +125,8 @@ export function SkillDraftCard({
               {confirming && <Spinner className="border-white/40 border-t-white" />}
               ✅ 確認掛載
             </button>
-          ) : (
+          )}
+          {showPropose && (
             <button
               type="button"
               className="btn-primary"
@@ -115,6 +139,7 @@ export function SkillDraftCard({
           )}
         </div>
       )}
+      <p className="text-xs text-muted">下一步：{nextAction}</p>
     </div>
   );
 }

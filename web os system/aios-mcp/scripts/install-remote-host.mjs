@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 const exec = promisify(execFile);
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const entrypoint = path.join(packageRoot, 'dist', 'index.js');
-const label = 'app.lazyoffice.aurion-aios-remote-mcp';
+const label = 'app.lazyoffice.aios-remote-mcp';
 const launchAgents = path.join(os.homedir(), 'Library', 'LaunchAgents');
 const logs = path.join(os.homedir(), 'Library', 'Logs');
 const plist = path.join(launchAgents, `${label}.plist`);
@@ -37,15 +37,15 @@ const content = `<?xml version="1.0" encoding="UTF-8"?>
     <key>AIOS_MCP_TRANSPORT</key><string>http</string>
     <key>AIOS_MCP_HTTP_AUTH</key><string>oauth</string>
     <key>AIOS_MCP_HTTP_PORT</key><string>8701</string>
-    <key>AIOS_MCP_PUBLIC_URL</key><string>https://aurion-aios-mcp.lazyoffice.app/mcp</string>
+    <key>AIOS_MCP_PUBLIC_URL</key><string>https://aios-mcp.lazyoffice.app/mcp</string>
     <key>AIOS_MCP_PROFILE</key><string>builder</string>
     <key>AIOS_MCP_BASE_URL</key><string>http://127.0.0.1:8700</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>5</integer>
-  <key>StandardOutPath</key><string>${xml(path.join(logs, 'aurion-aios-remote-mcp.stdout.log'))}</string>
-  <key>StandardErrorPath</key><string>${xml(path.join(logs, 'aurion-aios-remote-mcp.stderr.log'))}</string>
+  <key>StandardOutPath</key><string>${xml(path.join(logs, 'lazyoffice-aios-remote-mcp.stdout.log'))}</string>
+  <key>StandardErrorPath</key><string>${xml(path.join(logs, 'lazyoffice-aios-remote-mcp.stderr.log'))}</string>
 </dict>
 </plist>
 `;

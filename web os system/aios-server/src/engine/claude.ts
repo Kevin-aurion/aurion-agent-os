@@ -66,7 +66,7 @@ export function execCli(cmd: string, args: string[], opts: ExecCliOpts = {}): Pr
       child = spawn(spawnCmd, spawnArgs, {
         cwd: opts.cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
-        // A dedicated process group lets timeout/abort terminate Claude plus
+        // A dedicated process group lets timeout/abort terminate the CLI plus
         // any hook/MCP children it launched instead of orphaning them.
         detached: process.platform !== 'win32',
       });
@@ -159,14 +159,17 @@ export interface RunClaudeOpts {
   /** Opt-in L6 write sandbox profile path; forwarded to execCli. */
   sandboxProfilePath?: string;
   signal?: AbortSignal;
+  /** Disable user/project Claude customizations for deterministic sandbox runs. */
+  safeMode?: boolean;
 }
 
 export interface RunClaudeResult {
   stdout: string;
 }
 
-function buildClaudeArgs(opts: RunClaudeOpts): string[] {
+export function buildClaudeArgs(opts: RunClaudeOpts): string[] {
   const args = ['-p', opts.prompt, '--output-format', 'text'];
+  if (opts.safeMode) args.push('--safe-mode');
   if (opts.systemAppend) args.push('--append-system-prompt', opts.systemAppend);
   if (opts.mcpConfig) args.push('--mcp-config', opts.mcpConfig);
   if (opts.fullPermissions) args.push('--dangerously-skip-permissions');

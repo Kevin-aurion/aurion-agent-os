@@ -556,14 +556,19 @@ async function main() {
       data: 'timeout fixture',
       expected: 'must not pass',
     });
+    let timeoutSignal: AbortSignal | undefined;
     const timeoutRun = await runBuilderTest({
       sessionId: session.id,
       userId: owner.id,
       role: owner.role,
-      runAgentFn: async () => new Promise<RunOutcome>(() => {}),
+      runAgentFn: async (runOpts) => {
+        timeoutSignal = runOpts.signal;
+        return new Promise<RunOutcome>(() => {});
+      },
       timeoutMs: 5,
     });
     assert(timeoutRun.status === 'FAILED', 'timeout → FAILED');
+    assert(timeoutSignal?.aborted === true, 'timeout must cancel the underlying engine run');
     console.log('  ✓ timeout fail-closed');
 
     // Return the main session to PASSED for finalize.

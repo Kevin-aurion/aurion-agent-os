@@ -7,7 +7,7 @@ import path from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { HttpClient } from '../http/client.js';
-import type { AgentBuildSession, BuilderAgentSummary, ExternalBuilderSource } from '../types.js';
+import type { AgentBuildSession, ExternalBuilderSource } from '../types.js';
 import { runTool } from './util.js';
 
 const sourceSchema = z.enum(['CLAUDE_DESKTOP', 'CLAUDE_CODE', 'CHATGPT', 'CURSOR', 'OTHER']);
@@ -174,18 +174,6 @@ function noteFor(session: AgentBuildSession): string {
 
 export function registerAgentBuilderTools(server: McpServer, client: HttpClient): void {
   server.registerTool(
-    'list_my_agents',
-    {
-      title: 'List my AIOS employees',
-      annotations: READ_ONLY_ANNOTATIONS,
-      description:
-        'List only the signed-in AIOS account’s live, non-system Agents. Use this before deciding whether a request continues an existing employee or creates a new one. If no unique employee is clear, show the list and ask the user; include a “none of these” choice.',
-      inputSchema: {},
-    },
-    async () => runTool(() => client.get<BuilderAgentSummary[]>('/api/agent-builder/agents')),
-  );
-
-  server.registerTool(
     'prepare_agent_build_prompt',
     {
       title: 'Auto-start or resume an AIOS Agent build',
@@ -243,13 +231,10 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
         source: sourceSchema.optional(),
         externalConversationId: z.string().min(1).max(160).optional().describe('Stable id for this desktop conversation; reuse it after retries.'),
         externalConversationTitle: z.string().max(240).optional(),
-        requestedAgentName: z.string().min(2).max(120)
-          .describe('Name explicitly chosen or confirmed by the user. Do not silently invent it.'),
-        targetAgentId: z.string().min(1).optional()
-          .describe('Owned Agent id from list_my_agents when continuing training. Omit only for a new employee.'),
+        requestedAgentName: z.string().max(120).optional(),
       },
     },
-    async ({ initialRequest, source, externalConversationId, externalConversationTitle, requestedAgentName, targetAgentId }) =>
+    async ({ initialRequest, source, externalConversationId, externalConversationTitle, requestedAgentName }) =>
       runTool(async () => {
         const result = await client.post<{ session: AgentBuildSession; deduplicated: boolean }>(
           '/api/agent-builder/external/sessions',
@@ -260,7 +245,6 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
               externalConversationId: externalConversationId ?? process.env.CLAUDE_CODE_SESSION_ID,
               externalConversationTitle,
               requestedAgentName,
-              targetAgentId,
             },
           },
         );
@@ -270,45 +254,6 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
           next: 'Ask one contextual, high-information question. Before showing it to the user, call sync_agent_build_turn with the exact user and assistant text.',
         };
       }),
-  );
-
-  server.registerTool(
-    'set_agent_build_name',
-    {
-      title: 'Set the user-chosen name for an Agent build',
-      annotations: DRAFT_WRITE_ANNOTATIONS,
-      description:
-        'Set or correct the human-facing name of an owned inert Agent Builder draft. Ask the user first. This does not rename a live Agent and does not bypass FDE.',
-      inputSchema: {
-        sessionId: z.string().min(1),
-        name: z.string().min(2).max(120),
-      },
-    },
-    async ({ sessionId, name }) => runTool(async () => {
-      const session = await client.patch<AgentBuildSession>(
-        `/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/name`,
-        { body: { name } },
-      );
-      return { session, note: noteFor(session) };
-    }),
-  );
-
-  server.registerTool(
-    'request_agent_rename',
-    {
-      title: 'Request an AIOS employee rename',
-      annotations: DRAFT_WRITE_ANNOTATIONS,
-      description:
-        'Request a new name for an existing owned Agent selected from list_my_agents. This creates an inert ChangeProposal; only FDE approval applies the rename.',
-      inputSchema: {
-        agentId: z.string().min(1),
-        name: z.string().min(2).max(120),
-      },
-    },
-    async ({ agentId, name }) => runTool(() => client.post<Record<string, unknown>>(
-      `/api/agent-builder/agents/${encodeURIComponent(agentId)}/rename-proposal`,
-      { body: { name } },
-    )),
   );
 
   server.registerTool(
@@ -423,11 +368,9 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
         mimeType: z.string().max(120).optional(),
         textContent: z.string().max(10 * 1024 * 1024).optional(),
         base64Content: z.string().max(14 * 1024 * 1024).optional(),
-        useAsTemplate: z.boolean().default(false)
-          .describe('True when this file should become a reusable Skill template asset after FDE authorization.'),
       },
     },
-    async ({ sessionId, filename, mimeType, textContent, base64Content, useAsTemplate }) =>
+    async ({ sessionId, filename, mimeType, textContent, base64Content }) =>
       runTool(async () => {
         if ((textContent == null) === (base64Content == null)) {
           throw new Error('Provide exactly one of textContent or base64Content');
@@ -452,15 +395,10 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
           session: AgentBuildSession;
           assistantMessage: string;
           status: string;
-        }>(`/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/files?useAsTemplate=${useAsTemplate ? 'true' : 'false'}`, form);
+        }>(`/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/files`, form);
         return {
           ...result,
-          uploaded: {
-            filename: safeName,
-            bytes: bytes.length,
-            mimeType: mimeType || 'application/octet-stream',
-            useAsTemplate,
-          },
+          uploaded: { filename: safeName, bytes: bytes.length, mimeType: mimeType || 'application/octet-stream' },
           note: noteFor(result.session),
         };
       }),
@@ -517,6 +455,35 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
         `/api/agent-builder/sessions/${encodeURIComponent(sessionId)}`,
       );
       return { session, note: noteFor(session) };
+    }),
+  );
+
+  server.registerTool(
+    'chat_with_agent_build',
+    {
+      title: 'Coach a Shadow AIOS employee in this conversation',
+      annotations: DRAFT_WRITE_ANNOTATIONS,
+      description:
+        'Send one realistic End User work message to the latest READY Shadow Agent and return its isolated reply in this Claude/ChatGPT/Codex conversation. Use this for training and debugging before FDE review. The preview has no tools, network, shell, Computer Use or external-write authority. AIOS stores the redacted pair and queues a reflection that may revise only the Shadow Skill/Rules; it never edits or activates production.',
+      inputSchema: {
+        sessionId: z.string().min(1),
+        message: z.string().min(1).max(24_000)
+          .describe('The exact realistic End User message or work input to test against the Shadow Agent.'),
+      },
+    },
+    async ({ sessionId, message }) => runTool(async () => {
+      const result = await client.post<{
+        sessionId: string;
+        iterationId: string;
+        reply: string;
+        reflectionQueued: boolean;
+      }>(`/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/shadow-chat`, {
+        body: { message },
+      });
+      return {
+        ...result,
+        note: 'Show reply exactly as the Shadow Agent test result, ask the user for one concrete correction, and never claim the draft is active.',
+      };
     }),
   );
 

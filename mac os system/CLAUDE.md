@@ -53,8 +53,8 @@ mac os system/
 
 ## 既有功能
 - 以 `APIClient` + `AwpClient` 連後端（預設 `127.0.0.1:8700`，可在設定改 URL）。
-- 使用者 JWT 存 Keychain service `com.aurion.aios-system`。
-- **裝置代理**：一次性註冊碼 → `POST /api/device/enroll` → 裝置 id/token 存 **獨立** Keychain service `com.aurion.aios-system.device`。
+- 使用者 JWT 存 Keychain service `com.lazyoffice.aios-system`。
+- **裝置代理**：一次性註冊碼 → `POST /api/device/enroll` → 裝置 id/token 存 **獨立** Keychain service `com.lazyoffice.aios-system.device`。
 - **DeviceChannel**：`URLRequest` + `Authorization: Bearer` + 固定 `Sec-WebSocket-Protocol: aios-device`；**token 絕不進 URL/query/subprotocol**。收到 `device.hello` 才算 online；撤銷/401 停止重連直到重新註冊。
 - 能力探測：macOS/app 版號、Codex App、codex CLI、Computer Use bridge、Screen Recording、Accessibility、LINE Desktop、固定 MCP READY 狀態。**不偽造能力**。
 - 耐久任務：`GET /api/device/tasks` 為真相；WS 只 wake；ACK + lease 續約 + progress + REST result；本機再驗證 payload allowlist。

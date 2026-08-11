@@ -26,8 +26,7 @@ async function main(): Promise<void> {
         instructions: [
           'Use this server as the durable system of record when the user asks to build, train, revise or test an AI employee or Agent.',
           'Interview adaptively with one high-value question at a time; do not use a fixed questionnaire.',
-          'Before creating a build, call list_my_agents. If continuation is ambiguous, ask which employee; if it is new, ask the user to choose the name.',
-          'For ChatGPT or other clients without lifecycle hooks, start_agent_build after Agent selection and naming, then call upsert_agent_build_snapshot before each assistant reply that changes the draft.',
+          'For ChatGPT or other clients without lifecycle hooks, start_agent_build immediately, then call upsert_agent_build_snapshot before each assistant reply that changes the draft.',
           'All synchronized content is an inert shadow draft. Never claim an Agent or Skill is active unless get_agent_build returns ACTIVE.',
           'Never bypass FDE review, Skill confirmation, real testing or final activation gates.',
         ].join(' '),

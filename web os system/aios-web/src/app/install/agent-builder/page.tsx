@@ -14,7 +14,6 @@ import {
   FileCheck2,
   FileCode2,
   FileText,
-  Github,
   KeyRound,
   Laptop,
   LockKeyhole,
@@ -28,13 +27,12 @@ import {
 } from 'lucide-react';
 
 export const metadata: Metadata = {
-  title: 'Agent Builder 安裝中心 — Aurion AIOS',
-  description: '在 ChatGPT、Codex 或 Claude 安裝 Aurion AIOS Agent Builder，並下載 Plugin、Skill 與安裝文件。',
+  title: 'Agent Builder 安裝中心 — Lazyoffice AIOS',
+  description: '在 ChatGPT、Codex 或 Claude 安裝 Lazyoffice AIOS Agent Builder，並下載 Plugin、Skill 與安裝文件。',
 };
 
 const DOWNLOAD_ROOT = '/downloads/agent-builder';
-const REMOTE_MCP = 'https://aurion-aios-mcp.lazyoffice.app/mcp';
-const CLAUDE_MARKETPLACE = 'https://github.com/Kevin-aurion/aurion-aios-plugin-marketplace';
+const REMOTE_MCP = 'https://aios-mcp.lazyoffice.app/mcp';
 
 type DownloadItem = {
   title: string;
@@ -47,14 +45,14 @@ type DownloadItem = {
 const downloads: DownloadItem[] = [
   {
     title: 'Universal Plugin',
-    filename: 'aurion-aios-builder-plugin.zip',
+    filename: 'lazyoffice-aios-builder-plugin.zip',
     description: 'ChatGPT／Codex 與 Claude Plugin 共用套件，包含 Skill、Remote MCP 設定與 Claude Hooks。',
     icon: PackageCheck,
     primary: true,
   },
   {
     title: '跨平台一鍵安裝包',
-    filename: 'aurion-aios-one-click-install.zip',
+    filename: 'lazyoffice-aios-one-click-install.zip',
     description: '提供 macOS 與 Windows 安裝器，適合 Claude Code／Cowork 客戶端部署。',
     icon: Laptop,
   },
@@ -67,7 +65,7 @@ const downloads: DownloadItem[] = [
   {
     title: 'Remote MCP 設定',
     filename: 'aios-remote-mcp.json',
-    description: '只連線 Aurion 公開服務，不會在客戶電腦啟動 AIOS Server。',
+    description: '只連線 Lazyoffice 公開服務，不會在客戶電腦啟動 AIOS Server。',
     icon: FileCode2,
   },
   {
@@ -90,12 +88,12 @@ const chatGptSteps = [
     body: '在 ChatGPT Settings → Security and login 開啟 Developer mode，進入 Plugins／Connectors 管理頁。',
   },
   {
-    title: '加入 Aurion Remote MCP',
+    title: '加入 Lazyoffice Remote MCP',
     body: `新增 Remote MCP，網址填入 ${REMOTE_MCP}。不需要安裝本機 Server，也不要填 127.0.0.1。`,
   },
   {
     title: '登入 AIOS 並授權',
-    body: '瀏覽器會開啟 Aurion AIOS OAuth 頁。使用自己的 AIOS 帳號登入，連線只取得 Agent Builder 草稿權限。',
+    body: '瀏覽器會開啟 Lazyoffice AIOS OAuth 頁。使用自己的 AIOS 帳號登入，連線只取得 Agent Builder 草稿權限。',
   },
   {
     title: '直接描述要建立的員工',
@@ -105,20 +103,20 @@ const chatGptSteps = [
 
 const claudeSteps = [
   {
-    title: '加入 Aurion 私有 Marketplace',
-    body: `在 Customize → Plugins → Add marketplace 加入 ${CLAUDE_MARKETPLACE}。必須先取得該私有 GitHub Repository 權限。`,
+    title: '下載安裝套件',
+    body: 'Claude Code／Cowork 建議使用 Universal Plugin 或一鍵安裝包；純 Claude Chat 可使用獨立 Skill。',
   },
   {
-    title: '安裝 Aurion AIOS Builder',
-    body: '從 aurion-aios Marketplace 安裝 aurion-aios-builder；Plugin 會帶入 Remote MCP、Skill 與支援環境的 Hooks。',
+    title: '安裝 Plugin 或 Skill',
+    body: 'Plugin 會帶入 Remote MCP 與支援環境的 UserPromptSubmit／Stop Hooks；純 Skill 不會自動新增 Connector。',
   },
   {
     title: '完成 OAuth 連線',
     body: '第一次呼叫 AIOS 工具時，用自己的 AIOS 帳號授權。套件內沒有共用帳號、密碼或靜態 Token。',
   },
   {
-    title: '自動取得後續更新',
-    body: '之後不必重新上傳 ZIP；在 Marketplace 點 Update，或由組織管理員啟用自動同步，再開啟新對話即可。',
+    title: '開始自然訓練',
+    body: '直接和 Claude 對話。Claude Code 的 Hooks 會保存正常完成的回合；沒有 Hooks 的介面會由 Skill 主動同步。',
   },
 ];
 
@@ -173,9 +171,9 @@ export default function AgentBuilderInstallPage() {
       <header className="relative z-10 border-b border-white/10 bg-[#090b11]/80 backdrop-blur-xl">
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-5 sm:px-8">
           <Link href="/" className="flex items-center gap-3">
-            <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand font-bold text-white">A</span>
+            <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand font-bold text-white">L</span>
             <span>
-              <span className="block text-sm font-semibold">Aurion AIOS</span>
+              <span className="block text-sm font-semibold">Lazyoffice AIOS</span>
               <span className="block text-[10px] tracking-wide text-slate-500">AGENT BUILDER</span>
             </span>
           </Link>
@@ -265,17 +263,9 @@ export default function AgentBuilderInstallPage() {
                 </div>
               </div>
               <p className="mb-8 mt-5 text-sm leading-6 text-slate-400">
-                建議從受控 GitHub Marketplace 安裝。只有取得 Repository／組織授權的人能安裝；真正使用時仍要通過 AIOS OAuth。
+                Claude Code／Cowork 可透過 UserPromptSubmit 與 Stop Hooks 自動保存正常完成的回合；Claude Chat 則由 Skill 主動同步。
               </p>
               <StepList steps={claudeSteps} />
-              <a
-                href={CLAUDE_MARKETPLACE}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-8 inline-flex items-center gap-2 rounded-xl border border-orange-200/25 bg-orange-200/10 px-4 py-2.5 text-sm font-medium text-orange-100 transition hover:bg-orange-200/15"
-              >
-                <Github className="h-4 w-4" /> 開啟 Aurion 私有 Marketplace
-              </a>
             </article>
           </div>
 
@@ -350,7 +340,7 @@ export default function AgentBuilderInstallPage() {
           你不需要先理解 Agent、Skill、MCP 或 Harness。AI 會用自然對話整理需求，AIOS 則負責版本、治理與測試。
         </p>
         <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
-          <a href={`${DOWNLOAD_ROOT}/aurion-aios-builder-plugin.zip`} download className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-5 py-3 text-sm font-semibold text-white hover:brightness-110">
+          <a href={`${DOWNLOAD_ROOT}/lazyoffice-aios-builder-plugin.zip`} download className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-5 py-3 text-sm font-semibold text-white hover:brightness-110">
             <Download className="h-4 w-4" /> 下載 Universal Plugin
           </a>
           <Link href="/agent-builds" className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/15 px-5 py-3 text-sm font-medium hover:bg-white/5">
@@ -361,7 +351,7 @@ export default function AgentBuilderInstallPage() {
 
       <footer className="border-t border-white/10 py-8">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 px-5 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-8">
-          <div className="flex items-center gap-2"><span className="grid h-6 w-6 place-items-center rounded-md bg-brand text-[10px] font-bold text-white">A</span> Aurion AIOS Agent Builder</div>
+          <div className="flex items-center gap-2"><span className="grid h-6 w-6 place-items-center rounded-md bg-brand text-[10px] font-bold text-white">L</span> Lazyoffice AIOS Agent Builder</div>
           <div>Remote MCP · OAuth 2.1 · FDE governed</div>
         </div>
       </footer>

@@ -7,7 +7,6 @@ import { ok, errors, sendError } from '../lib/http.js';
 import { requireAuth } from '../lib/guard.js';
 import { audit } from '../lib/audit.js';
 import { draftSkillFromMessage, listAgentFlows } from '../lib/skilltraining.js';
-import { requireVisibleAgent } from '../lib/agentaccess.js';
 
 const trainMessageSchema = z.object({
   message: z.string().min(1),
@@ -20,7 +19,6 @@ export async function trainingRoutes(app: FastifyInstance) {
   app.get('/api/agents/:id/flows', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { id } = req.params as { id: string };
-      await requireVisibleAgent(id, req.user!);
       const flows = await listAgentFlows(id);
       return ok(flows);
     } catch (e) {
@@ -33,7 +31,6 @@ export async function trainingRoutes(app: FastifyInstance) {
   app.post('/api/agents/:id/train/message', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { id } = req.params as { id: string };
-      await requireVisibleAgent(id, req.user!);
       const parsed = trainMessageSchema.safeParse(req.body);
       if (!parsed.success) throw errors.badRequest('message is required');
       const body = parsed.data;

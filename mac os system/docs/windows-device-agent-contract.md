@@ -119,7 +119,7 @@ Install rules for a future Windows agent:
 
 - Fixed tarball URL for **1.1.2 only** (never `@latest`).
 - Verify SHA-256 before extract/READY.
-- Prefer `%LocalAppData%\aurion.aios-system\mcp\...` (or equivalent).
+- Prefer `%LocalAppData%\lazyoffice.aios-system\mcp\...` (or equivalent).
 - No server-supplied URL/package/version/command overrides.
 - Stdio JSON-RPC: `initialize` → `initialized` → `tools/list` → `tools/call`.
 - READY only after version + hash + exact tool list verification.

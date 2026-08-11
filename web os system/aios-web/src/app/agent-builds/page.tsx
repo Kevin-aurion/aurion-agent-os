@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bot,
@@ -64,6 +64,7 @@ const TRIGGER_LABELS: Record<string, string> = {
   file: '檔案',
   external_artifact: '外部 Agent 同步',
   test: '測試結果',
+  reflection: '對話反思',
   system: '系統',
 };
 
@@ -322,15 +323,6 @@ function BuildActions({
   isFde: boolean;
 }) {
   const queryClient = useQueryClient();
-  const suggestedTest = harness?.testIdeas[0];
-  const [testData, setTestData] = useState(suggestedTest?.input ?? '');
-  const [expected, setExpected] = useState(suggestedTest?.expected ?? '');
-
-  useEffect(() => {
-    if (!testData && suggestedTest?.input) setTestData(suggestedTest.input);
-    if (!expected && suggestedTest?.expected) setExpected(suggestedTest.expected);
-  }, [expected, suggestedTest?.expected, suggestedTest?.input, testData]);
-
   const refresh = async () => {
     await queryClient.invalidateQueries({ queryKey: ['agent-builder-evolutions'] });
   };
@@ -342,86 +334,84 @@ function BuildActions({
     mutationFn: () => API.post(`/api/agent-builder/sessions/${session.id}/approve-build`, {}),
     onSuccess: refresh,
   });
-  const runTest = useMutation({
-    mutationFn: async () => {
-      await API.post(`/api/agent-builder/sessions/${session.id}/test-data`, {
-        data: testData,
-        expected,
-      });
-      return API.post(`/api/agent-builder/sessions/${session.id}/test`, {});
-    },
+  const finalizeBuild = useMutation({
+    mutationFn: () => API.post(`/api/agent-builder/sessions/${session.id}/finalize`, {}),
     onSuccess: refresh,
   });
-  const pending = submitReview.isPending || approveBuild.isPending || runTest.isPending;
-  const error = submitReview.error ?? approveBuild.error ?? runTest.error;
+  const pending = submitReview.isPending || approveBuild.isPending || finalizeBuild.isPending;
+  const error = submitReview.error ?? approveBuild.error ?? finalizeBuild.error;
   const latestReady = [...session.iterations].reverse().find((iteration) => iteration.status === 'READY' && iteration.harness);
+  const latestReflection = [...session.iterations].reverse().find((iteration) => iteration.triggerKind === 'reflection');
+  const reflectionCount = session.iterations.filter((iteration) => iteration.triggerKind === 'reflection').length;
   const canSubmit = Boolean(
     latestReady
     && session.ownedByCurrentUser !== false
     && ['DISCOVERY', 'PLAN_READY', 'ACTIVE'].includes(session.status),
   );
   const canApprove = isFde && session.status === 'AWAITING_FDE';
-  const canTest = ['AWAITING_TEST_DATA', 'FAILED', 'PASSED'].includes(session.status)
-    && Boolean(session.builtAgentId || session.targetAgentId);
+  const canFinalize = isFde && session.status === 'PASSED';
 
   return (
     <section className="rounded-xl border border-brand/20 bg-brand/[0.04] p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 text-sm font-medium">
-            <FlaskConical className="h-4 w-4 text-brand" />
-            建立與測試
+            <MessageSquareText className="h-4 w-4 text-brand" />
+            對話式訓練與正式放行
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted">
-            對話會先在背景建立 Agent、Skill、記憶與流程草稿；正式待測版本與外部權限仍由 FDE 核准。
+            訓練、試教與除錯都在 Claude MCP 對話完成；這裡只保存版本、反思與 FDE 正式放行紀錄。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           {canSubmit && (
             <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled={pending} onClick={() => submitReview.mutate()}>
               {submitReview.isPending ? <Spinner /> : <Send className="h-3.5 w-3.5" />}
-              送交建立待測版本
+              送交 FDE 正式審核
             </button>
           )}
           {canApprove && (
             <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled={pending} onClick={() => approveBuild.mutate()}>
               {approveBuild.isPending ? <Spinner /> : <ShieldCheck className="h-3.5 w-3.5" />}
-              FDE 核准建立草稿
+              FDE 核准待放行版本
+            </button>
+          )}
+          {canFinalize && (
+            <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled={pending} onClick={() => finalizeBuild.mutate()}>
+              {finalizeBuild.isPending ? <Spinner /> : <ShieldCheck className="h-3.5 w-3.5" />}
+              FDE 正式放行
             </button>
           )}
         </div>
       </div>
 
       {session.status === 'AWAITING_FDE' && !isFde && (
-        <p className="mt-3 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-500">已送交 FDE；核准後即可在這裡放入測試資料並調用待測 Agent。</p>
+        <p className="mt-3 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-500">已送交 FDE；這個版本已鎖定等待正式審核，後臺不再進行 End User 訓練或除錯。</p>
       )}
-      {session.status === 'TESTING' && (
-        <p className="mt-3 rounded-lg bg-brand/10 px-3 py-2 text-xs text-brand">Agent 正在隔離試跑與跨模型驗證，完成後本頁會自動更新。</p>
+      {session.status === 'AWAITING_TEST_DATA' && (
+        <p className="mt-3 rounded-lg bg-brand/10 px-3 py-2 text-xs text-brand">待放行草稿已建立。請回到原本的 Claude MCP 對話提交最後驗證資料；通過後只會等待 FDE 正式放行。</p>
       )}
-
-      {canTest && (
-        <div className="mt-4 grid gap-3 lg:grid-cols-2">
-          <label className="text-xs font-medium">
-            測試資料
-            <textarea className="input mt-1 min-h-28 resize-y text-xs" value={testData} onChange={(event) => setTestData(event.target.value)} placeholder="貼上匿名化測試資料或使用背景建議的案例" />
-          </label>
-          <label className="text-xs font-medium">
-            預期結果
-            <textarea className="input mt-1 min-h-28 resize-y text-xs" value={expected} onChange={(event) => setExpected(event.target.value)} placeholder="描述什麼結果才算通過" />
-          </label>
-          <div className="flex flex-wrap items-center gap-3 lg:col-span-2">
-            <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled={pending || !testData.trim() || !expected.trim()} onClick={() => runTest.mutate()}>
-              {runTest.isPending ? <Spinner /> : <FlaskConical className="h-3.5 w-3.5" />}
-              調用 Agent 隔離試跑
-            </button>
-            {session.testResult && (
-              <span className={cn('text-xs', session.testResult.ok ? 'text-emerald-500' : 'text-rose-400')}>
-                {session.testResult.summary}
-              </span>
-            )}
+      {session.status === 'PASSED' && !isFde && (
+        <p className="mt-3 rounded-lg bg-emerald-500/10 px-3 py-2 text-xs text-emerald-500">Claude MCP 最後驗證已通過，正在等待 FDE 於後臺正式放行。</p>
+      )}
+      <div className="mt-4 grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">
+        <div className="rounded-lg border border-brand/20 bg-background/40 p-3">
+          <div className="flex items-center gap-2 text-xs font-medium text-brand">
+            <MessageSquareText className="h-3.5 w-3.5" />
+            在 Claude 裡直接試教
           </div>
+          <p className="mt-1.5 text-xs leading-relaxed text-muted">
+            讓 Claude 呼叫 <span className="font-mono text-foreground">chat_with_agent_build</span>，把一筆真實工作交給 Shadow Agent。回覆、你的糾正與下一版 Skill 規則都會回到同一段對話。
+          </p>
         </div>
-      )}
+        <div className="rounded-lg border border-border/70 bg-background/40 p-3">
+          <div className="text-[11px] text-muted">已完成的對話反思</div>
+          <div className="mt-1 text-lg font-semibold tabular-nums">{reflectionCount}</div>
+          <p className="mt-1 line-clamp-3 text-[11px] leading-relaxed text-muted">
+            {latestReflection?.userSummary ?? latestReflection?.fdeSummary ?? '完成第一輪 Claude 試教後，這裡會顯示 Skill／規則優化摘要。'}
+          </p>
+        </div>
+      </div>
       {error && <p className="mt-3 rounded-lg bg-rose-500/10 px-3 py-2 text-xs text-rose-400">{error instanceof Error ? error.message : '操作失敗，請重試。'}</p>}
     </section>
   );
@@ -611,7 +601,8 @@ export default function AgentBuildsPage() {
   const externalCount = sessions.filter((session) => sourceOf(session) !== 'AIOS').length;
   const awaitingFdeCount = sessions.filter((session) => session.status === 'AWAITING_FDE').length;
   const activeCount = sessions.filter((session) => session.status === 'ACTIVE').length;
-  const workingCount = sessions.filter((session) => ['QUEUED', 'ANALYZING', 'BUILDING'].includes(session.latestIteration?.status ?? '')).length;
+  const workingCount = sessions.filter((session) => session.status === 'TESTING'
+    || ['QUEUED', 'ANALYZING', 'BUILDING'].includes(session.latestIteration?.status ?? '')).length;
 
   return (
     <AppShell>
@@ -630,7 +621,7 @@ export default function AgentBuildsPage() {
         <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-brand" />
         <div className="text-sm leading-relaxed">
           <span className="font-medium">對話會自動保存，Agent 與 Skill 會在背景持續更新。</span>
-          <span className="text-muted"> 你不需要在 Claude 裡反覆提醒系統記錄；待測草稿、隔離試跑與 FDE 核准都可在這個獨立入口完成。</span>
+          <span className="text-muted"> 你不需要在 Claude 裡反覆提醒系統記錄；試教與除錯留在 Claude MCP 對話，這裡只查看版本反思與完成 FDE 正式放行。</span>
         </div>
       </div>
 

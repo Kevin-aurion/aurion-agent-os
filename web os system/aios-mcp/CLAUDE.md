@@ -4,7 +4,7 @@
 
 ## 定位
 
-**aios-mcp** 是 AIOS 的 **MCP provider**：把中央主機上的 **aios-server**（內部仍為 `http://127.0.0.1:8700`）能力以 MCP **tools / resources / prompts** 暴露給 ChatGPT、Claude Desktop、Claude Code、Cursor、Codex。客戶 Agent Builder 走公開 OAuth Remote MCP `https://aurion-aios-mcp.lazyoffice.app/mcp`，不在客戶電腦啟動 AIOS 服務。
+**aios-mcp** 是 AIOS 的 **MCP provider**：把中央主機上的 **aios-server**（內部仍為 `http://127.0.0.1:8700`）能力以 MCP **tools / resources / prompts** 暴露給 ChatGPT、Claude Desktop、Claude Code、Cursor、Codex。客戶 Agent Builder 走公開 OAuth Remote MCP `https://aios-mcp.lazyoffice.app/mcp`，不在客戶電腦啟動 AIOS 服務。
 
 它是 aios-server 的 REST client：
 
@@ -36,7 +36,7 @@
 - 每 **10 分鐘** 用單次 refresh token **主動輪替**；持久化於 `AIOS_MCP_STATE_DIR`（預設 `~/.aios-mcp`）
 - 遇 **401** 強制刷新後**重試一次**
 - 憑證在 `.env`：`AIOS_MCP_EMAIL` / `AIOS_MCP_PASSWORD`（**MEMBER 角色即足夠**）
-- 客戶端建置用途設定 `AIOS_MCP_PROFILE=builder`，只註冊十五個 Agent Builder／Hook 工具與 resources；`full` 才註冊完整 provider 能力
+- 客戶端建置用途設定 `AIOS_MCP_PROFILE=builder`，只註冊十三個 Agent Builder／Hook 工具與 resources；`full` 才註冊完整 provider 能力
 
 ## 工具模組（`src/tools/`）
 
@@ -48,13 +48,13 @@
 | `conversations` / `memory` / `system` | 對話、記憶、健康／總覽 |
 | **`recording`**（slice4） | 錄製起停／狀態／轉技能 → aios-server 錄製 API（如 `/api/recording/*`、`/api/agents/:id/recording/to-skill`）；產物仍停在 **待確認**、依 **user 隔離**；不接受前端任意本機路徑 |
 | **`googleworkspace`** | Gmail／Drive 唯讀工具；草稿／寄信／Drive 寫入另走 FDE + 真核准 Run + Agent restriction 的 fail-closed route |
-| **`agentbuilder`** | ChatGPT/Claude/Codex/Cursor 建置對話逐輪同步、檔案、完整 Agent/Skill/Memory/Workflow/Test shadow draft、狀態、送 FDE 審核與初審後測試；不得 approve／confirm／activate |
+| **`agentbuilder`** | ChatGPT/Claude/Codex/Cursor 建置對話逐輪同步、檔案、完整 shadow draft、`chat_with_agent_build` 隔離試教、每回合反思、送 FDE 審核與最後驗證；不得 approve／confirm／activate |
 
 Resources 在 `src/resources/`（agents / skills / workflows / memory / system / agentbuilder）；prompt `build-aios-agent` 在 `src/prompts/`。
 
 外部 Builder 逐輪同步用 `externalEventId` 去重；檔案只能傳內容，不接受主機路徑。完整安裝與操作見 `docs/INSTALLATION.zh-TW.md`。
 
-Claude Code 同時安裝 `prepare_agent_build_prompt`（`UserPromptSubmit`）與 `guard_agent_build_stop`（`Stop`）兩個 MCP-tool hook：前者保守辨識明確 Agent 建置意圖、自動開案／續接並排入背景版本；後者補記 `last_assistant_message` 與漏接的 user turn。Stop **不得**為了等待完整 Artifact 阻擋；沒有對應 Builder session 的一般對話必須 no-op。
+Claude Plugin 使用 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PermissionRequest`、`PostToolUse`、`Stop` command hooks 維護不含對話內容的本機同步狀態。明確 Agent 建置第一輪要求 `start_agent_build`，每輪要求 `prepare_agent_build_prompt`，Stop 要求 `guard_agent_build_stop`；`PreToolUse`／`PermissionRequest` 只能自動允許目前 Claude session 的三個 lifecycle 工具，以及 Build ID 完全吻合的三個 inert draft-sync 工具。上傳、送審、測試、啟用與發布不得加入自動白名單。只有嚴格白名單的 Plugin scoped／Claude Desktop Connector 名稱成功 `PostToolUse` 才能關閉 lifecycle 旗標。Hook 不持有 credential、不得讀取 OAuth cache、一般對話必須 no-op；Stop 重試最多兩次後 fail-safe，禁止無限迴圈。現行 Claude Code loader 不接受此 Plugin 原先使用的 `mcp_tool` handler，因此不得重新加入該格式，除非先以實際版本驗證 loader schema。
 
 ## 指令
 

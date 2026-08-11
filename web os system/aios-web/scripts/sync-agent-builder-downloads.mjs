@@ -9,12 +9,12 @@ const releasesRoot = path.join(mcpRoot, 'releases');
 const destinationRoot = path.join(webRoot, 'public', 'downloads', 'agent-builder');
 
 const files = [
-  ['aurion-aios-builder-plugin.zip', path.join(releasesRoot, 'aurion-aios-builder-plugin.zip')],
+  ['lazyoffice-aios-builder-plugin.zip', path.join(releasesRoot, 'lazyoffice-aios-builder-plugin.zip')],
   ['build-aios-agent.skill.zip', path.join(releasesRoot, 'build-aios-agent.skill.zip')],
-  ['aurion-aios-one-click-install.zip', path.join(releasesRoot, 'aurion-aios-one-click-install.zip')],
+  ['lazyoffice-aios-one-click-install.zip', path.join(releasesRoot, 'lazyoffice-aios-one-click-install.zip')],
   ['SHA256SUMS.txt', path.join(releasesRoot, 'SHA256SUMS.txt')],
   ['REMOTE-MCP-URL.txt', path.join(releasesRoot, 'REMOTE-MCP-URL.txt')],
-  ['aios-remote-mcp.json', path.join(mcpRoot, 'plugins', 'aurion-aios-builder', '.mcp.json')],
+  ['aios-remote-mcp.json', path.join(mcpRoot, 'plugins', 'lazyoffice-aios-builder', '.mcp.json')],
   ['AIOS-Agent-Builder-Installation-Guide.zh-TW.md', path.join(mcpRoot, 'docs', 'INSTALLATION.zh-TW.md')],
 ];
 
@@ -34,7 +34,7 @@ for (const [name, source] of files) {
 }
 
 const mcpConfig = await readFile(path.join(destinationRoot, 'aios-remote-mcp.json'), 'utf8');
-if (!mcpConfig.includes('https://aurion-aios-mcp.lazyoffice.app/mcp') || mcpConfig.includes('127.0.0.1')) {
+if (!mcpConfig.includes('https://aios-mcp.lazyoffice.app/mcp') || mcpConfig.includes('127.0.0.1')) {
   throw new Error('Refusing to publish an Agent Builder MCP config that is not the hosted Remote MCP.');
 }
 

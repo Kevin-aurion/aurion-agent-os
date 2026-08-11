@@ -116,6 +116,8 @@ interface RunContext {
    * Only set when restrictions.sandbox.enabled is true.
    */
   sandboxProfilePath?: string;
+  /** Builder tests must not inherit the operator's Claude plugins, hooks or skills. */
+  isolateClaudeCustomizations: boolean;
   signal?: AbortSignal;
 }
 
@@ -670,6 +672,7 @@ type EngineAdapter = {
     sandboxProfilePath?: string;
     onLine?: (l: string) => void;
     fullPermissions?: boolean;
+    safeMode?: boolean;
     signal?: AbortSignal;
   }): Promise<{ text: string }>;
   verify(args: {
@@ -679,6 +682,7 @@ type EngineAdapter = {
     threadId: string | null;
     restrictions: AgentRestrictions;
     sandboxProfilePath?: string;
+    safeMode?: boolean;
     signal?: AbortSignal;
   }): Promise<{ text: string; threadId: string | null; costInput: string }>;
   decide(args: {
@@ -687,6 +691,7 @@ type EngineAdapter = {
     cwd: string;
     timeoutMs: number;
     sandboxProfilePath?: string;
+    safeMode?: boolean;
     signal?: AbortSignal;
   }): Promise<{ text: string }>;
 };
@@ -695,7 +700,7 @@ const ENGINE_ADAPTERS: Record<Engine, EngineAdapter> = {
   CLAUDE_CODE: {
     roleInSystem: true,
     supportsResume: false,
-    async execute({ prompt, systemAppend, cwd, timeoutMs, restrictions, sandboxProfilePath, onLine, fullPermissions, signal }) {
+    async execute({ prompt, systemAppend, cwd, timeoutMs, restrictions, sandboxProfilePath, onLine, fullPermissions, safeMode, signal }) {
       const res = await runClaudeStream({
         prompt,
         systemAppend,
@@ -705,11 +710,12 @@ const ENGINE_ADAPTERS: Record<Engine, EngineAdapter> = {
         timeoutMs,
         onLine: onLine ?? (() => {}),
         sandboxProfilePath,
+        safeMode,
         signal,
       });
       return { text: res.stdout };
     },
-    async verify({ prompt, cwd, timeoutMs, restrictions, sandboxProfilePath, signal }) {
+    async verify({ prompt, cwd, timeoutMs, restrictions, sandboxProfilePath, safeMode, signal }) {
       // Stateless re-review every round (claude -p has no thread resume).
       const sys =
         'You are an independent, cross-model verifier (Claude Code). Treat the artifact as a claim to be falsified, not assumed true.';
@@ -722,17 +728,19 @@ const ENGINE_ADAPTERS: Record<Engine, EngineAdapter> = {
         allowedTools: restrictions.webSearch ? ['WebFetch', 'WebSearch'] : undefined,
         timeoutMs,
         sandboxProfilePath,
+        safeMode,
         signal,
       });
       return { text: res.stdout, threadId: null, costInput: `${sys}\n\n${prompt}` };
     },
-    async decide({ prompt, systemAppend, cwd, timeoutMs, sandboxProfilePath, signal }) {
+    async decide({ prompt, systemAppend, cwd, timeoutMs, sandboxProfilePath, safeMode, signal }) {
       const res = await runClaude({
         prompt,
         systemAppend,
         cwd,
         timeoutMs,
         sandboxProfilePath,
+        safeMode,
         signal,
       });
       return { text: res.stdout };
@@ -859,6 +867,7 @@ async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | 
     sandboxProfilePath,
     onLine,
     fullPermissions: step.config.permissions === 'full',
+    safeMode: ctx.isolateClaudeCustomizations,
     signal: ctx.signal,
   });
   await safeRecordCost({
@@ -1022,6 +1031,7 @@ async function runVerifyStep(ctx: RunContext, rubric: string, artifact: string, 
     threadId,
     restrictions: ctx.manifest.restrictions,
     sandboxProfilePath,
+    safeMode: ctx.isolateClaudeCustomizations,
     signal: ctx.signal,
   });
   await safeRecordCost({
@@ -1075,6 +1085,7 @@ async function callManagerDecision(ctx: RunContext, instruction: string, source:
     cwd: ctx.manifest.agentDir,
     timeoutMs: DECISION_TIMEOUT_MS,
     sandboxProfilePath,
+    safeMode: ctx.isolateClaudeCustomizations,
     signal: ctx.signal,
   });
   await safeRecordCost({
@@ -1852,7 +1863,6 @@ async function workflowHasLineSendTools(workflowId: string | undefined): Promise
 }
 
 export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
-  if (opts.signal?.aborted) throw new Error('Agent run aborted before start');
   const agentRow = await prisma.agent.findUnique({ where: { id: opts.agentId } });
   if (!agentRow || agentRow.deletedAt) throw errors.notFound(`Agent not found: ${opts.agentId}`);
 
@@ -2035,6 +2045,7 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
     triggeredBy: opts.triggeredBy,
     hasCloudFiles,
     costPolicy: (manifest as CompiledManifest & { costPolicy?: unknown }).costPolicy ?? agentRow.costPolicy ?? null,
+    isolateClaudeCustomizations: Boolean(opts.builderTestSessionId),
     signal: opts.signal,
   };
 
@@ -2049,7 +2060,6 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
   try {
     let i = 0;
     while (i < manifest.steps.length) {
-      if (opts.signal?.aborted) throw new Error('Agent run aborted');
       const step = manifest.steps[i] as Step;
       ctx.attempts[step.stepKey] = (ctx.attempts[step.stepKey] ?? 0) + 1;
 
@@ -2198,4 +2208,41 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
   }
 
   return outcome;
+}
+
+// ── Ticket 16: minimal engine-dispatch seam for the internal Model Gateway ──
+// Reuses ENGINE_ADAPTERS so gateway calls share the exact CLI adapters,
+// restrictions wiring and cost-input conventions. No behaviour change to
+// existing execute/verify/decide paths.
+export type GatewayDispatchArgs = {
+  engine: Engine;
+  kind: 'execute' | 'verify';
+  prompt: string;
+  cwd: string;
+  timeoutMs: number;
+  restrictions: AgentRestrictions;
+  threadId?: string | null;
+};
+
+export async function dispatchEngineForGateway(
+  args: GatewayDispatchArgs,
+): Promise<{ text: string; threadId: string | null; costInput: string }> {
+  const adapter = ENGINE_ADAPTERS[args.engine];
+  if (args.kind === 'execute') {
+    const res = await adapter.execute({
+      prompt: args.prompt,
+      cwd: args.cwd,
+      timeoutMs: args.timeoutMs,
+      restrictions: args.restrictions,
+    });
+    return { text: res.text, threadId: null, costInput: args.prompt };
+  }
+  const res = await adapter.verify({
+    prompt: args.prompt,
+    cwd: args.cwd,
+    timeoutMs: args.timeoutMs,
+    threadId: args.threadId ?? null,
+    restrictions: args.restrictions,
+  });
+  return { text: res.text, threadId: res.threadId, costInput: res.costInput };
 }

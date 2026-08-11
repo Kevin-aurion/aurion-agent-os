@@ -95,7 +95,7 @@ export default function SettingsPage() {
   });
   const agentsQ = useQuery({
     queryKey: ['agents', 'settings-mcp'],
-    queryFn: () => API.get<AgentOption[]>('/api/agents?scope=all'),
+    queryFn: () => API.get<AgentOption[]>('/api/agents'),
   });
 
   const disconnectMut = useMutation({

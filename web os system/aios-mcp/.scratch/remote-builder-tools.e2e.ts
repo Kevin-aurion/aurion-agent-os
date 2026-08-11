@@ -9,7 +9,7 @@ const { signAccess } = await import('../../aios-server/src/lib/auth.js');
 const { prisma } = await import('../../aios-server/src/lib/db.js');
 
 const user = await prisma.user.findFirstOrThrow({
-  where: { email: 'kevin@aurion-group.com', deletedAt: null },
+  where: { email: process.env.AIOS_OWNER_EMAIL || 'fde@aios.test', deletedAt: null },
   select: { id: true, email: true },
 });
 const token = await signAccess({
@@ -19,9 +19,9 @@ const token = await signAccess({
   scope: 'aios:agent-builder',
   audience: serverConfig.remoteMcp.resourceUrl,
 });
-const client = new Client({ name: 'aurion-remote-e2e', version: '1.0.0' });
+const client = new Client({ name: 'lazyoffice-remote-e2e', version: '1.0.0' });
 const transport = new StreamableHTTPClientTransport(
-  new URL('https://aurion-aios-mcp.lazyoffice.app/mcp'),
+  new URL('https://aios-mcp.lazyoffice.app/mcp'),
   { requestInit: { headers: { authorization: `Bearer ${token}` } } },
 );
 
@@ -69,7 +69,7 @@ try {
 
   console.log(JSON.stringify({
     passed: true,
-    remoteMcpUrl: 'https://aurion-aios-mcp.lazyoffice.app/mcp',
+    remoteMcpUrl: 'https://aios-mcp.lazyoffice.app/mcp',
     toolCount: names.length,
     ownerScopedAgents: agents.length,
     renamedAgentVisible: true,

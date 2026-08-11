@@ -25,7 +25,7 @@ function replaceName(value: unknown): unknown {
 
 async function main() {
   const actor = await prisma.user.findFirst({
-    where: { email: 'kevin@aurion-group.com', deletedAt: null },
+    where: { email: process.env.AIOS_OWNER_EMAIL || 'fde@aios.test', deletedAt: null },
     select: { id: true },
   });
   if (!actor) throw new Error('Kevin owner account not found');

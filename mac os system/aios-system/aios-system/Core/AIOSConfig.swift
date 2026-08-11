@@ -7,12 +7,12 @@ nonisolated enum AIOSConfig {
     static let serverBaseURLKey = "aios.serverBaseURL"
 
     /// User JWT Keychain service (access/refresh). Never shared with device secrets.
-    static let keychainService = "com.aurion.aios-system"
+    static let keychainService = "com.lazyoffice.aios-system"
     /// Device identity Keychain service (deviceId + deviceToken only).
-    static let deviceKeychainService = "com.aurion.aios-system.device"
+    static let deviceKeychainService = "com.lazyoffice.aios-system.device"
 
     static let deviceSubprotocol = "aios-device"
-    static let appBundleId = "aurion.aios-system"
+    static let appBundleId = "lazyoffice.aios-system"
     static let appVersion: String = {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
     }()
@@ -144,7 +144,7 @@ nonisolated enum AIOSConfig {
     /// Application Support root for device-local installs (MCP packages, etc.).
     static var applicationSupportRoot: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return base.appendingPathComponent("aurion.aios-system", isDirectory: true)
+        return base.appendingPathComponent("lazyoffice.aios-system", isDirectory: true)
     }
 
     static var mcpInstallRoot: URL {

@@ -6,6 +6,7 @@ export {
   ingestChatSummary,
   recall,
   recallHits,
+  recallHitsStrict,
   reindexAgent,
   listWikiFiles,
   readWikiFile,

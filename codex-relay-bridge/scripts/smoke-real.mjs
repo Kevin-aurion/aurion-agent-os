@@ -15,7 +15,7 @@ const CODEX_BIN =
   process.env.CODEX_BIN ??
   "/Applications/ChatGPT.app/Contents/Resources/codex";
 const PROJECT =
-  process.env.SMOKE_PROJECT ?? "/Users/kevin/Documents/aurion";
+  process.env.SMOKE_PROJECT ?? process.cwd();
 const TIMEOUT_MS = Number(process.env.SMOKE_TIMEOUT_MS ?? 90_000);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

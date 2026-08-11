@@ -5,9 +5,11 @@ import { config, paths } from '../../../src/config.js';
 import { signAccess } from '../../../src/lib/auth.js';
 import { prisma } from '../../../src/lib/db.js';
 
-const baseUrl = process.env.AIOS_TEST_BASE_URL || 'https://aurion-aios.lazyoffice.app';
+const baseUrl = process.env.AIOS_TEST_BASE_URL || 'https://aios-new.lazyoffice.app';
 const handoffPath = process.env.AIOS_ACCOUNT_HANDOFF_PATH
-  || '/Users/kevin/Documents/Aurion AIOS Private/客戶帳號-2026-08-08.txt';
+  || '/Users/kevin/Documents/Lazyoffice AIOS Private/客戶帳號-2026-08-08.txt';
+const ownerEmail = process.env.AIOS_OWNER_EMAIL || 'fde@aios.test';
+const customerEmailDomain = process.env.AIOS_CUSTOMER_EMAIL_DOMAIN || 'lazyoffice.app';
 const marker = `isolation-${Date.now()}`;
 
 type TokenIdentity = {
@@ -59,10 +61,10 @@ function parseCredentials(contents: string): Map<string, string> {
 
 async function main() {
   const accountEmails = [
-    'kevin@aurion-group.com',
-    'vincent@aurion-group.com',
-    'lauren@aurion-group.com',
-    'kate@aurion-group.com',
+    ownerEmail,
+    `vincent@${customerEmailDomain}`,
+    `lauren@${customerEmailDomain}`,
+    `kate@${customerEmailDomain}`,
   ];
   const memberEmails = accountEmails.slice(1);
   const credentials = parseCredentials(await readFile(handoffPath, 'utf8'));

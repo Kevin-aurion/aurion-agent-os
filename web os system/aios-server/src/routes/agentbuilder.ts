@@ -19,6 +19,7 @@ import {
   runBuilderTest,
   finalizeBuilderSession,
   attachBuilderSourceFile,
+  attachBuilderTestFixture,
   listBuilderReviewQueue,
   listBuilderEvolutionSessions,
   listBuilderSessions,
@@ -29,14 +30,12 @@ import {
   createExternalBuilderSession,
   guardExternalBuilderStop,
   importExternalBuilderArtifact,
-  listOwnedBuilderAgents,
   prepareExternalBuilderPrompt,
-  requestOwnedAgentRename,
-  setExternalBuilderName,
   submitExternalBuilderForReview,
   syncExternalBuilderTurn,
   upsertExternalBuilderSnapshot,
 } from '../lib/externalagentbuilder.js';
+import { chatWithBuilderShadow } from '../lib/builderconversation.js';
 
 const messageSchema = z.object({
   message: z.string().min(1),
@@ -57,9 +56,6 @@ const testDataSchema = z.object({
 });
 
 const draftQuerySchema = z.object({ sessionId: z.string().min(1).optional() });
-const builderFileQuerySchema = z.object({
-  useAsTemplate: z.enum(['true', 'false']).optional().default('false'),
-});
 const draftBodySchema = z.object({
   sessionId: z.string().min(1).optional(),
   reply: z.string().max(8_000).default(''),
@@ -74,10 +70,7 @@ const externalSessionSchema = z.object({
   externalConversationId: z.string().min(1).max(160).optional(),
   externalConversationTitle: z.string().max(240).optional(),
   requestedAgentName: z.string().max(120).optional(),
-  targetAgentId: z.string().min(1).optional(),
 }).strict();
-const setBuilderNameSchema = z.object({ name: z.string().min(2).max(120) }).strict();
-const requestAgentRenameSchema = z.object({ name: z.string().min(2).max(120) }).strict();
 const externalTurnsSchema = z.object({
   source: externalSourceSchema,
   externalEventId: z.string().min(1).max(160),
@@ -140,6 +133,16 @@ const externalArtifactSchema = z.object({
       input: z.string().min(1).max(5_000),
       expected: z.string().min(1).max(5_000),
     }).strict()).max(20).optional(),
+    testInputRequirements: z.array(z.object({
+      key: z.string().min(1).max(64),
+      label: z.string().min(1).max(120),
+      description: z.string().max(600).optional(),
+      kind: z.enum(['FILE', 'TEXT']),
+      required: z.boolean(),
+      acceptedExtensions: z.array(z.string().max(12)).max(12).optional(),
+      minFiles: z.number().int().min(0).max(10).optional(),
+      maxFiles: z.number().int().min(0).max(10).optional(),
+    }).strict()).max(12).optional(),
     workflows: z.array(z.object({
       name: z.string().min(1).max(160),
       description: z.string().max(1_200).optional(),
@@ -240,46 +243,6 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     }
   });
 
-  /** OAuth Builder-safe catalog: always owner-scoped, including OWNER accounts. */
-  app.get('/api/agent-builder/agents', { preHandler: requireAuth }, async (req, reply) => {
-    try {
-      return ok(await listOwnedBuilderAgents(req.user!.sub));
-    } catch (e) {
-      return sendError(reply, e);
-    }
-  });
-
-  /** Name an inert build draft; this never renames a live Agent. */
-  app.patch('/api/agent-builder/sessions/:id/name', { preHandler: requireAuth }, async (req, reply) => {
-    try {
-      const { id } = req.params as { id: string };
-      const body = setBuilderNameSchema.parse(req.body);
-      return ok(await setExternalBuilderName({
-        sessionId: id,
-        userId: req.user!.sub,
-        role: req.user!.role,
-        name: body.name,
-      }));
-    } catch (e) {
-      return sendError(reply, e);
-    }
-  });
-
-  /** A customer may request a live Agent rename; only FDE approval applies it. */
-  app.post('/api/agent-builder/agents/:id/rename-proposal', { preHandler: requireAuth }, async (req, reply) => {
-    try {
-      const { id } = req.params as { id: string };
-      const body = requestAgentRenameSchema.parse(req.body);
-      return ok(await requestOwnedAgentRename({
-        agentId: id,
-        userId: req.user!.sub,
-        name: body.name,
-      }));
-    } catch (e) {
-      return sendError(reply, e);
-    }
-  });
-
   /** Append exact externally-authored turns; externalEventId makes client retries idempotent. */
   app.post(
     '/api/agent-builder/sessions/:id/external-turns',
@@ -296,6 +259,52 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
         }));
       } catch (e) {
         return sendError(reply, e);
+      }
+    },
+  );
+
+  /** Upload one FDE test fixture. Raw files are temporary; only redacted parsed text persists. */
+  app.post(
+    '/api/agent-builder/sessions/:id/test-fixtures/:requirementKey',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      let tmpDir: string | undefined;
+      try {
+        const { id, requirementKey } = z.object({
+          id: z.string().min(1),
+          requirementKey: z.string().regex(/^[a-z0-9_-]{1,64}$/),
+        }).parse(req.params);
+        const file = await req.file();
+        if (!file) throw errors.badRequest('No test fixture uploaded');
+        const filename = path.basename(file.filename || 'test-fixture').replace(/[\r\n]/g, '').slice(0, 240);
+        const ext = path.extname(filename).toLowerCase();
+        const globallyAllowed = new Set([
+          '.srt', '.vtt', '.txt', '.md', '.pdf', '.docx', '.csv', '.tsv', '.xlsx', '.xls',
+          '.json', '.yaml', '.yml', '.html',
+        ]);
+        if (!globallyAllowed.has(ext)) throw errors.badRequest('Unsupported test fixture type');
+        const buf = await file.toBuffer();
+        if (buf.length <= 0 || buf.length > 10 * 1024 * 1024) {
+          throw errors.badRequest('Test fixture must be between 1 byte and 10 MB');
+        }
+        tmpDir = await mkdtemp(path.join(os.tmpdir(), 'aios-builder-test-'));
+        const localPath = path.join(tmpDir, filename);
+        await writeFile(localPath, buf);
+        const content = await fileToText(localPath, filename, file.mimetype);
+        return ok(await attachBuilderTestFixture({
+          sessionId: id,
+          userId: req.user!.sub,
+          role: req.user!.role,
+          requirementKey,
+          name: filename,
+          mimeType: file.mimetype,
+          size: buf.length,
+          content,
+        }));
+      } catch (e) {
+        return sendError(reply, e);
+      } finally {
+        if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
       }
     },
   );
@@ -463,7 +472,6 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
       let tmpDir: string | undefined;
       try {
         const { id } = req.params as { id: string };
-        const query = builderFileQuerySchema.parse(req.query ?? {});
         const file = await req.file();
         if (!file) throw errors.badRequest('No training file uploaded');
         const filename = path.basename(file.filename || 'training-source');
@@ -488,7 +496,6 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
             mimeType: file.mimetype,
             size: buf.length,
             content,
-            useAsTemplate: query.useAsTemplate === 'true',
           }),
         );
       } catch (e) {
@@ -515,6 +522,30 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
           message: parsed.data.message,
         });
         return ok(result);
+      } catch (e) {
+        return sendError(reply, e);
+      }
+    },
+  );
+
+  /**
+   * Claude/ChatGPT/Codex conversational coaching against the latest READY
+   * Shadow Draft. No live tools or external side effects are available.
+   */
+  app.post(
+    '/api/agent-builder/sessions/:id/shadow-chat',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      try {
+        const { id } = req.params as { id: string };
+        const parsed = messageSchema.safeParse(req.body);
+        if (!parsed.success) throw errors.badRequest('message is required');
+        return ok(await chatWithBuilderShadow({
+          sessionId: id,
+          userId: req.user!.sub,
+          role: req.user!.role,
+          message: parsed.data.message,
+        }));
       } catch (e) {
         return sendError(reply, e);
       }

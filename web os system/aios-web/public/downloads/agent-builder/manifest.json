@@ -1,40 +1,40 @@
 {
-  "generatedAt": "2026-08-08T16:32:28.116Z",
+  "generatedAt": "2026-08-11T17:29:42.560Z",
   "files": [
     {
-      "name": "aurion-aios-builder-plugin.zip",
-      "bytes": 13955,
-      "sha256": "f3f4dd5e70c99af8140bd3fa05dee1ff75b4e0f2dc01cab77158bb94d8fca3b0"
+      "name": "lazyoffice-aios-builder-plugin.zip",
+      "bytes": 19440,
+      "sha256": "6480d4c12bd275a3efccb48a1cef0965a06394876e53aa5f05f5998d4404400a"
     },
     {
       "name": "build-aios-agent.skill.zip",
-      "bytes": 8708,
-      "sha256": "82cbeeed96c64a0665ad1db8b2777132f96ff762709f4e6f2172981871d3efa9"
+      "bytes": 8477,
+      "sha256": "a9cc6838b22145d59e62e997a19b6daf4fbe3f4619029b1e4ee77f18884e8cee"
     },
     {
-      "name": "aurion-aios-one-click-install.zip",
-      "bytes": 28865,
-      "sha256": "acc4ad357c2ad83c31ccfc9b46d7f31f0447c98c508b5f649b906fc1a7d75aa5"
+      "name": "lazyoffice-aios-one-click-install.zip",
+      "bytes": 34421,
+      "sha256": "492e3313638bfddb2f50f6e25c6fa4ff94da350a7e2e2833d56576c6535a172f"
     },
     {
       "name": "SHA256SUMS.txt",
-      "bytes": 290,
-      "sha256": "1e3f7a771faadc51bf051db5713262b30cf719547dae30a5eda040bcc10c1c2f"
+      "bytes": 298,
+      "sha256": "36fe9a1dfd9fdc5de22185a100d3cab08212f9eccde7cf01f673dcd651ff9861"
     },
     {
       "name": "REMOTE-MCP-URL.txt",
-      "bytes": 106,
-      "sha256": "4aff71c4448e70dba9f08f2574d00723e4ca313cd0e9e500958450fdddb40bd1"
+      "bytes": 96,
+      "sha256": "8f14ba66147ef131a550d2b906ec3f247b13676a61b3a9fa110776286084fbab"
     },
     {
       "name": "aios-remote-mcp.json",
-      "bytes": 126,
-      "sha256": "d392390d5f6f222afa8c153dc484ffd593a390e03acd305ba25fb5920e496bac"
+      "bytes": 130,
+      "sha256": "cfc56e0a37ec06a8e4e3359f8c0fcc0b1626762552ae4a5c3189340becc7e465"
     },
     {
       "name": "AIOS-Agent-Builder-Installation-Guide.zh-TW.md",
-      "bytes": 9405,
-      "sha256": "412a4d5b1d346f7f5d1adf038c4bb4cde2d80800c809080460f263a7f34a0e0f"
+      "bytes": 9235,
+      "sha256": "9ba0a4d151c9f53fc2af8b22ee715de6591406e8d76a5162ef0c56d8df01d879"
     }
   ]
 }

@@ -355,12 +355,127 @@ model SkillVersion {
   version     Int
   contentHash String // sha256(contentMd)
   contentMd   String
+  /// Skill IR schema 版本（例如 "aios.skill-ir/1"）；舊版本為 null
+  schemaVersion String?
+  /// 版本化、機器可讀的 Skill IR；舊版本為 null（additive，Native path 零回歸）
+  specJson      Json?
   channel     String   @default("canary") // canary | stable | archived
   createdBy   String?
   createdAt   DateTime @default(now())
 
+  flowArtifacts FlowArtifact[]
+
   @@unique([skillId, version])
   @@index([skillId, channel])
+}
+
+enum RuntimeKind {
+  NATIVE
+  LANGFLOW
+}
+
+enum FlowArtifactStatus {
+  COMPILED
+  VALIDATED
+  REJECTED
+  SUPERSEDED
+}
+
+/// 由已核准 Skill IR 依固定 Template 確定性編譯出的不可變、內容定址 Runtime 產物。
+/// Runtime ≠ Engine：LANGFLOW 只是 RuntimeKind，永不進 Engine enum。
+model FlowArtifact {
+  id              String             @id
+  /// 來源 SkillVersion（可空：未來 workflow 來源產物）
+  skillVersionId  String?
+  skillVersion    SkillVersion?      @relation(fields: [skillVersionId], references: [id], onDelete: SetNull)
+  /// 來源 Workflow id（暫不建 FK relation，避免動 Workflow model）
+  workflowId      String?
+  runtimeKind     RuntimeKind
+  /// 固定 template 名（例如 email-triage-readonly-v1）
+  template        String
+  templateVersion String?
+  compilerVersion String
+  /// 已遮罩的 canonical artifact JSON（永不含明文 secret）
+  artifactJson    Json
+  /// sha256 hex of canonical(artifactJson)，遮罩後計算
+  digest          String
+  status          FlowArtifactStatus @default(COMPILED)
+  /// 已遮罩 metadata
+  metadata        Json?
+  createdBy       String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  deployments RuntimeDeployment[]
+
+  @@index([skillVersionId])
+  @@index([digest])
+  @@index([status, createdAt])
+}
+
+enum DeploymentEnvironment {
+  SANDBOX
+  STAGING
+  PRODUCTION
+}
+
+enum DeploymentChannel {
+  CANARY
+  STABLE
+}
+
+/// FDE 啟用的 Runtime 部署 pointer（artifact × env × channel）。
+/// 同 skill+env+channel 僅一列 active；rollback 只切 pointer，不刪列。
+model RuntimeDeployment {
+  id              String                @id
+  artifactId      String
+  artifact        FlowArtifact          @relation(fields: [artifactId], references: [id], onDelete: Restrict)
+  /// 由 artifact.skillVersion.skillId 反正規化，供 active pointer 範圍使用
+  skillId         String
+  environment     DeploymentEnvironment
+  channel         DeploymentChannel
+  /// Adapter 回傳的 opaque runtime binding（落地前 deep-redact）
+  runtimeBinding  Json
+  deployedBy      String?
+  active          Boolean               @default(true)
+  activatedAt     DateTime              @default(now())
+  deactivatedAt   DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@unique([artifactId, environment, channel])
+  @@index([skillId, environment, channel, active])
+}
+
+/// Per-deployment dead-letter for rate-limit / circuit-open / runtime failure (Phase 6).
+/// Manual FDE replay only; never auto-retry side effects.
+enum RuntimeDeadLetterStatus {
+  PENDING
+  REPLAYED
+  DISCARDED
+}
+
+model RuntimeDeadLetter {
+  id             String                  @id
+  /// 原始被拒/失敗的 Run（可空：派送前拒時可能尚無 Run）
+  runId          String?
+  workflowId     String
+  deploymentId   String?
+  artifactId     String?
+  /// RATE_LIMITED | CIRCUIT_OPEN | RUNTIME_UNREACHABLE | TIMEOUT
+  code           String
+  /// 已遮罩原因
+  reason         String
+  /// deepRedactSecrets 後的 dispatch input（含 messageId）
+  payload        Json
+  status         RuntimeDeadLetterStatus @default(PENDING)
+  replayedRunId  String?
+  replayedBy     String?
+  replayedAt     DateTime?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  @@index([status, createdAt])
 }
 
 // ── Workflows (many per agent) ────────────────────────────────────────────────
@@ -414,6 +529,15 @@ model Run {
   runDir      String
   startedAt   DateTime  @default(now())
   finishedAt  DateTime?
+
+  /// 本次 Run 的 Runtime（null=既有 Native 路徑）
+  runtimeKind              RuntimeKind?
+  /// 執行所用 FlowArtifact.id（不建 FK，避免動既有 Run 行為）
+  artifactId               String?
+  /// 來源事件穩定 ID；duplicate trigger 併為單一 Run
+  idempotencyKey           String?      @unique
+  executionModelFamily     String?
+  verificationModelFamily  String?
 
   steps         RunStep[]
   computerTasks ComputerControlTask[]
@@ -915,6 +1039,10 @@ model RunTrace {
   trajectoryKey    String?
   engineExecute    Engine
   engineVerify     Engine
+  /// 本 trace 的 Runtime（null=既有 Native 路徑）
+  runtimeKind      RuntimeKind?
+  /// 執行所用 FlowArtifact.id（不建 FK）
+  artifactId       String?
   createdAt        DateTime        @default(now())
 
   @@index([agentId, createdAt])

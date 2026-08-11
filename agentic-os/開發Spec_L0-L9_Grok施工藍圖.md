@@ -1,4 +1,4 @@
-# Aurion Agentic OS — 開發總 Spec / 施工藍圖
+# Lazyoffice Agentic OS — 開發總 Spec / 施工藍圖
 
 | 項目 | 內容 |
 |---|---|
@@ -368,7 +368,7 @@ prisma/schema.prisma ← 改：新增 CostLog / ApprovalRequest；Agent 加 cost
   ```bash
   ~/.grok/bin/grok -p "<需求：目標/要改的檔案路徑/驗收標準/限制>" \
     --output-format json --always-approve \
-    --cwd "/Users/kevin/Documents/aurion/web os system/aios-server" \
+    --cwd "/Users/kevin/Documents/lazyoffice/web os system/aios-server" \
     [--rules "<風格/規範>"] [--resume <sessionId>]
   ```
 

@@ -9,18 +9,33 @@ import {
   Circle,
   GraduationCap,
   List,
+  Menu,
   MessageSquare,
+  PanelRight,
+  Paperclip,
   Plus,
   Send,
   Shield,
   Sparkles,
   Square,
   Video,
-  Wrench,
+  X,
 } from 'lucide-react';
 import { API, ApiError } from '@/lib/api';
 import { useAuth, isFdeRole } from '@/lib/auth';
 import { useAwp, type AwpFrame } from '@/lib/awp';
+import {
+  buildUploadTrainMessage,
+  recordingImportTarget,
+  validateTeachUpload,
+} from '@/lib/teachjourney';
+import {
+  createWorkSession,
+  projectRunDetail,
+  reduceSessionFrame,
+  shouldBindRunStart,
+  type WorkSessionState,
+} from '@/lib/worksession';
 import { AppShell } from '@/components/AppShell';
 import { EmptyState, Spinner, StatusBadge } from '@/components/ui';
 import { cn } from '@/lib/cn';
@@ -31,6 +46,8 @@ import {
 import { ChatRunTimeline } from '@/components/workbench/ChatRunTimeline';
 import { SkillDraftCard } from '@/components/workbench/SkillDraftCard';
 import { VoiceInput } from '@/components/workbench/VoiceInput';
+import { SkillPalettePanel } from '@/components/workbench/SkillPalettePanel';
+import { WorkSessionRail } from '@/components/workbench/WorkSessionRail';
 import {
   type AgentDetail,
   type AgentFlows,
@@ -85,14 +102,21 @@ function WorkbenchInner() {
   const [sendError, setSendError] = useState<string | null>(null);
   const [sentRunIds, setSentRunIds] = useState<Record<string, string>>({});
   const [runSteps, setRunSteps] = useState<Record<string, RunStep[]>>({});
+  const [workSession, setWorkSession] = useState<WorkSessionState>(() => createWorkSession(null));
+  const [leftDrawerOpen, setLeftDrawerOpen] = useState(false);
+  const [rightDrawerOpen, setRightDrawerOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const leftMenuBtnRef = useRef<HTMLButtonElement>(null);
+  const rightDetailBtnRef = useRef<HTMLButtonElement>(null);
+  const leftDrawerFirstBtnRef = useRef<HTMLButtonElement>(null);
+  const rightDrawerCloseBtnRef = useRef<HTMLButtonElement>(null);
 
   // Teach-mode local transcript (not persisted server-side in Phase 1).
   const [teachMessages, setTeachMessages] = useState<TeachChatMsg[]>([
     {
       id: 'welcome',
       kind: 'system',
-      text: '用文字或語音描述要教的流程，或按「有哪些流程？」。也可開始錄製桌面操作。技能不會自動確認。',
+      text: '用文字、語音或上傳教學文件描述要教的流程，或按「有哪些流程？」。也可開始錄製桌面操作。技能不會自動確認。',
     },
   ]);
   const [draftSkillId, setDraftSkillId] = useState<string | null>(null);
@@ -108,6 +132,7 @@ function WorkbenchInner() {
   /** Local dismiss for INTERRUPTED recovery banner (do not auto-resume). */
   const [interruptedDismissed, setInterruptedDismissed] = useState(false);
   const teachEndRef = useRef<HTMLDivElement | null>(null);
+  const teachFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Keep URL query in sync for deep links (agent + conversation + mode).
   const syncUrl = useCallback(
@@ -174,6 +199,19 @@ function WorkbenchInner() {
     enabled: !!selectedAgentId,
   });
 
+  const workflowsQ = useQuery({
+    queryKey: ['agent-workflows', selectedAgentId],
+    queryFn: () => API.get(`/api/agents/${selectedAgentId}/workflows`),
+    enabled: !!selectedAgentId,
+  });
+
+  const agentRunsQ = useQuery({
+    queryKey: ['agent-runs', selectedAgentId],
+    queryFn: () =>
+      API.get(`/api/runs?agentId=${selectedAgentId}&limit=50`),
+    enabled: !!selectedAgentId,
+  });
+
   const conversationsQ = useQuery({
     queryKey: ['conversations', selectedAgentId],
     queryFn: () => API.get<Conversation[]>(`/api/agents/${selectedAgentId}/conversations`),
@@ -229,6 +267,7 @@ function WorkbenchInner() {
       }),
     onSuccess: (data) => {
       setSentRunIds((prev) => ({ ...prev, [data.messageId]: data.runId }));
+      setWorkSession(createWorkSession(data.runId));
       setDraft('');
       setSendError(null);
       void qc.invalidateQueries({ queryKey: ['messages', activeConvId] });
@@ -238,6 +277,13 @@ function WorkbenchInner() {
       setSendError(e instanceof Error ? e.message : String(e));
     },
   });
+
+  const runDetailQ = useQuery({
+    queryKey: ['run', workSession.runId],
+    queryFn: () => API.get(`/api/runs/${workSession.runId}`),
+    enabled: !!workSession.runId,
+  });
+  const runDetail = projectRunDetail(runDetailQ.data);
 
   const recStatusQ = useQuery({
     queryKey: ['recording-status'],
@@ -284,6 +330,17 @@ function WorkbenchInner() {
         type?: string;
       };
 
+      // Workbench V2 session projection (pure reducer; keeps rail in sync).
+      // Unbound sessions only bind run.started from this conversation (chat:<convId>).
+      setWorkSession((prev) => {
+        if (prev.runId === null) {
+          if (topic !== 'run.started' || !shouldBindRunStart(frame.payload, activeConvId)) {
+            return prev;
+          }
+        }
+        return reduceSessionFrame(prev, { topic, payload: frame.payload });
+      });
+
       const isRunEvent = topic.startsWith('run.') || topic === 'run.step' || payload?.type === 'run.step';
       if (isRunEvent && payload?.runId) {
         const { runId, stepKey, round, phase, status, verdict } = payload;
@@ -301,6 +358,12 @@ function WorkbenchInner() {
         }
         if (topic === 'run.finished' && activeConvId) {
           void qc.invalidateQueries({ queryKey: ['messages', activeConvId] });
+        }
+        if (topic === 'run.finished' && payload.runId) {
+          void qc.invalidateQueries({ queryKey: ['run', payload.runId] });
+        }
+        if (topic === 'run.finished' && selectedAgentId) {
+          void qc.invalidateQueries({ queryKey: ['agent-runs', selectedAgentId] });
         }
       }
 
@@ -324,8 +387,27 @@ function WorkbenchInner() {
     [activeConvId, selectedAgentId, qc, recStatusQ.refetch],
   );
 
-  const topics = useMemo(() => ['run.*', 'chat.*', 'skill.review_ready', 'recording.progress'], []);
+  const topics = useMemo(
+    () => ['run.*', 'chat.*', 'skill.review_ready', 'recording.progress', 'approval.requested'],
+    [],
+  );
   useAwp(topics, handleFrame);
+
+  // Rehydrate session when opening an existing thread that already has a run.
+  useEffect(() => {
+    if (workSession.runId !== null) return;
+    const list = messagesQ.data;
+    if (!list || list.length === 0) return;
+    let lastRunId: string | null = null;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const rid = list[i]?.runId;
+      if (typeof rid === 'string' && rid.length > 0) {
+        lastRunId = rid;
+        break;
+      }
+    }
+    if (lastRunId) setWorkSession(createWorkSession(lastRunId));
+  }, [messagesQ.data, workSession.runId]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -356,8 +438,10 @@ function WorkbenchInner() {
     setActiveConvId(null);
     setSentRunIds({});
     setRunSteps({});
+    setWorkSession(createWorkSession(null));
     setSendError(null);
     setDraft('');
+    setLeftDrawerOpen(false);
     syncUrl({ agent: id, conversation: null, builder: false });
   }
 
@@ -365,8 +449,10 @@ function WorkbenchInner() {
     setBuilderOpen(false);
     setBuilderSession(null);
     setActiveConvId(id);
+    setWorkSession(createWorkSession(null));
     setSendError(null);
     setMode('work');
+    setLeftDrawerOpen(false);
     syncUrl({ conversation: id, builder: false, mode: 'work' });
   }
 
@@ -374,10 +460,57 @@ function WorkbenchInner() {
     setMode(next);
     setBuilderOpen(false);
     setBuilderSession(null);
+    setWorkSession(createWorkSession(null));
     setSendError(null);
     setTeachError(null);
     syncUrl({ mode: next, builder: false });
   }
+
+  function openLeftDrawer() {
+    setLeftDrawerOpen(true);
+    setRightDrawerOpen(false);
+  }
+
+  function closeLeftDrawer() {
+    setLeftDrawerOpen(false);
+    // Restore focus to the hamburger after close.
+    requestAnimationFrame(() => leftMenuBtnRef.current?.focus());
+  }
+
+  function openRightDrawer() {
+    setRightDrawerOpen(true);
+    setLeftDrawerOpen(false);
+  }
+
+  function closeRightDrawer() {
+    setRightDrawerOpen(false);
+    requestAnimationFrame(() => rightDetailBtnRef.current?.focus());
+  }
+
+  // Focus first control when a mobile drawer opens.
+  useEffect(() => {
+    if (leftDrawerOpen) {
+      requestAnimationFrame(() => leftDrawerFirstBtnRef.current?.focus());
+    }
+  }, [leftDrawerOpen]);
+
+  useEffect(() => {
+    if (rightDrawerOpen) {
+      requestAnimationFrame(() => rightDrawerCloseBtnRef.current?.focus());
+    }
+  }, [rightDrawerOpen]);
+
+  // Escape closes whichever drawer is open.
+  useEffect(() => {
+    if (!leftDrawerOpen && !rightDrawerOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return;
+      if (leftDrawerOpen) closeLeftDrawer();
+      if (rightDrawerOpen) closeRightDrawer();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [leftDrawerOpen, rightDrawerOpen]);
 
   function openBuilder() {
     setBuilderOpen(true);
@@ -419,6 +552,7 @@ function WorkbenchInner() {
         { content },
       );
       setSentRunIds((prev) => ({ ...prev, [data.messageId]: data.runId }));
+      setWorkSession(createWorkSession(data.runId));
       setDraft('');
       setSendError(null);
       void qc.invalidateQueries({ queryKey: ['messages', conv.id] });
@@ -459,7 +593,7 @@ function WorkbenchInner() {
     }
   }
 
-  async function sendTrainMessage(raw: string) {
+  async function sendTrainMessage(raw: string, opts?: { display?: string }) {
     if (!selectedAgentId) return;
     const message = raw.trim();
     if (!message || teachSending) return;
@@ -469,10 +603,16 @@ function WorkbenchInner() {
       return;
     }
 
+    const displayText = opts?.display ?? message;
     setTeachSending(true);
     setTeachError(null);
     setDraft('');
-    pushTeach({ id: crypto.randomUUID(), kind: 'user', text: message });
+    // Skip re-pushing the same user bubble on retry (error bubble already removed).
+    setTeachMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (last?.kind === 'user' && last.text === displayText) return prev;
+      return [...prev, { id: crypto.randomUUID(), kind: 'user', text: displayText }];
+    });
     const draftingId = crypto.randomUUID();
     pushTeach({ id: draftingId, kind: 'drafting' });
 
@@ -523,10 +663,35 @@ function WorkbenchInner() {
             id: crypto.randomUUID(),
             kind: 'error',
             text: e instanceof Error ? e.message : String(e),
+            retry: { message, display: opts?.display },
           }),
       );
     } finally {
       setTeachSending(false);
+    }
+  }
+
+  async function handleTeachUpload(file: File | null | undefined) {
+    if (!file || !selectedAgentId || teachSending) return;
+    const check = validateTeachUpload({ name: file.name, size: file.size });
+    if (!check.ok) {
+      pushTeach({
+        id: crypto.randomUUID(),
+        kind: 'error',
+        text: check.reason,
+      });
+      return;
+    }
+    try {
+      const text = await file.text();
+      const trainMsg = buildUploadTrainMessage(file.name, text);
+      await sendTrainMessage(trainMsg, { display: `上傳教學文件：${file.name}` });
+    } catch (e) {
+      pushTeach({
+        id: crypto.randomUUID(),
+        kind: 'error',
+        text: e instanceof Error ? e.message : String(e),
+      });
     }
   }
 
@@ -619,8 +784,19 @@ function WorkbenchInner() {
   }
 
   async function stopRecordingAndImport() {
-    const targetAgentId = recordingAgentId ?? recStatusQ.data?.session?.agentId ?? selectedAgentId;
-    if (!targetAgentId) return;
+    const target = recordingImportTarget(
+      recordingAgentId ?? recStatusQ.data?.session?.agentId ?? null,
+      selectedAgentId,
+    );
+    if (!target.ok) {
+      pushTeach({
+        id: crypto.randomUUID(),
+        kind: 'error',
+        text: target.reason,
+      });
+      return;
+    }
+    const targetAgentId = target.agentId;
     setRecBusy(true);
     setTeachError(null);
     try {
@@ -688,127 +864,280 @@ function WorkbenchInner() {
   const conversations = conversationsQ.data ?? [];
   const messages = messagesQ.data ?? [];
   const busyWork = sendMutation.isPending || createConvMutation.isPending;
+  const activeConvTitle =
+    conversations.find((c) => c.id === activeConvId)?.title ?? null;
+  const showSessionRail = mode === 'work' && !!workSession.runId;
+
+  // Shared left-rail body (desktop + mobile drawer) — render fn avoids dual-mount of one element.
+  function renderLeftRail(opts?: { focusFirst?: boolean }) {
+    return (
+      <>
+        <div className="space-y-2 border-b border-border p-3">
+          <button
+            ref={opts?.focusFirst ? leftDrawerFirstBtnRef : undefined}
+            type="button"
+            className="btn-primary w-full justify-center"
+            aria-pressed={builderOpen}
+            onClick={() => {
+              openBuilder();
+              setLeftDrawerOpen(false);
+            }}
+          >
+            <Sparkles className="h-4 w-4" />
+            建立 AI 員工
+          </button>
+          <button
+            type="button"
+            className="btn-ghost w-full justify-center border border-border"
+            disabled={!selectedAgentId || createConvMutation.isPending}
+            onClick={() => {
+              // New task exits builder and starts a work thread on the selected Agent.
+              setBuilderOpen(false);
+              setBuilderSession(null);
+              setMode('work');
+              setWorkSession(createWorkSession(null));
+              createConvMutation.mutate(undefined);
+              setLeftDrawerOpen(false);
+              syncUrl({ builder: false, mode: 'work', agent: selectedAgentId });
+            }}
+          >
+            {createConvMutation.isPending ? (
+              <Spinner className="border-white/40 border-t-white" />
+            ) : (
+              <Plus className="h-4 w-4" />
+            )}
+            新任務
+          </button>
+        </div>
+
+        <div className="border-b border-border px-3 py-2">
+          <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">
+            Agents
+          </div>
+          {agentsQ.isLoading && (
+            <div className="flex justify-center py-4">
+              <Spinner className="h-4 w-4" />
+            </div>
+          )}
+          {agentsQ.isError && (
+            <p className="px-1 text-xs text-rose-400">
+              {agentsQ.error instanceof Error ? agentsQ.error.message : '無法載入員工清單'}
+            </p>
+          )}
+          {!agentsQ.isLoading && agents.length === 0 && (
+            <p className="px-1 text-xs text-muted">尚無 Agent。請 FDE 在管理中心建立員工。</p>
+          )}
+          <div className="max-h-40 space-y-0.5 overflow-y-auto">
+            {agents.map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                onClick={() => selectAgent(a.id)}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm',
+                  selectedAgentId === a.id
+                    ? 'bg-brand/10 font-medium text-brand'
+                    : 'text-muted hover:bg-black/5 dark:hover:bg-white/5',
+                )}
+              >
+                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-brand/10 text-sm">
+                  {a.avatar || <Bot className="h-3.5 w-3.5 text-brand" />}
+                </span>
+                <span className="min-w-0 flex-1 truncate">{a.name}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-col px-3 py-2">
+          <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">
+            任務 Threads
+          </div>
+          {!selectedAgentId && (
+            <p className="px-1 text-xs text-muted">先選一位 Agent</p>
+          )}
+          {selectedAgentId && conversationsQ.isLoading && (
+            <div className="flex justify-center py-4">
+              <Spinner className="h-4 w-4" />
+            </div>
+          )}
+          {selectedAgentId && conversationsQ.isError && (
+            <p className="px-1 text-xs text-rose-400">
+              {conversationsQ.error instanceof Error
+                ? conversationsQ.error.message
+                : '無法載入任務'}
+            </p>
+          )}
+          <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
+            {conversations.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => selectConversation(c.id)}
+                className={cn(
+                  'block w-full truncate rounded-lg px-2 py-2 text-left text-sm',
+                  activeConvId === c.id
+                    ? 'bg-brand/10 font-medium text-brand'
+                    : 'text-muted hover:bg-black/5 dark:hover:bg-white/5',
+                )}
+              >
+                <div className="truncate">{c.title || `任務 ${c.id.slice(0, 8)}`}</div>
+                {c.createdAt && (
+                  <div className="text-[10px] opacity-70">{relativeTime(c.createdAt)}</div>
+                )}
+              </button>
+            ))}
+            {selectedAgentId && !conversationsQ.isLoading && conversations.length === 0 && (
+              <p className="px-1 text-xs text-muted">尚無任務，按「新任務」開始</p>
+            )}
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // Shared right-rail body (desktop + mobile drawer).
+  function renderRightRail() {
+    if (builderOpen) return <AgentBuilderRail session={builderSession} />;
+    return (
+      <>
+        <div className="border-b border-border p-4">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-muted">
+            Agent 摘要
+          </div>
+          {agentDetailQ.isLoading && selectedAgentId && (
+            <div className="mt-4 flex justify-center">
+              <Spinner className="h-4 w-4" />
+            </div>
+          )}
+          {!selectedAgentId && (
+            <p className="mt-2 text-sm text-muted">選一位 Agent 查看能力摘要</p>
+          )}
+          {agentDetail && (
+            <div className="mt-3 space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="grid h-10 w-10 place-items-center rounded-xl bg-brand/10 text-lg">
+                  {agentDetail.avatar || <Bot className="h-5 w-5 text-brand" />}
+                </span>
+                <div className="min-w-0">
+                  <div className="truncate font-medium">{agentDetail.name}</div>
+                  <StatusBadge status={agentDetail.status} />
+                </div>
+              </div>
+              <p className="line-clamp-4 text-sm text-muted">
+                {agentDetail.description || '尚無描述'}
+              </p>
+              {agentDetail.department && (
+                <div className="text-xs text-muted">部門 · {agentDetail.department}</div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {showSessionRail ? (
+          <>
+            <WorkSessionRail
+              session={workSession}
+              runDetail={runDetail}
+              isFde={isFde}
+              sourceLabel={activeConvTitle}
+            />
+            {isFde && selectedAgentId && (
+              <div className="border-t border-border p-4">
+                <Link
+                  href={`/employees/${selectedAgentId}`}
+                  className="block text-center text-[11px] text-brand hover:underline"
+                >
+                  進階設定（員工詳情）
+                </Link>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <SkillPalettePanel
+              agentId={selectedAgentId}
+              skills={agentDetail?.skills}
+              restrictions={
+                (agentDetail?.restrictions ?? null) as Record<string, unknown> | null
+              }
+              workflows={workflowsQ.data as unknown[] | undefined}
+              runs={agentRunsQ.data as unknown[] | undefined}
+              isFde={isFde}
+              loading={
+                !!selectedAgentId &&
+                (agentDetailQ.isLoading || workflowsQ.isLoading || agentRunsQ.isLoading)
+              }
+            />
+
+            <div className="flex-1 space-y-3 overflow-y-auto p-4 text-xs text-muted">
+              <div className="text-[11px] font-medium uppercase tracking-wide">工作台提示</div>
+              <ul className="list-disc space-y-1.5 pl-4 leading-relaxed">
+                <li>用「建立 AI 員工」從業務目標訪談、規劃、試跑到啟用。</li>
+                <li>用「交代工作」給既有 Agent 任務；回覆會即時出現。</li>
+                <li>用「教它新工作」口述或錄製流程，產生技能草稿。</li>
+                <li>技能不會自動確認；MEMBER 只能送提案／送交 FDE。</li>
+                <li>不會顯示引擎、工作流編排等技術設定。</li>
+              </ul>
+              {isFde && (
+                <Link
+                  href="/admin"
+                  className="btn-ghost mt-2 w-full justify-center border border-border text-xs"
+                >
+                  <Shield className="h-3.5 w-3.5" />
+                  開啟 FDE 管理中心
+                </Link>
+              )}
+              {isFde && selectedAgentId && (
+                <Link
+                  href={`/employees/${selectedAgentId}`}
+                  className="block text-center text-[11px] text-brand hover:underline"
+                >
+                  進階設定（員工詳情）
+                </Link>
+              )}
+            </div>
+          </>
+        )}
+      </>
+    );
+  }
 
   return (
     <AppShell>
       <div className="flex h-full min-h-0">
-        {/* Left: agents + threads */}
-        <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-panel/50">
-          <div className="space-y-2 border-b border-border p-3">
-            <button
-              type="button"
-              className="btn-primary w-full justify-center"
-              aria-pressed={builderOpen}
-              onClick={() => openBuilder()}
-            >
-              <Sparkles className="h-4 w-4" />
-              建立 AI 員工
-            </button>
-            <button
-              type="button"
-              className="btn-ghost w-full justify-center border border-border"
-              disabled={!selectedAgentId || createConvMutation.isPending}
-              onClick={() => {
-                // New task exits builder and starts a work thread on the selected Agent.
-                setBuilderOpen(false);
-                setBuilderSession(null);
-                setMode('work');
-                createConvMutation.mutate(undefined);
-                syncUrl({ builder: false, mode: 'work', agent: selectedAgentId });
-              }}
-            >
-              {createConvMutation.isPending ? (
-                <Spinner className="border-white/40 border-t-white" />
-              ) : (
-                <Plus className="h-4 w-4" />
-              )}
-              新任務
-            </button>
-          </div>
-
-          <div className="border-b border-border px-3 py-2">
-            <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">
-              Agents
-            </div>
-            {agentsQ.isLoading && (
-              <div className="flex justify-center py-4">
-                <Spinner className="h-4 w-4" />
-              </div>
-            )}
-            {agentsQ.isError && (
-              <p className="px-1 text-xs text-rose-400">
-                {agentsQ.error instanceof Error ? agentsQ.error.message : '無法載入員工清單'}
-              </p>
-            )}
-            {!agentsQ.isLoading && agents.length === 0 && (
-              <p className="px-1 text-xs text-muted">尚無 Agent。請 FDE 在管理中心建立員工。</p>
-            )}
-            <div className="max-h-40 space-y-0.5 overflow-y-auto">
-              {agents.map((a) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  onClick={() => selectAgent(a.id)}
-                  className={cn(
-                    'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm',
-                    selectedAgentId === a.id
-                      ? 'bg-brand/10 font-medium text-brand'
-                      : 'text-muted hover:bg-black/5 dark:hover:bg-white/5',
-                  )}
-                >
-                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md bg-brand/10 text-sm">
-                    {a.avatar || <Bot className="h-3.5 w-3.5 text-brand" />}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate">{a.name}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex min-h-0 flex-1 flex-col px-3 py-2">
-            <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">
-              任務 Threads
-            </div>
-            {!selectedAgentId && (
-              <p className="px-1 text-xs text-muted">先選一位 Agent</p>
-            )}
-            {selectedAgentId && conversationsQ.isLoading && (
-              <div className="flex justify-center py-4">
-                <Spinner className="h-4 w-4" />
-              </div>
-            )}
-            {selectedAgentId && conversationsQ.isError && (
-              <p className="px-1 text-xs text-rose-400">
-                {conversationsQ.error instanceof Error
-                  ? conversationsQ.error.message
-                  : '無法載入任務'}
-              </p>
-            )}
-            <div className="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
-              {conversations.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => selectConversation(c.id)}
-                  className={cn(
-                    'block w-full truncate rounded-lg px-2 py-2 text-left text-sm',
-                    activeConvId === c.id
-                      ? 'bg-brand/10 font-medium text-brand'
-                      : 'text-muted hover:bg-black/5 dark:hover:bg-white/5',
-                  )}
-                >
-                  <div className="truncate">{c.title || `任務 ${c.id.slice(0, 8)}`}</div>
-                  {c.createdAt && (
-                    <div className="text-[10px] opacity-70">{relativeTime(c.createdAt)}</div>
-                  )}
-                </button>
-              ))}
-              {selectedAgentId && !conversationsQ.isLoading && conversations.length === 0 && (
-                <p className="px-1 text-xs text-muted">尚無任務，按「新任務」開始</p>
-              )}
-            </div>
-          </div>
+        {/* Left: agents + threads (desktop) */}
+        <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-panel/50 md:flex">
+          {renderLeftRail()}
         </aside>
+
+        {/* Mobile left drawer */}
+        {leftDrawerOpen && (
+          <div className="fixed inset-0 z-40 md:hidden" role="dialog" aria-modal="true" aria-label="任務清單">
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/50"
+              aria-label="關閉任務清單"
+              onClick={() => closeLeftDrawer()}
+            />
+            <div className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col border-r border-border bg-panel shadow-xl">
+              <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                <span className="text-sm font-medium">任務清單</span>
+                <button
+                  type="button"
+                  className="btn-ghost p-1.5"
+                  aria-label="關閉任務清單"
+                  onClick={() => closeLeftDrawer()}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+                {renderLeftRail({ focusFirst: true })}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Center: thread + composer OR Agent Builder */}
         <section className="flex min-w-0 flex-1 flex-col">
@@ -825,48 +1154,72 @@ function WorkbenchInner() {
                   setBuilderSession(null);
                   setMode('work');
                   setActiveConvId(null);
+                  setWorkSession(createWorkSession(null));
                   syncUrl({ agent: agentId, conversation: null, builder: false, mode: 'work' });
                 }
               }}
             />
           ) : (
             <>
-          <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold">
-                {selectedAgent?.name ?? '選擇 Agent'}
-              </div>
-              <div className="truncate text-xs text-muted">
-                {mode === 'work'
-                  ? activeConvId
-                    ? conversations.find((c) => c.id === activeConvId)?.title ||
-                      `任務 ${activeConvId.slice(0, 8)}`
-                    : '交代工作'
-                  : '教它新工作'}
+          <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5 sm:px-4">
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                ref={leftMenuBtnRef}
+                type="button"
+                className="btn-ghost shrink-0 p-1.5 md:hidden"
+                aria-label="開啟任務清單"
+                aria-expanded={leftDrawerOpen}
+                onClick={() => (leftDrawerOpen ? closeLeftDrawer() : openLeftDrawer())}
+              >
+                <Menu className="h-5 w-5" />
+              </button>
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold">
+                  {selectedAgent?.name ?? '選擇 Agent'}
+                </div>
+                <div className="truncate text-xs text-muted">
+                  {mode === 'work'
+                    ? activeConvId
+                      ? activeConvTitle || `任務 ${activeConvId.slice(0, 8)}`
+                      : '交代工作'
+                    : '教它新工作'}
+                </div>
               </div>
             </div>
-            <div className="flex shrink-0 rounded-lg border border-border p-0.5">
+            <div className="flex shrink-0 items-center gap-1.5">
+              <div className="flex rounded-lg border border-border p-0.5">
+                <button
+                  type="button"
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors sm:px-3',
+                    mode === 'work' ? 'bg-brand/15 text-brand' : 'text-muted hover:text-fg',
+                  )}
+                  onClick={() => switchMode('work')}
+                >
+                  <MessageSquare className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">交代工作</span>
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors sm:px-3',
+                    mode === 'teach' ? 'bg-brand/15 text-brand' : 'text-muted hover:text-fg',
+                  )}
+                  onClick={() => switchMode('teach')}
+                >
+                  <GraduationCap className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">教它新工作</span>
+                </button>
+              </div>
               <button
+                ref={rightDetailBtnRef}
                 type="button"
-                className={cn(
-                  'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
-                  mode === 'work' ? 'bg-brand/15 text-brand' : 'text-muted hover:text-fg',
-                )}
-                onClick={() => switchMode('work')}
+                className="btn-ghost shrink-0 p-1.5 lg:hidden"
+                aria-label="開啟任務詳情"
+                aria-expanded={rightDrawerOpen}
+                onClick={() => (rightDrawerOpen ? closeRightDrawer() : openRightDrawer())}
               >
-                <MessageSquare className="h-3.5 w-3.5" />
-                交代工作
-              </button>
-              <button
-                type="button"
-                className={cn(
-                  'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
-                  mode === 'teach' ? 'bg-brand/15 text-brand' : 'text-muted hover:text-fg',
-                )}
-                onClick={() => switchMode('teach')}
-              >
-                <GraduationCap className="h-3.5 w-3.5" />
-                教它新工作
+                <PanelRight className="h-5 w-5" />
               </button>
             </div>
           </div>
@@ -1127,7 +1480,23 @@ function WorkbenchInner() {
                         key={m.id}
                         className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300"
                       >
-                        {m.text}
+                        <div>{m.text}</div>
+                        {m.retry && (
+                          <button
+                            type="button"
+                            className="btn-ghost mt-2 h-8 text-xs text-rose-200"
+                            disabled={teachSending}
+                            onClick={() => {
+                              const payload = m.retry!;
+                              setTeachMessages((prev) => prev.filter((x) => x.id !== m.id));
+                              void sendTrainMessage(payload.message, {
+                                display: payload.display,
+                              });
+                            }}
+                          >
+                            重試
+                          </button>
+                        )}
                       </div>
                     );
                   }
@@ -1227,6 +1596,26 @@ function WorkbenchInner() {
                       setDraft((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
                     }}
                   />
+                  <input
+                    ref={teachFileInputRef}
+                    type="file"
+                    className="hidden"
+                    accept=".md,.markdown,.txt,text/markdown,text/plain"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = '';
+                      void handleTeachUpload(file);
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn-ghost h-9 shrink-0"
+                    title="上傳教學文件"
+                    disabled={!selectedAgentId || teachSending}
+                    onClick={() => teachFileInputRef.current?.click()}
+                  >
+                    <Paperclip className="h-4 w-4" />
+                  </button>
                   <button
                     type="button"
                     className="btn-primary h-9 shrink-0"
@@ -1253,98 +1642,37 @@ function WorkbenchInner() {
           )}
         </section>
 
-        {/* Right: builder checklist OR agent summary + tips */}
+        {/* Right: builder checklist OR agent summary + session / tips (desktop) */}
         <aside className="hidden w-72 shrink-0 flex-col border-l border-border bg-panel/30 lg:flex">
-          {builderOpen ? (
-            <AgentBuilderRail session={builderSession} />
-          ) : (
-            <>
-              <div className="border-b border-border p-4">
-                <div className="text-[11px] font-medium uppercase tracking-wide text-muted">
-                  Agent 摘要
-                </div>
-                {agentDetailQ.isLoading && selectedAgentId && (
-                  <div className="mt-4 flex justify-center">
-                    <Spinner className="h-4 w-4" />
-                  </div>
-                )}
-                {!selectedAgentId && (
-                  <p className="mt-2 text-sm text-muted">選一位 Agent 查看能力摘要</p>
-                )}
-                {agentDetail && (
-                  <div className="mt-3 space-y-3">
-                    <div className="flex items-center gap-2">
-                      <span className="grid h-10 w-10 place-items-center rounded-xl bg-brand/10 text-lg">
-                        {agentDetail.avatar || <Bot className="h-5 w-5 text-brand" />}
-                      </span>
-                      <div className="min-w-0">
-                        <div className="truncate font-medium">{agentDetail.name}</div>
-                        <StatusBadge status={agentDetail.status} />
-                      </div>
-                    </div>
-                    <p className="line-clamp-4 text-sm text-muted">
-                      {agentDetail.description || '尚無描述'}
-                    </p>
-                    {agentDetail.department && (
-                      <div className="text-xs text-muted">部門 · {agentDetail.department}</div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <div className="border-b border-border p-4">
-                <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted">
-                  <Wrench className="h-3 w-3" /> 已掛載技能
-                </div>
-                {!agentDetail && <p className="text-xs text-muted">—</p>}
-                {agentDetail && agentDetail.skills.length === 0 && (
-                  <p className="text-xs text-muted">尚未掛載技能。可切換「教它新工作」。</p>
-                )}
-                {agentDetail && agentDetail.skills.length > 0 && (
-                  <ul className="max-h-40 space-y-1.5 overflow-y-auto">
-                    {agentDetail.skills.map((s) => (
-                      <li
-                        key={s.skillId}
-                        className="flex items-center justify-between gap-2 text-sm"
-                      >
-                        <span className="truncate">{s.skill?.name ?? s.skillId}</span>
-                        <StatusBadge status={s.skill?.reviewStatus ?? 'UNKNOWN'} />
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-
-              <div className="flex-1 space-y-3 overflow-y-auto p-4 text-xs text-muted">
-                <div className="text-[11px] font-medium uppercase tracking-wide">工作台提示</div>
-                <ul className="list-disc space-y-1.5 pl-4 leading-relaxed">
-                  <li>用「建立 AI 員工」從業務目標訪談、規劃、試跑到啟用。</li>
-                  <li>用「交代工作」給既有 Agent 任務；回覆會即時出現。</li>
-                  <li>用「教它新工作」口述或錄製流程，產生技能草稿。</li>
-                  <li>技能不會自動確認；MEMBER 只能送提案／送交 FDE。</li>
-                  <li>不會顯示引擎、工作流編排等技術設定。</li>
-                </ul>
-                {isFde && (
-                  <Link
-                    href="/admin"
-                    className="btn-ghost mt-2 w-full justify-center border border-border text-xs"
-                  >
-                    <Shield className="h-3.5 w-3.5" />
-                    開啟 FDE 管理中心
-                  </Link>
-                )}
-                {isFde && selectedAgentId && (
-                  <Link
-                    href={`/employees/${selectedAgentId}`}
-                    className="block text-center text-[11px] text-brand hover:underline"
-                  >
-                    進階設定（員工詳情）
-                  </Link>
-                )}
-              </div>
-            </>
-          )}
+          {renderRightRail()}
         </aside>
+
+        {/* Mobile right drawer */}
+        {rightDrawerOpen && (
+          <div className="fixed inset-0 z-40 lg:hidden" role="dialog" aria-modal="true" aria-label="任務詳情">
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/50"
+              aria-label="關閉任務詳情"
+              onClick={() => closeRightDrawer()}
+            />
+            <div className="absolute inset-y-0 right-0 flex w-80 max-w-[90vw] flex-col border-l border-border bg-panel shadow-xl">
+              <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                <span className="text-sm font-medium">任務詳情</span>
+                <button
+                  ref={rightDrawerCloseBtnRef}
+                  type="button"
+                  className="btn-ghost p-1.5"
+                  aria-label="關閉任務詳情"
+                  onClick={() => closeRightDrawer()}
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">{renderRightRail()}</div>
+            </div>
+          </div>
+        )}
       </div>
     </AppShell>
   );

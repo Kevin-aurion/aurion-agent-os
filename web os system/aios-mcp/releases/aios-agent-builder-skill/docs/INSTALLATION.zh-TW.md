@@ -8,7 +8,7 @@
 
 ```bash
 export PATH="$HOME/.local/node/bin:$PATH"
-cd "/Users/kevin/Documents/aurion/web os system/aios-mcp"
+cd "/Users/kevin/Documents/lazyoffice/web os system/aios-mcp"
 npm install
 npm run build
 npm run provision:local-user
@@ -39,7 +39,7 @@ Claude 會用動態 Grill-me 方式一次詢問一個最有價值的問題。AIO
 
 建置結果請在以下獨立入口查看：
 
-- `https://aurion-aios.lazyoffice.app/agent-builds`
+- `https://aios-new.lazyoffice.app/agent-builds`
 - 使用原本 AIOS 帳號密碼登入。
 - 一般使用者只能看到自己的建置；OWNER／TRAINER 可看全部。
 - 草稿可送交 FDE、建立待測版本，並在頁面提供測試資料後調用 Agent 隔離試跑。

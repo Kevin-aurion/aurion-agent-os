@@ -11,8 +11,6 @@ import { ok, errors, sendError } from '../lib/http.js';
 import { prisma } from '../lib/db.js';
 import { hub } from '../ws/hub.js';
 import { audit } from '../lib/audit.js';
-import type { AccessClaims } from '../lib/auth.js';
-import { requireVisibleAgent } from '../lib/agentaccess.js';
 
 interface SendMessageResult {
   messageId: string;
@@ -69,16 +67,14 @@ async function persistAndPublishReply(
 async function sendMessage(
   conversationId: string,
   content: string,
-  claims: Pick<AccessClaims, 'sub' | 'role'> | null | undefined,
+  userId: string | null | undefined,
 ): Promise<SendMessageResult> {
-  if (!claims?.sub) throw errors.unauthorized();
-  const userId = claims.sub;
+  if (!userId) throw errors.unauthorized();
 
   const conversation = await prisma.conversation.findUnique({ where: { id: conversationId } });
   if (!conversation || conversation.deletedAt) throw errors.notFound('Conversation not found');
   // Fail-closed privacy: do not leak existence of another user's thread.
   if (conversation.userId !== userId) throw errors.notFound('Conversation not found');
-  await requireVisibleAgent(conversation.agentId, claims);
 
   // Gather recent conversation history (before this new turn) so the agent has
   // memory of the dialogue — a chat feature needs prior turns as context.
@@ -143,7 +139,6 @@ export async function conversationRoutes(app: FastifyInstance) {
       const { agentId } = req.params as { agentId: string };
       const userId = req.user?.sub;
       if (!userId) throw errors.unauthorized();
-      await requireVisibleAgent(agentId, req.user!);
 
       // Only the caller's own threads for this agent.
       const conversations = await prisma.conversation.findMany({
@@ -161,7 +156,8 @@ export async function conversationRoutes(app: FastifyInstance) {
       const { agentId } = req.params as { agentId: string };
       const body = (req.body ?? {}) as { title?: string };
 
-      await requireVisibleAgent(agentId, req.user!);
+      const agent = await prisma.agent.findUnique({ where: { id: agentId } });
+      if (!agent) throw errors.notFound('Agent not found');
 
       const userId = req.user?.sub;
       if (!userId) throw errors.unauthorized();
@@ -208,7 +204,7 @@ export async function conversationRoutes(app: FastifyInstance) {
       const userId = req.user?.sub;
       if (!userId) throw errors.unauthorized();
 
-      const result = await sendMessage(id, body.content, req.user!);
+      const result = await sendMessage(id, body.content, userId);
       return reply.send(ok(result));
     } catch (e) {
       return sendError(reply, e);
@@ -222,5 +218,5 @@ hub.onReq('chat.send', async (payload: { conversationId?: string; content?: stri
   const { conversationId, content } = payload ?? {};
   if (!conversationId || typeof conversationId !== 'string') throw errors.badRequest('conversationId is required');
   if (!content || typeof content !== 'string') throw errors.badRequest('content is required');
-  return sendMessage(conversationId, content, { sub: conn.userId, role: conn.role });
+  return sendMessage(conversationId, content, conn.userId);
 });

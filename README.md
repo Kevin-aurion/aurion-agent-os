@@ -1,6 +1,6 @@
 # AIOS — 本地優先多代理「AI 員工」作業系統
 
-> Local-first multi-agent "employee" operating system — Aurion Group / 奧聯集團
+> Local-first multi-agent "employee" operating system — Lazyoffice Group / 奧聯集團
 
 把每一個 AI 代理當成一位「**員工（Agent）**」：你為員工設定角色、掛載**技能（Skill）**、配置**工作流（Workflow）**，一位員工可對應多條工作流。整套系統**在地優先（不離地）**——資料庫、驗證、前後端、執行引擎全部跑在本機 `127.0.0.1`，唯一的對外連線是你**親自授權**的 Google／Microsoft／LINE，以及本機的 `claude`／`codex`／`grok` CLI。
 
@@ -50,7 +50,7 @@
 ## 📁 專案結構
 
 ```
-aurion-agent-os/
+lazyoffice-agent-os/
 ├─ web os system/              後端 + 網頁（跑在主機）
 │  ├─ aios-server/             Node 22 · Fastify 5 · Prisma · BullMQ
 │  │  └─ src/{engine,routes,workflow,scheduler,integrations,channels,lib,skills,ws}
@@ -135,4 +135,4 @@ macOS App：用 Xcode 開 `mac os system/aios-system/aios-system.xcodeproj`（�
 
 ---
 
-<sub>© Aurion Group / 奧聯集團 · 內部專案</sub>
+<sub>© Lazyoffice Group / 奧聯集團 · 內部專案</sub>

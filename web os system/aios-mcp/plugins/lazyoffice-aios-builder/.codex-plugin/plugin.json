@@ -1,0 +1,38 @@
+{
+  "name": "lazyoffice-aios-builder",
+  "version": "1.4.0",
+  "description": "Build governed AI employees through natural conversations and synchronize durable drafts to Lazyoffice AIOS.",
+  "author": {
+    "name": "Lazyoffice",
+    "url": "https://aios-new.lazyoffice.app/agent-builds"
+  },
+  "homepage": "https://aios-new.lazyoffice.app/agent-builds",
+  "keywords": [
+    "agent-builder",
+    "ai-employee",
+    "mcp",
+    "skills"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Lazyoffice AIOS Builder",
+    "shortDescription": "Build governed AI employees",
+    "longDescription": "Train and debug governed AI employees conversationally in ChatGPT, Codex, Claude or Cursor while Lazyoffice AIOS keeps every reflection and Shadow Skill version behind mandatory FDE release gates.",
+    "developerName": "Lazyoffice",
+    "category": "Productivity",
+    "capabilities": [
+      "Adaptive agent interviews",
+      "Agent and Skill drafting",
+      "Conversational Shadow Agent coaching",
+      "Per-turn reflection and governed release"
+    ],
+    "websiteURL": "https://aios-new.lazyoffice.app/agent-builds",
+    "defaultPrompt": [
+      "Help me build an AI employee for a recurring business task.",
+      "Continue one of my unfinished AI employee builds.",
+      "Review and improve the latest draft of my AI employee."
+    ],
+    "brandColor": "#7B83FF"
+  }
+}

@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Aurion Agentic OS 主控台</title>
+<title>Lazyoffice Agentic OS 主控台</title>
 <style>
 /* ================================================================
-   Aurion Agentic OS — DESIGN_TOKENS v1.0（施工契約 A 節）
+   Lazyoffice Agentic OS — DESIGN_TOKENS v1.0（施工契約 A 節）
    所有視圖僅能使用本節之 CSS 變數與 class。禁止出現任何自創色值。
    ================================================================ */
 
@@ -406,7 +406,7 @@ a:hover { text-decoration: underline; }
     <div class="brand">
       <div class="brand-logo">A</div>
       <div class="brand-text">
-        <div class="brand-name">Aurion Agentic OS</div>
+        <div class="brand-name">Lazyoffice Agentic OS</div>
         <div class="brand-sub">本地優先 AI 員工作業系統</div>
       </div>
     </div>
@@ -655,14 +655,14 @@ a:hover { text-decoration: underline; }
 
 <script>
 window.MOCK = {
-  meta: { company: "Aurion Group（奧聯集團）", owner: "kevin@aurion-group.com", today: "2026-07-20", currency: "USD" },
+  meta: { company: "Lazyoffice Group（奧聯集團）", owner: "kevin@lazyoffice-group.com", today: "2026-07-20", currency: "USD" },
 
   /* ============ agents：identityCard 對應 Spec 3.1 身分卡 schema ============ */
   agents: [
     {
       identityCard: {
         id: "agt_ap_scanner", slug: "ap-scanner", displayName: "應付帳款掃描員", avatar: "🧾",
-        owner: { userId: "u_kevin", email: "kevin@aurion-group.com" },
+        owner: { userId: "u_kevin", email: "kevin@lazyoffice-group.com" },
         purpose: "每日掃描應付帳款、標記異常、產出對帳待辦",
         department: "finance/ap", parentAgentId: "agt_finance_brain",
         dataDomains: ["gdrive:folder/AP2026", "mem:ns/ap-scanner"],
@@ -716,7 +716,7 @@ window.MOCK = {
     {
       identityCard: {
         id: "agt_quote_gen", slug: "quote-generator", displayName: "報價單生成員", avatar: "📄",
-        owner: { userId: "u_kevin", email: "kevin@aurion-group.com" },
+        owner: { userId: "u_kevin", email: "kevin@lazyoffice-group.com" },
         purpose: "依詢價需求生成報價單、上傳雲端並待審寄送",
         department: "sales", parentAgentId: "agt_sales_brain",
         dataDomains: ["gdrive:folder/Quotes2026", "mem:ns/quote-generator"],
@@ -761,7 +761,7 @@ window.MOCK = {
     {
       identityCard: {
         id: "agt_news_editor", slug: "news-editor", displayName: "AI 新聞日報編輯", avatar: "📰",
-        owner: { userId: "u_kevin", email: "kevin@aurion-group.com" },
+        owner: { userId: "u_kevin", email: "kevin@lazyoffice-group.com" },
         purpose: "每日蒐集 AI 產業新聞、生成中文日報並推播",
         department: "marketing", parentAgentId: "agt_marketing_brain",
         dataDomains: ["web:allowlisted-news", "mem:ns/news-editor"],
@@ -807,7 +807,7 @@ window.MOCK = {
     {
       identityCard: {
         id: "agt_ap_auditor", slug: "ap-auditor", displayName: "對帳覆核稽核員", avatar: "🔍",
-        owner: { userId: "u_kevin", email: "kevin@aurion-group.com" },
+        owner: { userId: "u_kevin", email: "kevin@lazyoffice-group.com" },
         purpose: "覆核帳款異常清單、出具處置建議（稽核層，不執行業務）",
         department: "finance/ap", parentAgentId: "agt_finance_brain",
         dataDomains: ["gdrive:folder/AP2026:readonly", "mem:ns/ap-auditor"],
@@ -1046,7 +1046,7 @@ window.MOCK = {
     },
     draftCard: {
       id: "agt_pr_assistant_draft", slug: "pr-assistant", displayName: "採購請款助理", avatar: "🗃️",
-      owner: { userId: "u_kevin", email: "kevin@aurion-group.com" },
+      owner: { userId: "u_kevin", email: "kevin@lazyoffice-group.com" },
       purpose: "每日整理採購請款單、擷取欄位並核對預算科目",
       department: "finance/procurement", parentAgentId: "agt_finance_brain",
       dataDomains: ["gdrive:folder/PR2026", "mem:ns/pr-assistant"],

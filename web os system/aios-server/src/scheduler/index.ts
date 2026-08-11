@@ -180,6 +180,18 @@ async function runWorkflowRunJob(job: Job<RunJobData>): Promise<unknown> {
 
   hub.publish('workflow.triggered', { workflowId, triggeredBy, jobId: job.id });
 
+  // Ticket 18: scheduled runs route to an active Production RuntimeDeployment when present.
+  // No deployment → fall through to the unchanged Native path below.
+  try {
+    const { resolveScheduledRuntimeRoute, dispatchScheduledWorkflow } = await import('../lib/runtimeexecution.js');
+    const route = await resolveScheduledRuntimeRoute(workflowId);
+    if (route.kind !== 'NATIVE') {
+      return await dispatchScheduledWorkflow(workflowId, (input ?? {}) as Record<string, unknown>, triggeredBy);
+    }
+  } catch (e) {
+    console.warn('[scheduler] runtime route resolution failed — using native path:', e instanceof Error ? e.message : e);
+  }
+
   try {
     const runnerPath = '../workflow/runner.js';
     const mod: any = await import(runnerPath);

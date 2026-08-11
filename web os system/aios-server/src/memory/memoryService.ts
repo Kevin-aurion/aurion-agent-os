@@ -348,6 +348,34 @@ export async function recallHits(
   }
 }
 
+/**
+ * Fail-closed structured recall for Knowledge Gateway (Phase 6).
+ * Throws on disabled memory, blocked embedding, or Qdrant/provider errors.
+ * Never returns [] to mask outages.
+ */
+export async function recallHitsStrict(
+  agentId: string,
+  queryText: string,
+  topK = 4,
+): Promise<MemorySearchHit[]> {
+  if (!config.memory.enabled) {
+    throw new Error('Memory is disabled');
+  }
+  const q = queryText?.trim();
+  if (!q) {
+    throw new Error('query is required');
+  }
+  if (!(await agentAllowsCloudEmbedding(agentId))) {
+    throw new Error('Agent cloudEmbedding restriction blocks knowledge search');
+  }
+  const provider = getEmbeddingProvider();
+  const [vec] = await provider.embed([redactSecrets(q)]);
+  if (!vec?.length) {
+    throw new Error('Embedding returned empty vector');
+  }
+  return await search(agentId, vec, topK);
+}
+
 export function formatRecallBlock(hits: MemorySearchHit[]): string {
   const lines = hits.map((h, i) => {
     const score = typeof h.score === 'number' ? h.score.toFixed(3) : '?';

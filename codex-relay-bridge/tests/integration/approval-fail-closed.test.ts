@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  AURION_PROJECT,
+  LAZYOFFICE_PROJECT,
   createTestRelay,
   readJsonLinesAsync,
   waitFor,
@@ -34,7 +34,7 @@ function defaultParams(method: string, threadId: string): unknown {
         callId: "call1",
         approvalId: null,
         command: ["ls"],
-        cwd: AURION_PROJECT,
+        cwd: LAZYOFFICE_PROJECT,
         reason: null,
         parsedCmd: [],
       };
@@ -129,7 +129,7 @@ describe("approval-fail-closed", () => {
 
       try {
         const started = await relay.startTask({
-          project: AURION_PROJECT,
+          project: LAZYOFFICE_PROJECT,
           message: `test ${kind}`,
           idempotency_key: `key-appr-${kind.replace(/\//g, "_")}-${Date.now()}`,
         });
@@ -180,7 +180,7 @@ describe("approval-fail-closed", () => {
       });
       try {
         const started = await relay.startTask({
-          project: AURION_PROJECT,
+          project: LAZYOFFICE_PROJECT,
           message: `imm ${kind}`,
           idempotency_key: `key-imm-${kind.replace(/\//g, "_")}-${Date.now()}`,
         });
@@ -224,7 +224,7 @@ describe("approval-fail-closed", () => {
       });
       try {
         await relay.startTask({
-          project: AURION_PROJECT,
+          project: LAZYOFFICE_PROJECT,
           message: "time",
           idempotency_key: `key-time-${Date.now()}`,
         });
@@ -264,7 +264,7 @@ describe("approval-fail-closed", () => {
       });
       try {
         const started = await relay.startTask({
-          project: AURION_PROJECT,
+          project: LAZYOFFICE_PROJECT,
           message: "deny3",
           idempotency_key: `key-deny3-${Date.now()}`,
         });
@@ -312,7 +312,7 @@ describe("approval-fail-closed", () => {
       });
       try {
         const started = await relay.startTask({
-          project: AURION_PROJECT,
+          project: LAZYOFFICE_PROJECT,
           message: "allow5",
           idempotency_key: `key-allow5-${Date.now()}`,
         });
@@ -365,7 +365,7 @@ describe("approval-fail-closed", () => {
       });
       try {
         const started = await relay.startTask({
-          project: AURION_PROJECT,
+          project: LAZYOFFICE_PROJECT,
           message: "dyn",
           idempotency_key: `key-dyn-${Date.now()}`,
         });

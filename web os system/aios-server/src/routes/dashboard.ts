@@ -7,6 +7,9 @@ import { requireAuth } from '../lib/guard.js';
 import { audit, verifyAuditChain } from '../lib/audit.js';
 import { getSpend } from '../engine/cost.js';
 import { hub } from '../ws/hub.js';
+import { assertLoopbackUrl } from '../lib/mcpregistry.js';
+import { redactSecrets } from '../memory/redactor.js';
+import { evaluateSloAlerts } from '../lib/slo.js';
 
 // ── L9 health traffic lights (pure aggregation, shared by route + tests) ─────
 
@@ -403,6 +406,18 @@ export async function computeHealthMetrics(): Promise<HealthMetric[]> {
     reason: '尚未埋點（無沙盒隔離 / sandbox-exec，P1）',
   };
 
+  // 11–12) Langflow sandbox/production health — additive only; isolated probes.
+  const [langflowSandboxMetric, langflowProductionMetric] = await Promise.all([
+    probeLangflowHealth('AIOS_LANGFLOW_SANDBOX_URL', process.env.AIOS_LANGFLOW_SANDBOX_URL, {
+      key: 'langflow_sandbox_health',
+      label: 'Langflow Sandbox 健康',
+    }),
+    probeLangflowHealth('AIOS_LANGFLOW_RUNTIME_URL', process.env.AIOS_LANGFLOW_RUNTIME_URL, {
+      key: 'langflow_production_health',
+      label: 'Langflow Production 健康',
+    }),
+  ]);
+
   return [
     verifyMetric,
     firstRoundMetric,
@@ -414,13 +429,257 @@ export async function computeHealthMetrics(): Promise<HealthMetric[]> {
     runsMetric,
     skillEvalMetric,
     sandboxMetric,
+    langflowSandboxMetric,
+    langflowProductionMetric,
   ];
+}
+
+/**
+ * Isolated Langflow health probe. Never throws. Failures only affect this metric.
+ * Unset env → unknown; non-loopback → red; fetch /health with 2s timeout.
+ */
+export async function probeLangflowHealth(
+  envName: string,
+  url: string | undefined,
+  meta: { key: string; label: string },
+): Promise<HealthMetric> {
+  try {
+    if (url == null || String(url).trim() === '') {
+      return {
+        key: meta.key,
+        label: meta.label,
+        value: null,
+        light: 'unknown',
+        reason: `未設定 ${envName}`,
+      };
+    }
+    const base = String(url).replace(/\/+$/, '');
+    try {
+      assertLoopbackUrl(base);
+    } catch {
+      return {
+        key: meta.key,
+        label: meta.label,
+        value: null,
+        light: 'red',
+        reason: 'URL 非 loopback（拒絕）',
+      };
+    }
+
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 2000);
+    const t0 = Date.now();
+    try {
+      const res = await fetch(`${base}/health`, { signal: ac.signal });
+      const latencyMs = Date.now() - t0;
+      if (res.ok) {
+        return {
+          key: meta.key,
+          label: meta.label,
+          value: latencyMs,
+          light: 'green',
+        };
+      }
+      const bodySnippet = redactSecrets(`HTTP ${res.status}`).slice(0, 200);
+      return {
+        key: meta.key,
+        label: meta.label,
+        value: latencyMs,
+        light: 'red',
+        reason: bodySnippet,
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return {
+        key: meta.key,
+        label: meta.label,
+        value: null,
+        light: 'red',
+        reason: redactSecrets(msg).slice(0, 200),
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return {
+      key: meta.key,
+      label: meta.label,
+      value: null,
+      light: 'unknown',
+      reason: redactSecrets(msg).slice(0, 200),
+    };
+  }
+}
+
+function percentile(sortedAsc: number[], p: number): number {
+  if (sortedAsc.length === 0) return 0;
+  if (sortedAsc.length === 1) return sortedAsc[0]!;
+  const idx = Math.min(
+    sortedAsc.length - 1,
+    Math.max(0, Math.ceil((p / 100) * sortedAsc.length) - 1),
+  );
+  return sortedAsc[idx]!;
+}
+
+/**
+ * Deterministic 7-day pilot SLO aggregation for LANGFLOW runs.
+ * Missing latency → null; missing counters → 0. Never fabricates data.
+ */
+export async function computePilotSloMetrics(): Promise<{
+  windowDays: number;
+  runs: {
+    total: number;
+    succeeded: number;
+    failed: number;
+    awaitingReview: number;
+    running: number;
+  };
+  runLatencyMs: { avg: number; p95: number } | null;
+  errorCounters: {
+    adapterTimeout: number;
+    budgetExceeded: number;
+    noTerminalEvent: number;
+    other: number;
+  };
+  approvalLatencyMs: { avg: number; count: number } | null;
+  costUsd: number;
+}> {
+  const windowDays = 7;
+  const since = new Date(Date.now() - windowDays * MS_DAY);
+
+  const runs = await prisma.run.findMany({
+    where: {
+      runtimeKind: 'LANGFLOW',
+      startedAt: { gte: since },
+    },
+    select: {
+      id: true,
+      status: true,
+      startedAt: true,
+      finishedAt: true,
+      output: true,
+    },
+  });
+
+  let succeeded = 0;
+  let failed = 0;
+  let awaitingReview = 0;
+  let running = 0;
+  const latencies: number[] = [];
+  const errorCounters = {
+    adapterTimeout: 0,
+    budgetExceeded: 0,
+    noTerminalEvent: 0,
+    other: 0,
+  };
+
+  for (const r of runs) {
+    if (r.status === 'SUCCEEDED') succeeded += 1;
+    else if (r.status === 'FAILED') failed += 1;
+    else if (r.status === 'AWAITING_REVIEW') awaitingReview += 1;
+    else if (r.status === 'RUNNING') running += 1;
+
+    if (r.finishedAt != null) {
+      latencies.push(r.finishedAt.getTime() - r.startedAt.getTime());
+    }
+
+    if (r.status === 'FAILED') {
+      const out =
+        r.output && typeof r.output === 'object' && !Array.isArray(r.output)
+          ? (r.output as Record<string, unknown>)
+          : null;
+      const code = out && typeof out.code === 'string' ? out.code : '';
+      if (code === 'TIMEOUT') errorCounters.adapterTimeout += 1;
+      else if (code === 'BUDGET_EXCEEDED') errorCounters.budgetExceeded += 1;
+      else if (code === 'NO_TERMINAL_EVENT') errorCounters.noTerminalEvent += 1;
+      else errorCounters.other += 1;
+    }
+  }
+
+  let runLatencyMs: { avg: number; p95: number } | null = null;
+  if (latencies.length > 0) {
+    const sorted = [...latencies].sort((a, b) => a - b);
+    const avg = sorted.reduce((a, b) => a + b, 0) / sorted.length;
+    runLatencyMs = {
+      avg: Math.round(avg * 1000) / 1000,
+      p95: percentile(sorted, 95),
+    };
+  }
+
+  const runIds = runs.map((r) => r.id);
+
+  let approvalLatencyMs: { avg: number; count: number } | null = null;
+  if (runIds.length > 0) {
+    const approvals = await prisma.approvalRequest.findMany({
+      where: {
+        runId: { in: runIds },
+        decidedAt: { not: null },
+      },
+      select: { createdAt: true, decidedAt: true },
+    });
+    const decided = approvals.filter((a) => a.decidedAt != null);
+    if (decided.length > 0) {
+      const deltas = decided.map(
+        (a) => a.decidedAt!.getTime() - a.createdAt.getTime(),
+      );
+      const avg = deltas.reduce((a, b) => a + b, 0) / deltas.length;
+      approvalLatencyMs = {
+        avg: Math.round(avg * 1000) / 1000,
+        count: deltas.length,
+      };
+    }
+  }
+
+  let costUsd = 0;
+  if (runIds.length > 0) {
+    const agg = await prisma.costLog.aggregate({
+      where: { runId: { in: runIds } },
+      _sum: { costUsd: true },
+    });
+    const raw = agg._sum.costUsd;
+    costUsd = raw != null ? Number(raw) : 0;
+    if (!Number.isFinite(costUsd)) costUsd = 0;
+  }
+
+  return {
+    windowDays,
+    runs: {
+      total: runs.length,
+      succeeded,
+      failed,
+      awaitingReview,
+      running,
+    },
+    runLatencyMs,
+    errorCounters,
+    approvalLatencyMs,
+    costUsd,
+  };
 }
 
 export async function dashboardRoutes(app: FastifyInstance) {
   app.get('/api/dashboard/health', { preHandler: requireAuth }, async (_req, reply) => {
     try {
       return reply.send(ok(await computeHealthMetrics()));
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  });
+
+  app.get('/api/dashboard/pilot-slo', { preHandler: requireAuth }, async (_req, reply) => {
+    try {
+      return reply.send(ok(await computePilotSloMetrics()));
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  });
+
+  app.get('/api/dashboard/slo-alerts', { preHandler: requireAuth }, async (_req, reply) => {
+    try {
+      const metrics = await computePilotSloMetrics();
+      const result = evaluateSloAlerts(metrics);
+      return reply.send(ok({ metrics, ...result }));
     } catch (e) {
       return sendError(reply, e);
     }

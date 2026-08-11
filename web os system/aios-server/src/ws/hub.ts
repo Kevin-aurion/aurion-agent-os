@@ -1,4 +1,4 @@
-// AWP/1 — Aurion Wire Protocol v1. User channel `/ws` (JWT + ring/replay) and
+// AWP/1 — Lazyoffice Wire Protocol v1. User channel `/ws` (JWT + ring/replay) and
 // dedicated device channel `/device/ws` (Authorization Bearer only; no user ring).
 // JSON envelope, topic pub/sub with wildcard suffix, 25s heartbeat.
 import { WebSocketServer, WebSocket } from 'ws';
@@ -29,7 +29,6 @@ export interface AwpFrame {
 interface Conn {
   id: string;
   userId: string;
-  role: string;
   ws: WebSocket;
   subs: string[];
   lastPong: number;
@@ -47,7 +46,7 @@ interface BufferedEvent {
   userId?: string;
 }
 
-type ReqHandler = (payload: any, conn: { id: string; userId: string; role: string }) => Promise<unknown> | unknown;
+type ReqHandler = (payload: any, conn: { id: string; userId: string }) => Promise<unknown> | unknown;
 
 function matches(pattern: string, topic: string): boolean {
   if (pattern === '*') return true;
@@ -168,8 +167,8 @@ export class Hub {
     for (const { frame } of missed) this.send(conn.ws, frame);
   }
 
-  private async register(ws: WebSocket, userId: string, role: string) {
-    const conn: Conn = { id: ulid(), userId, role, ws, subs: [], lastPong: Date.now() };
+  private async register(ws: WebSocket, userId: string) {
+    const conn: Conn = { id: ulid(), userId, ws, subs: [], lastPong: Date.now() };
     this.conns.set(conn.id, conn);
     this.send(ws, this.frame('event', { topic: 'hello', seq: this.seq, payload: { connId: conn.id, userId } }));
 
@@ -212,7 +211,7 @@ export class Hub {
       if (!handler) {
         return this.send(conn.ws, this.frame('err', { reqId: f.id, payload: { code: 'NO_HANDLER', topic } }));
       }
-      const data = await handler(payload, { id: conn.id, userId: conn.userId, role: conn.role });
+      const data = await handler(payload, { id: conn.id, userId: conn.userId });
       this.send(conn.ws, this.frame('res', { reqId: f.id, topic, payload: data }));
     } catch (e) {
       this.send(conn.ws, this.frame('err', { reqId: f.id, topic, payload: { message: e instanceof Error ? e.message : String(e) } }));
@@ -427,18 +426,16 @@ export class Hub {
       if (url.pathname !== '/ws') return;
       const token = url.searchParams.get('token') ?? '';
       let userId: string;
-      let role: string;
       try {
         const claims = await verifyAccess(token);
         if (claims.scope) throw new Error('Scoped OAuth tokens cannot open the general WebSocket');
         userId = claims.sub;
-        role = claims.role;
       } catch {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
         socket.destroy();
         return;
       }
-      wss.handleUpgrade(rawReq, socket, head, (ws) => this.register(ws, userId, role));
+      wss.handleUpgrade(rawReq, socket, head, (ws) => this.register(ws, userId));
     });
 
     this.heartbeat = setInterval(() => {

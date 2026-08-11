@@ -1,4 +1,4 @@
-# Aurion Agentic OS 重構 Spec（融合版）
+# Lazyoffice Agentic OS 重構 Spec（融合版）
 
 > 定位：以上海 WAIC L0–L9 為技術骨架，第一性治理層統攝全棧；我們原本更硬的護城河（跨模型驗證閘、在地優先、引擎層限制、紅線 redactor、understand→confirm 閘）保留並強化為差異化。標記法：🔴我們自研IP／🟢借用開源／🔵採購或外部授權訂閱。
 
@@ -74,7 +74,7 @@
 ```jsonc
 {
   "id": "agt_...", "slug": "ap-scanner", "displayName": "應付帳款掃描員", "avatar": "...",
-  "owner": { "userId": "...", "email": "kevin@aurion-group.com" },   // 擁有者
+  "owner": { "userId": "...", "email": "kevin@lazyoffice-group.com" },   // 擁有者
   "purpose": "每日掃描應付帳款、標記異常、產出對帳待辦",              // 目的（崗位一句話）
   "department": "finance/ap",                                        // 部門（階層路徑）
   "parentAgentId": "agt_finance_brain",                             // 階層派工上級

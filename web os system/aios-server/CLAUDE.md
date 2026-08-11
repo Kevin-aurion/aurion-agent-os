@@ -34,7 +34,7 @@ npm run install:host-service # build + 安裝／重啟主機 LaunchAgent（正�
 ```
 Node 在 `~/.local/node/bin`（`export PATH="$HOME/.local/node/bin:$PATH"`）。
 
-正式對外的 `aurion-aios.lazyoffice.app` 不應依賴某個終端視窗裡的 `npm run dev`。主機以 LaunchAgent `app.lazyoffice.aurion-aios-server` 執行建置後的 `dist/index.js`，`KeepAlive` + `RunAtLoad`，log 在 `~/Library/Logs/aurion-aios-server.*.log`；更新後重跑 `npm run install:host-service`。
+正式對外的 `lazyoffice-aios.lazyoffice.app` 不應依賴某個終端視窗裡的 `npm run dev`。主機以 LaunchAgent `app.lazyoffice.lazyoffice-aios-server` 執行建置後的 `dist/index.js`，`KeepAlive` + `RunAtLoad`，log 在 `~/Library/Logs/lazyoffice-aios-server.*.log`；更新後重跑 `npm run install:host-service`。
 
 ## 狀態
 - 三引擎、驗證閘、三種觸發、雲端讀寫、對話（含記憶）、限制強制皆完成並實測。

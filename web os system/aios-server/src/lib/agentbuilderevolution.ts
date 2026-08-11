@@ -15,6 +15,11 @@ import { looseParseJson } from '../engine/draft.js';
 import { guardBudget, recordCost } from '../engine/cost.js';
 import { paths } from '../config.js';
 import { hub } from '../ws/hub.js';
+import {
+  inferTestInputRequirements,
+  normalizeTestInputRequirements,
+  type BuilderTestInputRequirement,
+} from './buildertestinputs.js';
 
 export type EvolutionChange = {
   area: 'identity' | 'skill' | 'memory' | 'tool' | 'policy' | 'test' | 'workflow';
@@ -88,6 +93,8 @@ export type HarnessSnapshot = {
     input: string;
     expected: string;
   }>;
+  /** Per-Agent fixture contract. The runtime refuses tests until every required item is supplied. */
+  testInputRequirements: BuilderTestInputRequirement[];
   workflows?: Array<{
     name: string;
     description: string;
@@ -251,6 +258,16 @@ function harnessSnapshot(value: unknown, fallback: HarnessSnapshot): HarnessSnap
         };
       })
     : fallback.testIdeas;
+  const explicitRequirements = normalizeTestInputRequirements(obj.testInputRequirements);
+  const testInputRequirements = explicitRequirements.length > 0
+    ? explicitRequirements
+    : fallback.testInputRequirements?.length
+      ? fallback.testInputRequirements
+      : inferTestInputRequirements({
+          identityName: String(identity?.name ?? fallback.identity.name),
+          skills,
+          testIdeas,
+        });
   return deepRedactSecrets({
     identity: {
       name: String(identity?.name ?? fallback.identity.name).trim().slice(0, 120),
@@ -270,6 +287,7 @@ function harnessSnapshot(value: unknown, fallback: HarnessSnapshot): HarnessSnap
       forbidden: strings(policies?.forbidden, 16, 500),
     },
     testIdeas,
+    testInputRequirements,
   }) as HarnessSnapshot;
 }
 
@@ -323,6 +341,7 @@ function fallbackPayload(session: {
   const priorHarness = previous?.artifactSnapshot as HarnessSnapshot | null;
   const priorGraph = previous?.understanding as DecisionGraph | null;
   const isCorrection = triggerKind === 'correction' && previous !== null;
+  const isReflection = triggerKind === 'reflection' && previous !== null;
   const asksForTest = triggerKind === 'test' || /(?:測試|試跑|跑跑看)/.test(triggerSummary);
   const previousDecisions = priorGraph?.decisions ?? [];
   const graph: DecisionGraph = {
@@ -330,7 +349,10 @@ function fallbackPayload(session: {
     painPoints: priorGraph?.painPoints ?? [objective],
     facts: [
       ...(priorGraph?.facts ?? []),
-      { statement: triggerSummary.slice(0, 600), source: '本輪使用者對話' },
+      {
+        statement: triggerSummary.slice(0, 600),
+        source: isReflection ? '本輪完整對話反思' : '本輪使用者對話',
+      },
     ].slice(-20),
     hypotheses: priorGraph?.hypotheses ?? [],
     decisions: isCorrection
@@ -343,7 +365,7 @@ function fallbackPayload(session: {
       : [
           ...previousDecisions,
           {
-            topic: asksForTest ? '測試方向' : '本輪理解',
+            topic: isReflection ? '對話後反思' : asksForTest ? '測試方向' : '本輪理解',
             decision: triggerSummary.slice(0, 800),
             status: asksForTest ? 'confirmed' as const : 'provisional' as const,
           },
@@ -375,8 +397,13 @@ function fallbackPayload(session: {
       forbidden: ['未經 FDE 核准即啟用新能力'],
     },
     testIdeas: [],
+    testInputRequirements: inferTestInputRequirements({
+      identityName: name,
+      skills: [{ inputs: [String(brief.inputs ?? brief.sources ?? '依使用者當次提供的資訊')] }],
+      testIdeas: [],
+    }),
   };
-  const learningInstruction = `${isCorrection ? '目前有效規則' : '本輪補充'}：${triggerSummary.slice(0, 900)}`;
+  const learningInstruction = `${isCorrection ? '目前有效規則' : isReflection ? '對話反思後的 Shadow 規則' : '本輪補充'}：${triggerSummary.slice(0, 900)}`;
   const harness: HarnessSnapshot = {
     ...baseHarness,
     identity: { ...baseHarness.identity },
@@ -414,8 +441,15 @@ function fallbackPayload(session: {
           ...baseHarness.testIdeas,
         ].slice(0, 8)
       : [...baseHarness.testIdeas],
+    testInputRequirements: baseHarness.testInputRequirements?.length
+      ? [...baseHarness.testInputRequirements]
+      : inferTestInputRequirements({
+          identityName: baseHarness.identity.name,
+          skills: baseHarness.skills,
+          testIdeas: baseHarness.testIdeas,
+        }),
   };
-  const changeArea = isCorrection ? 'workflow' : asksForTest ? 'test' : previous ? 'memory' : 'identity';
+  const changeArea = isReflection ? 'skill' : isCorrection ? 'workflow' : asksForTest ? 'test' : previous ? 'memory' : 'identity';
   return {
     understanding: graph,
     changes: [{
@@ -423,6 +457,7 @@ function fallbackPayload(session: {
       action: previous ? 'updated' : 'added',
       summary: isCorrection
         ? '依使用者最新說法修正先前的工作方式'
+        : isReflection ? '依完整對話反思並更新 Shadow Skill 規則'
         : asksForTest ? '建立核心規則測試案例'
         : previous ? '把本輪新資訊加入員工草稿' : '建立第一版員工草稿',
       reason: triggerSummary.slice(0, 500),
@@ -437,7 +472,7 @@ function fallbackPayload(session: {
 async function catalogContext(userId: string) {
   const [agents, skills, accounts, mcp] = await Promise.all([
     prisma.agent.findMany({
-      where: { deletedAt: null, systemManaged: false, createdBy: userId },
+      where: { deletedAt: null, systemManaged: false },
       select: { name: true, description: true, status: true },
       take: 30,
     }),
@@ -543,7 +578,9 @@ export async function processBuilderEvolution(iterationId: string): Promise<void
         '這不是固定欄位表單。請建立決策圖，辨認痛點、事實、假設、已決定事項、反悔／矛盾與仍需探索的分支。',
         '能從已解析檔案或 realCatalog 得知的事實直接使用，不要把它列成要反問使用者的問題。',
         '若新資訊推翻舊決定，將舊決定標成 revised，並在 changes 清楚說明。不得偷偷保留互相衝突的做法。',
-        'Harness 是 shadow draft：可更新 identity、skills、memory、tools、policies、testIdeas，但絕不可聲稱已啟用或已取得權限。',
+        'triggerKind=reflection 時，必須檢查完整的使用者輸入、Agent 行為與使用者回饋：把可重複的必要欄位、輸出格式、判斷規則、例外處理與防止重犯的測試更新到 Shadow Skill。Agent 自己聲稱「已了解」不是事實；沒有使用者證據時只能列 hypothesis，不能提升為 confirmed rule。',
+        'Harness 是 shadow draft：可更新 identity、skills、memory、tools、policies、testIdeas、testInputRequirements，但絕不可聲稱已啟用或已取得權限。',
+        'testInputRequirements 必須依這位員工的真實工作資料定義；每項包含 key、label、description、kind(FILE|TEXT)、required、acceptedExtensions、minFiles、maxFiles。不要把選填資料誤標必填。',
         '工具只有 realCatalog 明確存在且健康時才能標 AVAILABLE；否則一律 NEEDS_FDE。',
         '對 End User 的 userSummary 不得出現 Harness、manifest、MCP、engine、JSON 等技術詞，只說這位員工這次學會或調整了什麼。',
         'FDE 摘要必須記錄新增、修改、移除與矛盾，便於日後審查。',
@@ -634,7 +671,7 @@ async function nextSequence(sessionId: string): Promise<{ sequence: number; prev
 
 export async function createBuilderEvolutionIteration(opts: {
   sessionId: string;
-  triggerKind: 'message' | 'file' | 'correction' | 'test';
+  triggerKind: 'message' | 'file' | 'correction' | 'test' | 'reflection';
   triggerSummary: string;
 }): Promise<IterationDto> {
   const safeSummary = String(deepRedactSecrets(opts.triggerSummary)).trim().slice(0, 2000);

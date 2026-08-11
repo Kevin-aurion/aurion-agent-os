@@ -19,11 +19,8 @@ const cursorConfig = path.join(os.homedir(), '.cursor', 'mcp.json');
 const claudeCodeConfig = path.join(os.homedir(), '.claude.json');
 const claudeCodeSettings = path.join(os.homedir(), '.claude', 'settings.json');
 const claudeCodeAiosToolRules = [
-  'mcp__aios__list_my_agents',
   'mcp__aios__prepare_agent_build_prompt',
   'mcp__aios__start_agent_build',
-  'mcp__aios__set_agent_build_name',
-  'mcp__aios__request_agent_rename',
   'mcp__aios__sync_agent_build_turn',
   'mcp__aios__sync_agent_build_artifact',
   'mcp__aios__upsert_agent_build_snapshot',

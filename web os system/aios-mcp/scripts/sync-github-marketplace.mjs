@@ -4,11 +4,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const defaultTarget = path.resolve(packageRoot, '../../..', 'aurion-aios-plugin-marketplace');
-const pluginName = 'aurion-aios-builder';
-const marketplaceName = 'aurion-aios';
-const markerName = '.aurion-aios-marketplace';
-const expectedMcpUrl = 'https://aurion-aios-mcp.lazyoffice.app/mcp';
+const defaultTarget = path.resolve(packageRoot, '../../..', 'lazyoffice-aios-plugin-marketplace');
+const pluginName = 'lazyoffice-aios-builder';
+const marketplaceName = 'lazyoffice-aios-plugin-marketplace';
+const marketplaceDisplayName = 'Lazyoffice AIOS';
+const markerName = '.lazyoffice-aios-marketplace';
+const expectedMcpUrl = 'https://aios-mcp.lazyoffice.app/mcp';
+const marketplaceRepository = process.env.AIOS_MARKETPLACE_REPOSITORY?.trim()
+  || 'inventra/lazyoffice-aios-plugin-marketplace';
 
 function argValue(name) {
   const index = process.argv.indexOf(name);
@@ -74,9 +77,33 @@ if (!mcpConfig.includes(expectedMcpUrl) || mcpConfig.includes('127.0.0.1')) {
   throw new Error('Refusing to publish a Plugin that does not exclusively use the hosted MCP.');
 }
 
+// Official Codex / ChatGPT Desktop marketplace catalog (same repo, same plugin).
+// Schema: top-level name + interface.displayName + plugins[{name,source,policy,category}].
+const gptMarketplace = {
+  name: marketplaceName,
+  interface: {
+    displayName: marketplaceDisplayName,
+  },
+  plugins: [
+    {
+      name: pluginName,
+      source: {
+        source: 'local',
+        path: `./plugins/${pluginName}`,
+      },
+      policy: {
+        installation: 'AVAILABLE',
+        authentication: 'ON_INSTALL',
+      },
+      category: 'Productivity',
+    },
+  ],
+};
+
 await mkdir(targetRoot, { recursive: true });
 await writeFile(markerPath, `${marketplaceName}\n`, 'utf8');
 await mkdir(path.join(targetRoot, '.claude-plugin'), { recursive: true });
+await mkdir(path.join(targetRoot, '.agents', 'plugins'), { recursive: true });
 await mkdir(path.join(targetRoot, 'plugins'), { recursive: true });
 
 const targetPlugin = path.join(targetRoot, 'plugins', pluginName);
@@ -92,20 +119,43 @@ await writeFile(
   'utf8',
 );
 await writeFile(
+  path.join(targetRoot, '.agents', 'plugins', 'marketplace.json'),
+  `${JSON.stringify(gptMarketplace, null, 2)}\n`,
+  'utf8',
+);
+await writeFile(
   path.join(targetRoot, 'README.md'),
-  `# Aurion AIOS Plugin Marketplace
+  `# Lazyoffice AIOS Plugin Marketplace
 
-Private Claude Plugin marketplace for Aurion AIOS customers.
+Shared Plugin marketplace for Lazyoffice AIOS customers.
 
-## Install
+**One private GitHub repository** (\`${marketplaceRepository}\`) supports **ChatGPT Desktop Plugins**, **Codex CLI**, and **Claude**. Claude reads \`.claude-plugin/marketplace.json\`; ChatGPT Desktop and Codex CLI read \`.agents/plugins/marketplace.json\`. Both catalogs install the same plugin: \`${pluginName}\`.
+
+## Install — ChatGPT Desktop Plugins / Codex CLI
+
+### Codex CLI
+
+\`\`\`bash
+codex plugin marketplace add ${marketplaceRepository}
+codex plugin add ${pluginName}@${marketplaceName}
+\`\`\`
+
+### ChatGPT Desktop Plugins
+
+1. Open **Plugins**.
+2. Import / add a marketplace from a **GitHub repository**.
+3. Use the same repository: \`${marketplaceRepository}\`.
+4. Install \`${pluginName}\` when prompted.
+
+## Install — Claude
 
 In Claude Cowork, open **Customize → Plugins → Add marketplace** and add:
 
-\`Kevin-aurion/aurion-aios-plugin-marketplace\`
+\`${marketplaceRepository}\`
 
 In Claude Code:
 
-\`/plugin marketplace add Kevin-aurion/aurion-aios-plugin-marketplace\`
+\`/plugin marketplace add ${marketplaceRepository}\`
 
 \`/plugin install ${pluginName}@${marketplaceName}\`
 
@@ -114,6 +164,13 @@ In Claude Code:
 Cowork users click **Update** on the marketplace. Claude Code users run:
 
 \`/plugin marketplace update ${marketplaceName}\`
+
+Codex CLI users re-add or update the marketplace, then reinstall/update the plugin as needed:
+
+\`\`\`bash
+codex plugin marketplace add ${marketplaceRepository}
+codex plugin add ${pluginName}@${marketplaceName}
+\`\`\`
 
 The Plugin connects only to ${expectedMcpUrl}. Installation does not grant AIOS access; every user must still authenticate with an enabled AIOS account through OAuth.
 
@@ -131,7 +188,7 @@ if (!(await exists(gitDir))) {
 }
 
 if (process.argv.includes('--commit') || process.argv.includes('--push')) {
-  await run('git', ['add', markerName, '.claude-plugin', 'plugins', 'README.md'], targetRoot);
+  await run('git', ['add', markerName, '.claude-plugin', '.agents', 'plugins', 'README.md'], targetRoot);
   const staged = await run('git', ['diff', '--cached', '--name-only'], targetRoot, { capture: true });
   if (staged) {
     await run('git', ['commit', '-m', `Release ${pluginName} v${pluginManifest.version}`], targetRoot);

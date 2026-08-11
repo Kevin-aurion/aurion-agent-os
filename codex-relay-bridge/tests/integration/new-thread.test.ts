@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  AURION_PROJECT,
+  LAZYOFFICE_PROJECT,
   createTestRelay,
   methodsOf,
   readJsonLinesAsync,
@@ -30,7 +30,7 @@ describe("new-thread", () => {
     const relay = createTestRelay({ fakeLog: logFile });
     try {
       const r1 = await relay.startTask({
-        project: AURION_PROJECT,
+        project: LAZYOFFICE_PROJECT,
         message: "hello from test",
         idempotency_key: "key-new-thread-1",
       });
@@ -62,7 +62,7 @@ describe("new-thread", () => {
       const threadStart = lines.find((l) => l.method === "thread/start");
       assert.ok(threadStart);
       const params = threadStart.params as { cwd?: string };
-      assert.equal(params.cwd, fs.realpathSync(AURION_PROJECT));
+      assert.equal(params.cwd, fs.realpathSync(LAZYOFFICE_PROJECT));
 
       // initialized has no id
       const initialized = lines.find((l) => l.method === "initialized");
@@ -72,7 +72,7 @@ describe("new-thread", () => {
       // Idempotent replay
       const beforeCount = lines.filter((l) => l.method === "thread/start").length;
       const r2 = await relay.startTask({
-        project: AURION_PROJECT,
+        project: LAZYOFFICE_PROJECT,
         message: "hello again",
         idempotency_key: "key-new-thread-1",
       });

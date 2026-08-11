@@ -1,4 +1,4 @@
-# AGENTS.md — Aurion AIOS 交接文件（給 Codex / 任何協同 AI）
+# AGENTS.md — Lazyoffice AIOS 交接文件（給 Codex / 任何協同 AI）
 
 > **這份是給「接手開發的 AI」看的權威現況文件**（Codex 讀 `AGENTS.md`，Claude 讀 `CLAUDE.md`；兩者內容以本檔為最新）。
 > 最後更新：2026-07-27。對應分支 `feat/agentic-os-p0-p1`；Agent Workbench Phase 1 目前在本機工作樹驗收中，尚未提交。
@@ -206,6 +206,7 @@ temporal server start-dev               # 耐久執行用（loopback；未進 co
 7. 未做：Browser Use 整合、本地 Whisper、多租戶/計費。（消費外部 MCP 的 gateway 已於本輪完成，見 `docs/adr/0010`。）
 8. **A2A（Agent 互通）預設停用**：僅 loopback、peer 註冊需 FDE(trainer)，尚未跨主機實測。見 `docs/adr/0012`。
 9. **eval 升級閘**：技能 promote 前須跑 EvalSuite 且無未解決 highRisk；跨模型 execute≠verify 於評測沿用。見 `docs/adr/0009`。
+10. **Phase 6 企業強化基礎已落地（單租戶邊界）**：service identity 輪替／environment binding、per-deployment rate limit／circuit breaker／DLQ+manual replay、Knowledge capability contract（Runtime 禁止直連 Qdrant）、備份／DR 演練 runbook 與 SLO alerts 已完成；**多租戶／per-tenant isolation 未實作**，**無跨企業計費**。Knowledge 的 live Qdrant 檢索與 Langflow production live 執行受環境阻擋時如實列 **BLOCKED**，不得假成功。見 `web os system/docs/langflow-backup-dr-runbook.md`。
 
 ---
 

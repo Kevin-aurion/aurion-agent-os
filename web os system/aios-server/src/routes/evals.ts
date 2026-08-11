@@ -2,7 +2,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireAuth, requireTrainer } from '../lib/guard.js';
-import { ok, sendError } from '../lib/http.js';
+import { ok, sendError, errors } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
 import {
   createSuite,
@@ -13,6 +13,7 @@ import {
   runSuite,
 } from '../lib/eval.js';
 import { promoteWithGate, rollbackWithGate } from '../lib/skillpromote.js';
+import { listSkillVersions, readPromoteGate } from '../lib/skillgovernance.js';
 
 const EngineEnum = z.enum(['CLAUDE_CODE', 'CODEX', 'GROK']);
 
@@ -53,6 +54,10 @@ const promoteBody = z.object({
 });
 
 const rollbackBody = z.object({
+  versionId: z.string().min(1),
+});
+
+const promoteGateQuery = z.object({
   versionId: z.string().min(1),
 });
 
@@ -212,6 +217,38 @@ export async function evalRoutes(app: FastifyInstance) {
         });
         return reply.send(ok({ skillId, versionId: body.versionId, rolledBack: true }));
       } catch (e) {
+        return sendError(reply, e);
+      }
+    },
+  );
+
+  // List skill versions (FDE read-only governance)
+  app.get(
+    '/api/skills/:skillId/versions',
+    { preHandler: requireTrainer },
+    async (req, reply) => {
+      try {
+        const { skillId } = req.params as { skillId: string };
+        return reply.send(ok(await listSkillVersions(skillId)));
+      } catch (e) {
+        return sendError(reply, e);
+      }
+    },
+  );
+
+  // Promote-gate dry-run (FDE read-only; zero DB writes)
+  app.get(
+    '/api/skills/:skillId/promote-gate',
+    { preHandler: requireTrainer },
+    async (req, reply) => {
+      try {
+        const { skillId } = req.params as { skillId: string };
+        const query = promoteGateQuery.parse(req.query);
+        return reply.send(ok(await readPromoteGate(skillId, query.versionId)));
+      } catch (e) {
+        if (e instanceof z.ZodError) {
+          return sendError(reply, errors.badRequest('Invalid query', e.issues));
+        }
         return sendError(reply, e);
       }
     },

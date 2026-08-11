@@ -195,18 +195,6 @@ export interface Preflight {
 
 export type ExternalBuilderSource = 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CHATGPT' | 'CURSOR' | 'OTHER';
 
-export interface BuilderAgentSummary {
-  id: string;
-  name: string;
-  description: string;
-  department: string;
-  status: string;
-  skillCount: number;
-  workflowCount: number;
-  updatedAt: string;
-  latestBuild: { id: string; status: string; updatedAt: string } | null;
-}
-
 export interface AgentBuildIteration {
   id: string;
   sequence: number;

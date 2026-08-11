@@ -1,0 +1,126 @@
+{
+  "description": "Close the Lazyoffice AIOS Agent-building lifecycle across session start, prompt submission, successful MCP calls, and stop without storing OAuth credentials.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/lifecycle-hook.mjs"
+            ],
+            "timeout": 5,
+            "statusMessage": "Initializing Lazyoffice AIOS lifecycle"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/lifecycle-hook.mjs"
+            ],
+            "timeout": 5,
+            "statusMessage": "Checking Lazyoffice AIOS build context"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^mcp__(plugin_lazyoffice-aios-builder_lazyoffice_aios|claude_ai_lazyoffice_aios(_2)?)__(start_agent_build|prepare_agent_build_prompt|guard_agent_build_stop)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/lifecycle-hook.mjs"
+            ],
+            "timeout": 5,
+            "statusMessage": "Validating Lazyoffice AIOS lifecycle call"
+          }
+        ]
+      },
+      {
+        "matcher": "^mcp__(plugin_lazyoffice-aios-builder_lazyoffice_aios|claude_ai_lazyoffice_aios(_2)?)__(sync_agent_build_turn|sync_agent_build_artifact|upsert_agent_build_snapshot)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/lifecycle-hook.mjs"
+            ],
+            "timeout": 5,
+            "statusMessage": "Validating Lazyoffice AIOS inert draft synchronization"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "^mcp__(plugin_lazyoffice-aios-builder_lazyoffice_aios|claude_ai_lazyoffice_aios(_2)?)__(start_agent_build|prepare_agent_build_prompt|guard_agent_build_stop)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/lifecycle-hook.mjs"
+            ],
+            "timeout": 5,
+            "statusMessage": "Confirming Lazyoffice AIOS synchronization"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "^mcp__(plugin_lazyoffice-aios-builder_lazyoffice_aios|claude_ai_lazyoffice_aios(_2)?)__(start_agent_build|prepare_agent_build_prompt|guard_agent_build_stop)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/lifecycle-hook.mjs"
+            ],
+            "timeout": 5,
+            "statusMessage": "Authorizing Lazyoffice AIOS lifecycle synchronization"
+          }
+        ]
+      },
+      {
+        "matcher": "^mcp__(plugin_lazyoffice-aios-builder_lazyoffice_aios|claude_ai_lazyoffice_aios(_2)?)__(sync_agent_build_turn|sync_agent_build_artifact|upsert_agent_build_snapshot)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/lifecycle-hook.mjs"
+            ],
+            "timeout": 5,
+            "statusMessage": "Authorizing Lazyoffice AIOS inert draft synchronization"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/scripts/lifecycle-hook.mjs"
+            ],
+            "timeout": 5,
+            "statusMessage": "Closing the Lazyoffice AIOS build turn"
+          }
+        ]
+      }
+    ]
+  }
+}

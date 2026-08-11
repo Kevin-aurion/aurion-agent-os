@@ -22,11 +22,11 @@ export const config = {
   httpPort: Number(opt('AIOS_HTTP_PORT', '8700')),
   webPort: Number(opt('AIOS_WEB_PORT', '3100')),
   webOrigin: opt('AIOS_WEB_ORIGIN', 'http://localhost:3100'),
-  publicOrigin: opt('AIOS_PUBLIC_ORIGIN', 'https://aurion-aios.lazyoffice.app').replace(/\/+$/, ''),
+  publicOrigin: opt('AIOS_PUBLIC_ORIGIN', 'https://aios-new.lazyoffice.app').replace(/\/+$/, ''),
   databaseUrl: req('DATABASE_URL'),
   redisUrl: req('REDIS_URL'),
   dataDir: opt('AIOS_DATA_DIR', path.resolve(process.cwd(), '../../aios-data')),
-  // Human-browsable agent workspace at the aurion top level (sibling of the
+  // Human-browsable agent workspace at the lazyoffice top level (sibling of the
   // "mac os system" / "web os system" folders). Agents are materialized under
   // MyAgent/<department>/<slug>/.
   myAgentDir: opt('AIOS_MYAGENT_DIR', path.resolve(process.cwd(), '..', '..', 'MyAgent')),
@@ -95,6 +95,20 @@ export const config = {
     url: opt('DOCPARSE_URL', 'http://127.0.0.1:5001'),
   },
 
+  // Read-only AI knowledge pilot. The vault remains the source of truth;
+  // Langflow receives only an already-grounded, redacted answer envelope.
+  knowledgePilot: {
+    vaultDir: opt(
+      'AIOS_KNOWLEDGE_VAULT_ROOT',
+      path.resolve(process.cwd(), '..', '..', '..', 'AI知識庫'),
+    ),
+    pythonPath: opt('AIOS_KNOWLEDGE_PYTHON_PATH', '/usr/bin/python3'),
+    flowId: opt(
+      'AIOS_KNOWLEDGE_LANGFLOW_ID',
+      '4ec97062-f088-45b6-a304-a4fe1d1c9f26',
+    ),
+  },
+
   // OpenAI (Whisper voice transcription for skill-training UI). Optional —
   // missing key or VOICE_ENABLED=false returns a clear NOT_CONFIGURED error.
   openaiApiKey: opt('OPENAI_API_KEY'),
@@ -104,10 +118,10 @@ export const config = {
   },
 
   remoteMcp: {
-    issuer: opt('AIOS_MCP_OAUTH_ISSUER', 'https://aurion-aios-mcp.lazyoffice.app').replace(/\/+$/, ''),
+    issuer: opt('AIOS_MCP_OAUTH_ISSUER', 'https://aios-mcp.lazyoffice.app').replace(/\/+$/, ''),
     resourceUrl: opt(
       'AIOS_MCP_PUBLIC_URL',
-      'https://aurion-aios-mcp.lazyoffice.app/mcp',
+      'https://aios-mcp.lazyoffice.app/mcp',
     ).replace(/\/+$/, ''),
   },
 
@@ -138,6 +152,7 @@ export const paths = {
   runs: path.join(config.dataDir, 'runs'),
   // Durable DeviceArtifact binaries (screenshots etc.); never via WebSocket.
   deviceArtifacts: path.join(config.dataDir, 'device-artifacts'),
+  knowledgePilotRuns: path.join(config.dataDir, 'runs', 'knowledge-pilot'),
   builtinSkills: path.resolve(process.cwd(), 'builtin-skills'),
 };
 

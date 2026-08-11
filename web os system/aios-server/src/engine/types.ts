@@ -186,6 +186,6 @@ export interface RunAgentOptions {
    * and applies a hard-coded least-privilege restriction override.
    */
   builderTestSessionId?: string;
-  /** Internal cooperative cancellation; CLI adapters terminate their full process group. */
+  /** Optional caller cancellation propagated into every spawned engine CLI. */
   signal?: AbortSignal;
 }

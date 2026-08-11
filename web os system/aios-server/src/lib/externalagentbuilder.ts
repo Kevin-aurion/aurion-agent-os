@@ -10,7 +10,6 @@ import { Prisma, type AgentBuildIteration, type AgentBuildSessionStatus, type Us
 import { prisma } from './db.js';
 import { errors } from './http.js';
 import { audit } from './audit.js';
-import { createProposal } from './changeproposal.js';
 import { sha256 } from './crypto.js';
 import { deepRedactSecrets } from '../memory/deepredact.js';
 import { hub } from '../ws/hub.js';
@@ -33,6 +32,11 @@ import {
   type HarnessSnapshot,
   type IterationDto,
 } from './agentbuilderevolution.js';
+import {
+  inferTestInputRequirements,
+  normalizeTestInputRequirements,
+  type BuilderTestInputRequirement,
+} from './buildertestinputs.js';
 
 export type ExternalBuilderSource = 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CHATGPT' | 'CURSOR' | 'OTHER';
 
@@ -75,6 +79,7 @@ export type ExternalArtifactInput = {
     forbidden?: string[];
   };
   tests?: Array<{ name: string; input: string; expected: string }>;
+  testInputRequirements?: Array<Partial<BuilderTestInputRequirement> & Pick<BuilderTestInputRequirement, 'key' | 'label' | 'kind' | 'required'>>;
   workflows?: Array<{
     name: string;
     description?: string;
@@ -102,6 +107,8 @@ export type ExternalStopGuardResult = {
   finalMessageSynced?: boolean;
   artifactFresh?: boolean;
   backgroundBuildQueued?: boolean;
+  /** A completed user/assistant pair queued a non-effective Shadow Skill reflection. */
+  reflectionQueued?: boolean;
   created?: boolean;
   systemMessage?: string;
 };
@@ -114,20 +121,6 @@ export type ExternalPromptHookResult = {
   userMessageSynced?: boolean;
   backgroundBuildQueued?: boolean;
   additionalContext?: string;
-  selectionRequired?: boolean;
-  candidates?: Array<{ id: string; name: string; status: string }>;
-};
-
-export type BuilderAgentSummary = {
-  id: string;
-  name: string;
-  description: string;
-  department: string;
-  status: string;
-  skillCount: number;
-  workflowCount: number;
-  updatedAt: string;
-  latestBuild: { id: string; status: AgentBuildSessionStatus; updatedAt: string } | null;
 };
 
 const MAX_TRANSCRIPT_ENTRIES = 1_000;
@@ -136,26 +129,10 @@ const MAX_WORKFLOWS = 12;
 
 const AGENT_BUILD_ACTION_RE = /(?:建立|新增|打造|設計|規劃|訓練|教會|更新|調整|改造|優化|做(?:一位|一個)?|想要|需要|build|create|train|teach|update|design|want|need)/i;
 const AGENT_BUILD_OBJECT_RE = /(?:AI\s*(?:員工|助理|代理)|agent|bot|機器人|技能|skill)/i;
-const NEGATED_BUILD_RE = /(?:不要|不用|無需|別|停止|取消).{0,16}(?:建立|新增|打造|訓練|更新|調整|改造|優化|build|create|train|update)/i;
-const EXPLICIT_NEW_RE = /(?:建立|新增|打造|create|build).{0,18}(?:全新|新的?|new)?.{0,18}(?:AI\s*(?:員工|助理|代理)|agent|bot|機器人)/i;
-const CONTINUATION_RE = /(?:接續|繼續|續(?:著)?|訓練|教會|更新|調整|改造|優化|continue|resume|train|teach|update|improve)/i;
-const INTERNAL_BUILDER_TEST_MARKERS = [
-  '【Agent Builder 試跑】',
-  '[This step\'s task]',
-  '[Verifier feedback (cross-model review)',
-  '"builderTest":true',
-];
-
-/** Defense in depth: a CLI run created by AIOS must never re-enter Builder hooks. */
-export function isInternalBuilderTestPrompt(prompt: string): boolean {
-  const normalized = String(prompt ?? '');
-  return INTERNAL_BUILDER_TEST_MARKERS.some((marker) => normalized.includes(marker));
-}
 
 /** Conservative hook activation: unrelated Claude Code chats must remain no-op. */
 export function isExplicitAgentBuildPrompt(prompt: string): boolean {
   const normalized = cleanString(prompt, 12_000);
-  if (isInternalBuilderTestPrompt(normalized) || NEGATED_BUILD_RE.test(normalized)) return false;
   return AGENT_BUILD_ACTION_RE.test(normalized) && AGENT_BUILD_OBJECT_RE.test(normalized);
 }
 
@@ -306,6 +283,12 @@ function normalizeHarness(
     '寄信、雲端寫入、電腦操作、Shell、付款、刪除與其他不可逆動作',
     '新增或修改 Agent、Skill、Workflow、工具連線與權限後的正式生效',
   ]);
+  const testIdeas = (input.tests ?? []).slice(0, 20).map((test, index) => ({
+    name: cleanString(test.name, 180) || `測試 ${index + 1}`,
+    input: cleanString(test.input, 5_000),
+    expected: cleanString(test.expected, 5_000),
+  })).filter((test) => test.input && test.expected);
+  const explicitTestInputs = normalizeTestInputRequirements(input.testInputRequirements);
 
   return deepRedactSecrets({
     identity: {
@@ -328,11 +311,10 @@ function normalizeHarness(
       requiresApproval: [...requiredApprovals],
       forbidden: cleanStrings(input.policies?.forbidden, 30, 800),
     },
-    testIdeas: (input.tests ?? []).slice(0, 20).map((test, index) => ({
-      name: cleanString(test.name, 180) || `測試 ${index + 1}`,
-      input: cleanString(test.input, 5_000),
-      expected: cleanString(test.expected, 5_000),
-    })).filter((test) => test.input && test.expected),
+    testIdeas,
+    testInputRequirements: explicitTestInputs.length > 0
+      ? explicitTestInputs
+      : inferTestInputRequirements({ identityName: name, skills, testIdeas }),
     workflows,
     provenance: {
       source,
@@ -465,57 +447,7 @@ function hookContext(sessionId: string, status: AgentBuildSessionStatus): string
     '請像資深顧問一樣自然理解需求、一次追問一個最有價值的問題；不要使用固定問卷，也不要要求使用者提醒你保存。',
     '對話會由 Hook 自動同步並由 AIOS 在背景建立 Agent／Skill 草稿。草稿不代表已啟用；送審、測試與正式生效仍遵守 FDE 閘門。',
     '如果使用者提供檔案，請使用 build-aios-agent Skill 的檔案同步流程；如果使用者明確要求送審，再使用該 Skill 的送審工具。',
-    '若尚未由使用者親自指定員工名稱，先自然詢問名稱；取得名稱後呼叫 set_agent_build_name，再繼續訪談。',
   ].join('\n');
-}
-
-function selectionContext(candidates: BuilderAgentSummary[]): string {
-  return [
-    '使用者的語意像是在接續訓練既有員工，但目前無法安全判定是哪一位；AIOS 尚未建立新草稿。',
-    '請先詢問：「這一次想訓練哪一位員工？」並列出下列候選；同時提供「都不是，建立新員工」。',
-    ...candidates.slice(0, 12).map((agent, index) => `${index + 1}. ${agent.name}（${agent.status}，ID：${agent.id}）`),
-    '使用者選定後，呼叫 start_agent_build 並傳 targetAgentId 與既有名稱；若選「都不是」，先詢問新員工名稱，再建立。',
-  ].join('\n');
-}
-
-export async function listOwnedBuilderAgents(userId: string): Promise<BuilderAgentSummary[]> {
-  const agents = await prisma.agent.findMany({
-    where: { createdBy: userId, deletedAt: null, systemManaged: false },
-    orderBy: { updatedAt: 'desc' },
-    take: 100,
-    include: {
-      _count: { select: { skills: true, workflows: { where: { deletedAt: null } } } },
-    },
-  });
-  const ids = agents.map((agent) => agent.id);
-  const builds = ids.length
-    ? await prisma.agentBuildSession.findMany({
-        where: { userId, OR: [{ builtAgentId: { in: ids } }, { targetAgentId: { in: ids } }] },
-        orderBy: { updatedAt: 'desc' },
-        select: { id: true, status: true, builtAgentId: true, targetAgentId: true, updatedAt: true },
-      })
-    : [];
-  const latestByAgent = new Map<string, typeof builds[number]>();
-  for (const build of builds) {
-    const agentId = build.builtAgentId ?? build.targetAgentId;
-    if (agentId && !latestByAgent.has(agentId)) latestByAgent.set(agentId, build);
-  }
-  return agents.map((agent) => {
-    const latest = latestByAgent.get(agent.id);
-    return {
-      id: agent.id,
-      name: agent.name,
-      description: agent.description,
-      department: agent.department,
-      status: agent.status,
-      skillCount: agent._count.skills,
-      workflowCount: agent._count.workflows,
-      updatedAt: agent.updatedAt.toISOString(),
-      latestBuild: latest
-        ? { id: latest.id, status: latest.status, updatedAt: latest.updatedAt.toISOString() }
-        : null,
-    };
-  });
 }
 
 /** Claude Code UserPromptSubmit hook: start/resume and persist the user turn. */
@@ -527,52 +459,16 @@ export async function prepareExternalBuilderPrompt(opts: {
 }): Promise<ExternalPromptHookResult> {
   const conversationId = cleanString(opts.externalConversationId, 160);
   const prompt = cleanString(opts.prompt, 12_000);
-  if (!conversationId || !prompt || isInternalBuilderTestPrompt(prompt)) return { matched: false };
+  if (!conversationId || !prompt) return { matched: false };
 
   let row = await findExternalSession(opts.userId, conversationId);
   if (!row) {
     if (!isExplicitAgentBuildPrompt(prompt)) return { matched: false };
-    const inferred = inferFromPrompt(prompt).brief;
-    const ownedAgents = await listOwnedBuilderAgents(opts.userId);
-    const explicitNew = inferred.requestedStrategy === 'create' || EXPLICIT_NEW_RE.test(prompt);
-    if (!explicitNew && CONTINUATION_RE.test(prompt) && ownedAgents.length) {
-      const matches = ownedAgents.filter((agent) => prompt.includes(agent.name));
-      if (matches.length !== 1) {
-        const candidates = matches.length > 1 ? matches : ownedAgents;
-        return {
-          matched: true,
-          created: false,
-          selectionRequired: true,
-          candidates: candidates.slice(0, 12).map(({ id, name, status }) => ({ id, name, status })),
-          backgroundBuildQueued: false,
-          additionalContext: selectionContext(candidates),
-        };
-      }
-      const selected = matches[0]!;
-      const created = await createExternalBuilderSession({
-        userId: opts.userId,
-        source: opts.source,
-        initialRequest: prompt,
-        externalConversationId: conversationId,
-        requestedAgentName: selected.name,
-        targetAgentId: selected.id,
-      });
-      return {
-        matched: true,
-        sessionId: created.session.id,
-        status: created.session.status,
-        created: true,
-        userMessageSynced: true,
-        backgroundBuildQueued: Boolean(created.session.latestIteration),
-        additionalContext: hookContext(created.session.id, created.session.status),
-      };
-    }
     const created = await createExternalBuilderSession({
       userId: opts.userId,
       source: opts.source,
       initialRequest: prompt,
       externalConversationId: conversationId,
-      requestedAgentName: inferred.requestedAgentName,
     });
     return {
       matched: true,
@@ -673,11 +569,11 @@ export async function guardExternalBuilderStop(opts: {
   stopHookActive: boolean;
 }): Promise<ExternalStopGuardResult> {
   const conversationId = cleanString(opts.externalConversationId, 160);
-  const userMessage = cleanString(opts.lastUserMessage, 24_000);
-  if (!conversationId || isInternalBuilderTestPrompt(userMessage)) return { matched: false };
+  if (!conversationId) return { matched: false };
 
   let row = await findExternalSession(opts.userId, conversationId);
   let created = false;
+  const userMessage = cleanString(opts.lastUserMessage, 24_000);
   if (!row && userMessage && isExplicitAgentBuildPrompt(userMessage)) {
     const result = await createExternalBuilderSession({
       userId: opts.userId,
@@ -716,7 +612,11 @@ export async function guardExternalBuilderStop(opts: {
   let newlySyncedUser = false;
   let transcriptChanged = false;
   if (userMessage) {
-    const duplicate = transcript.at(-1)?.role === 'user' && transcript.at(-1)?.content === userMessage;
+    const duplicate = transcript.some((entry) =>
+      entry.role === 'user' &&
+      entry.source === opts.source &&
+      (entry.externalEventId === userEventId || entry.content === userMessage),
+    );
     if (duplicate) {
       userMessageSynced = true;
     } else if (transcript.length < MAX_TRANSCRIPT_ENTRIES) {
@@ -733,7 +633,11 @@ export async function guardExternalBuilderStop(opts: {
     }
   }
   if (message) {
-    const duplicate = transcript.at(-1)?.role === 'assistant' && transcript.at(-1)?.content === message;
+    const duplicate = transcript.some((entry) =>
+      entry.role === 'assistant' &&
+      entry.source === opts.source &&
+      (entry.externalEventId === eventId || entry.content === message),
+    );
     if (duplicate) {
       finalMessageSynced = true;
     } else if (transcript.length < MAX_TRANSCRIPT_ENTRIES) {
@@ -766,15 +670,35 @@ export async function guardExternalBuilderStop(opts: {
     });
   }
 
-  const iteration = newlySyncedUser && !created
+  // Prompt Hook normally queued an iteration before Claude answered. Queue one
+  // more iteration after a complete pair so the compiler can reflect on the
+  // actual behaviour, the user's correction and Claude's response together.
+  // Duplicate Stop calls do not change the transcript, so this is idempotent
+  // without trusting a client-provided completion flag.
+  const completedPair = transcriptChanged && Boolean(message);
+  const reflectionSummary = completedPair
+    ? [
+        '對話結束反思（只更新 Shadow Draft，不得直接生效）',
+        userMessage ? `使用者回饋／要求：${userMessage}` : '',
+        `本輪回覆：${message}`,
+        '請找出可重複使用的 Skill 指令、必要輸出欄位、規則、例外與測試；未被使用者確認的 Agent 自述只能列為假設。',
+      ].filter(Boolean).join('\n')
+    : userMessage;
+  const iteration = completedPair
     ? await createBuilderEvolutionIteration({
         sessionId: row.id,
-        triggerKind: /(?:反悔|改成|更改|推翻|取消|修正|不是.{0,12}(?:而是|要))/.test(userMessage)
-          ? 'correction'
-          : 'message',
-        triggerSummary: userMessage,
+        triggerKind: 'reflection',
+        triggerSummary: reflectionSummary,
       }).catch(() => null)
-    : null;
+    : newlySyncedUser && !created
+      ? await createBuilderEvolutionIteration({
+          sessionId: row.id,
+          triggerKind: /(?:反悔|改成|更改|推翻|取消|修正|不是.{0,12}(?:而是|要))/.test(userMessage)
+            ? 'correction'
+            : 'message',
+          triggerSummary: userMessage,
+        }).catch(() => null)
+      : null;
 
   const latestUserAt = transcript
     .filter((entry) => entry.role === 'user')
@@ -799,6 +723,7 @@ export async function guardExternalBuilderStop(opts: {
     finalMessageSynced,
     artifactFresh,
     backgroundBuildQueued: created || Boolean(iteration),
+    reflectionQueued: completedPair && Boolean(iteration),
     systemMessage: transcriptChanged
       ? 'AIOS 已自動保存本輪對話；Agent／Skill 草稿會在背景更新，不需要額外提醒或等待。'
       : undefined,
@@ -812,7 +737,6 @@ export async function createExternalBuilderSession(opts: {
   externalConversationId?: string;
   externalConversationTitle?: string;
   requestedAgentName?: string;
-  targetAgentId?: string;
 }): Promise<{ session: SessionDto; deduplicated: boolean }> {
   const initialRequest = cleanString(opts.initialRequest, 12_000);
   if (!initialRequest) throw errors.badRequest('initialRequest is required');
@@ -830,24 +754,11 @@ export async function createExternalBuilderSession(opts: {
   });
   if (existing) return { session: toSessionDto(existing), deduplicated: true };
 
-  let target: { id: string; name: string } | null = null;
-  if (opts.targetAgentId) {
-    target = await prisma.agent.findFirst({
-      where: {
-        id: opts.targetAgentId,
-        createdBy: opts.userId,
-        deletedAt: null,
-        systemManaged: false,
-      },
-      select: { id: true, name: true },
-    });
-    if (!target) throw errors.notFound('Target agent not found');
-  }
   const inference = inferFromPrompt(initialRequest);
   const brief = deepRedactSecrets({
     ...inference.brief,
-    requestedAgentName: cleanString(opts.requestedAgentName, 120) || target?.name || inference.brief.requestedAgentName,
-    requestedStrategy: target ? 'reuse' : 'create',
+    requestedAgentName: cleanString(opts.requestedAgentName, 120) || inference.brief.requestedAgentName,
+    requestedStrategy: 'create',
     externalSource: opts.source,
     externalConversationId: conversationId,
     externalConversationTitle: cleanString(opts.externalConversationTitle, 240) || undefined,
@@ -869,8 +780,6 @@ export async function createExternalBuilderSession(opts: {
       transcript: transcript as Prisma.InputJsonValue,
       brief: brief as Prisma.InputJsonValue,
       progress: buildProgress(inference.answered, null) as Prisma.InputJsonValue,
-      targetAgentId: target?.id ?? null,
-      strategy: target ? 'reuse' : 'create',
     },
   });
   await audit(opts.userId, 'agent_builder.external_session_created', 'AgentBuildSession', id, {
@@ -888,99 +797,6 @@ export async function createExternalBuilderSession(opts: {
     session.latestIteration = iteration;
   }
   return { session, deduplicated: false };
-}
-
-export async function setExternalBuilderName(opts: {
-  sessionId: string;
-  userId: string;
-  role: UserRole | string;
-  name: string;
-}): Promise<SessionDto> {
-  const row = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
-  if (row.userId !== opts.userId) throw errors.notFound('Session not found');
-  if (!['DISCOVERY', 'PLAN_READY'].includes(row.status)) {
-    throw errors.conflict(`Cannot rename a build from status=${row.status}`);
-  }
-  const name = cleanString(opts.name, 120);
-  if (name.length < 2) throw errors.badRequest('Agent name must contain at least 2 characters');
-  const brief = { ...asBrief(row.brief), requestedAgentName: name } as Brief;
-  const plan = asObject(row.plan);
-  const latest = await prisma.agentBuildIteration.findFirst({
-    where: { sessionId: row.id, status: 'READY' },
-    orderBy: { sequence: 'desc' },
-  });
-  await prisma.$transaction(async (tx) => {
-    await tx.agentBuildSession.update({
-      where: { id: row.id },
-      data: {
-        brief: deepRedactSecrets(brief) as Prisma.InputJsonValue,
-        ...(plan
-          ? {
-              plan: deepRedactSecrets({
-                ...plan,
-                proposedAgentName: name,
-                summary: typeof plan.summary === 'string'
-                  ? plan.summary.replace(/建立「[^」]+」/, `建立「${name}」`)
-                  : plan.summary,
-              }) as Prisma.InputJsonValue,
-            }
-          : {}),
-      },
-    });
-    if (latest?.artifactSnapshot) {
-      const harness = asObject(latest.artifactSnapshot) ?? {};
-      await tx.agentBuildIteration.update({
-        where: { id: latest.id },
-        data: {
-          artifactSnapshot: deepRedactSecrets({
-            ...harness,
-            identity: { ...(asObject(harness.identity) ?? {}), name },
-          }) as Prisma.InputJsonValue,
-        },
-      });
-    }
-  });
-  await audit(opts.userId, 'agent_builder.name_set', 'AgentBuildSession', row.id, { name });
-  return hydratedSession(row.id);
-}
-
-export async function requestOwnedAgentRename(opts: {
-  agentId: string;
-  userId: string;
-  name: string;
-}) {
-  const name = cleanString(opts.name, 120);
-  if (name.length < 2) throw errors.badRequest('Agent name must contain at least 2 characters');
-  const agent = await prisma.agent.findFirst({
-    where: { id: opts.agentId, createdBy: opts.userId, deletedAt: null, systemManaged: false },
-    select: { id: true, name: true },
-  });
-  if (!agent) throw errors.notFound('Agent not found');
-  if (agent.name === name) throw errors.conflict('Agent already has this name');
-  const pending = await prisma.changeProposal.findMany({
-    where: { agentId: agent.id, targetId: agent.id, targetType: 'AGENT', status: 'PENDING' },
-  });
-  const existing = pending.find((proposal) => {
-    const change = asObject(proposal.proposedChange);
-    return change?.action === 'rename' && change?.name === name;
-  });
-  if (existing) return { proposal: existing, deduplicated: true };
-  const proposal = await createProposal({
-    agentId: agent.id,
-    source: 'OPERATOR',
-    proposedBy: opts.userId,
-    targetType: 'AGENT',
-    targetId: agent.id,
-    proposedChange: { action: 'rename', name },
-    severity: 'low',
-    confidence: 1,
-  });
-  await audit(opts.userId, 'agent.rename_requested', 'ChangeProposal', proposal.id, {
-    agentId: agent.id,
-    oldName: agent.name,
-    newName: name,
-  });
-  return { proposal, deduplicated: false };
 }
 
 export async function syncExternalBuilderTurn(opts: {
@@ -1030,15 +846,27 @@ export async function syncExternalBuilderTurn(opts: {
     },
   });
 
+  const hasUserTurn = nextTurns.some((turn) => turn.role === 'user');
+  const hasAssistantTurn = nextTurns.some((turn) => turn.role === 'assistant');
+  const completedPair = hasUserTurn && hasAssistantTurn;
   const triggerSummary = cleanString(
-    opts.summary ?? (userText || nextTurns.at(-1)?.content),
+    opts.summary ?? (completedPair
+      ? [
+          '對話結束反思（只更新 Shadow Draft，不得直接生效）',
+          `使用者回饋／要求：${userText}`,
+          `本輪回覆：${lastAssistant ?? ''}`,
+          '請找出可重複使用的 Skill 指令、必要輸出欄位、規則、例外與測試；未被使用者確認的 Agent 自述只能列為假設。',
+        ].join('\n')
+      : (userText || nextTurns.at(-1)?.content)),
     2_000,
   );
   const iteration = await createBuilderEvolutionIteration({
     sessionId: row.id,
-    triggerKind: /(?:反悔|改成|更改|推翻|取消|修正|不是.{0,12}(?:而是|要))/.test(userText)
-      ? 'correction'
-      : 'message',
+    triggerKind: completedPair
+      ? 'reflection'
+      : /(?:反悔|改成|更改|推翻|取消|修正|不是.{0,12}(?:而是|要))/.test(userText)
+        ? 'correction'
+        : 'message',
     triggerSummary,
   }).catch(() => null);
   await audit(opts.userId, 'agent_builder.external_turn_synced', 'AgentBuildSession', row.id, {
@@ -1265,7 +1093,7 @@ export async function submitExternalBuilderForReview(opts: {
     targetAgentId = opts.targetAgentId ?? row.builtAgentId ?? row.targetAgentId;
     if (!targetAgentId) throw errors.badRequest('targetAgentId is required for reuse strategy');
     const target = await prisma.agent.findFirst({
-      where: { id: targetAgentId, createdBy: row.userId, deletedAt: null, systemManaged: false },
+      where: { id: targetAgentId, deletedAt: null, systemManaged: false },
       select: { id: true },
     });
     if (!target) throw errors.notFound('Target agent not found');

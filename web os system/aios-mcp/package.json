@@ -15,13 +15,10 @@
     "start": "tsx src/index.ts",
     "build": "tsup src/index.ts --format esm --target node22 --clean",
     "typecheck": "tsc --noEmit",
-    "test:stdio": "node .scratch/tests/stdio-e2e.mjs",
     "provision:local-user": "cd ../aios-server && tsx src/scripts/provision-agent-builder-mcp.ts",
     "install:local-clients": "node scripts/install-local-clients.mjs",
     "install:remote-host": "node scripts/install-remote-host.mjs",
-    "package:client": "node scripts/package-client-release.mjs",
-    "marketplace:sync": "node scripts/sync-github-marketplace.mjs",
-    "marketplace:publish": "node scripts/sync-github-marketplace.mjs --commit --push"
+    "package:client": "node scripts/package-client-release.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

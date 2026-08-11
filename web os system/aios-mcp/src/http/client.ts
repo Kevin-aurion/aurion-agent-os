@@ -47,17 +47,13 @@ export class HttpClient {
     return this.request<T>('POST', path, options);
   }
 
-  patch<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    return this.request<T>('PATCH', path, options);
-  }
-
   /** Multipart upload used by Agent Builder source files. Never accepts a host path. */
   postForm<T>(path: string, form: FormData): Promise<T> {
     return this.requestForm<T>(path, form);
   }
 
   private async request<T>(
-    method: 'GET' | 'POST' | 'PATCH',
+    method: 'GET' | 'POST',
     path: string,
     options: RequestOptions,
     retried = false,

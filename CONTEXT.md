@@ -13,6 +13,13 @@
 | **技能工廠** | 產出 Skill 的單一介面，三個入口：①打字/語音描述 ②上傳現成 Skill ③錄製操作。 | 待建（前端）＋ `lib/skilltraining.ts` |
 | **變更提案** | 對 Agent 之 Skill／限制／身分卡的擬議變更，須 FDE 核准才生效。來源：操作者提出、或系統偵測到越矩行為。 | 待建（`Lesson` 目前為死 schema，候選承載者） |
 | **越矩行為** | Agent 做出超出其身分卡／限制授權範圍的行為，應產生變更提案並通知 FDE。 | 待建 |
+| **AIOS Client** | 終端使用者操作 AI 員工的正式產品介面；採乾淨室方式吸收 Cherry Studio 的公開互動邏輯，但不複製其程式碼、資產或產品身分。 | `aios-web` 的 `/work` 與後續 Workbench V2 |
+| **Agent Runtime** | 負責維持一次 Agent Session、協調工作步驟與暫停／續跑的執行環境；它不擁有 Skill、權限或核准的最終真相。 | 現有 Native Runner；未來可選 Langflow Runtime Adapter |
+| **Model Engine** | 實際執行推理或跨模型驗證的模型 CLI；必須遵守執行模型與驗證模型分離。 | `Engine`：`CLAUDE_CODE`／`CODEX`／`GROK` |
+| **Runtime Adapter** | AIOS 將核准後的工作交給可替換 Agent Runtime 的受治理轉接邊界。 | 待建：`NATIVE`／`LANGFLOW` |
+| **Flow Artifact** | 由已核准 Skill Version 編譯出的不可變執行產物；只供 Runtime 執行，不是 Skill 的唯一真實來源。 | 待建 |
+| **Capability Gateway** | 所有正式 Tool／MCP 呼叫必經的 AIOS 權限、核准、預算與稽核邊界。 | 現有 MCP Registry／Broker 的產品化名稱 |
+| **FDE Authoring Lab** | 只有 FDE 可使用的視覺編排與 Sandbox 測試環境；不得持有正式憑證或直接發布 Production 變更。 | 未來 Langflow 後台 |
 
 ## 治理鐵律（既有，不可弱化）
 

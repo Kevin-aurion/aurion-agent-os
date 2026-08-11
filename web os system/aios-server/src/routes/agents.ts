@@ -8,7 +8,6 @@ import { audit } from '../lib/audit.js';
 import { hub } from '../ws/hub.js';
 import { slugify } from '../lib/slug.js';
 import { buildAgentSkillCatalog } from '../lib/skillmanifest.js';
-import { isFdeClaims, visibleAgentWhere } from '../lib/agentaccess.js';
 
 const EngineEnum = z.enum(['CLAUDE_CODE', 'CODEX', 'GROK']);
 
@@ -67,19 +66,12 @@ export async function agentRoutes(app: FastifyInstance) {
   // List non-deleted agents with counts.
   app.get('/api/agents', { preHandler: requireAuth }, async (req, reply) => {
     try {
-      const query = z.object({ scope: z.enum(['mine', 'all']).optional() }).parse(req.query ?? {});
-      if (query.scope === 'all' && !isFdeClaims(req.user!)) {
-        throw errors.forbidden('Only FDE may request all Agents');
-      }
       const agents = await prisma.agent.findMany({
         where: {
           deletedAt: null,
           // Infrastructure agents are operated only by their dedicated admin
           // surfaces and must never appear as selectable workbench employees.
           systemManaged: false,
-          // Workbench defaults to the signed-in account even for Kevin/OWNER.
-          // FDE management surfaces opt in explicitly with ?scope=all.
-          ...(query.scope === 'all' ? {} : { createdBy: req.user!.sub }),
         },
         orderBy: { createdAt: 'desc' },
         include: {
@@ -160,7 +152,7 @@ export async function agentRoutes(app: FastifyInstance) {
         where: {
           id,
           deletedAt: null,
-          ...visibleAgentWhere(req.user!),
+          ...(req.user!.role === 'MEMBER' ? { systemManaged: false } : {}),
         },
         include: {
           skills: { include: { skill: true } },
@@ -313,7 +305,7 @@ export async function agentRoutes(app: FastifyInstance) {
     try {
       const { id } = z.object({ id: z.string() }).parse(req.params);
       const agent = await prisma.agent.findFirst({
-        where: { id, deletedAt: null, ...visibleAgentWhere(req.user!) },
+        where: { id, deletedAt: null },
         include: { skills: { include: { skill: true } } },
       });
       if (!agent) throw errors.notFound('Agent not found');

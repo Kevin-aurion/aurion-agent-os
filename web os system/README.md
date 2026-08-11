@@ -19,7 +19,7 @@
 ## 首次啟動
 
 ```bash
-cd "/Users/kevin/Documents/aurion/web os system"
+cd "/Users/kevin/Documents/lazyoffice/web os system"
 
 # 1) 啟動本地資料庫 / Redis（Docker）
 docker compose up -d
@@ -31,7 +31,7 @@ npm run doctor             # 檢查環境（DB/Redis/CLI/整合金鑰）
 npm run dev                # http://127.0.0.1:8700  (ws: /ws)
 
 # 3) 另開一個終端機，啟動網頁
-cd "/Users/kevin/Documents/aurion/web os system/aios-web"
+cd "/Users/kevin/Documents/lazyoffice/web os system/aios-web"
 npm run dev                # http://localhost:3100
 ```
 

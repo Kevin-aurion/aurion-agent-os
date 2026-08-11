@@ -7,7 +7,7 @@
 // - New skills stay AWAITING_USER_CONFIRM until FDE finalize after PASSED test.
 // - Every string leaf is deep-redacted before DB write.
 // - Session ownership: foreign users get 404 (no existence leak); FDE may inspect.
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ulid } from 'ulid';
 import { Prisma, type AgentBuildIteration, type AgentBuildSession, type AgentBuildSessionStatus, type UserRole } from '@prisma/client';
@@ -15,7 +15,7 @@ import { prisma } from './db.js';
 import { errors } from './http.js';
 import { audit } from './audit.js';
 import { slugify } from './slug.js';
-import { safeJoin, sanitizeSegment } from './safepath.js';
+import { safeJoin } from './safepath.js';
 import { paths } from '../config.js';
 import { deepRedactSecrets } from '../memory/deepredact.js';
 import type { RunAgentOptions, RunOutcome } from '../engine/types.js';
@@ -32,6 +32,18 @@ import {
   createExternalBuilderWorkflows,
   materializeExternalBuilderFiles,
 } from './builderartifactmaterialize.js';
+import {
+  assertFixtureExtension,
+  getTestInputStatus,
+  inferTestInputRequirements,
+  parseBuilderTestData,
+  type BuilderTestInputRequirement,
+  type BuilderTestInputStatus,
+} from './buildertestinputs.js';
+import {
+  deriveBuilderTestProgress,
+  type BuilderTestProgressDto,
+} from './buildertestprogress.js';
 
 // ── Types (business-language DTOs — no engines/manifests/MCP protocol) ───────
 
@@ -86,8 +98,6 @@ export type Brief = {
     size: number;
     content: string;
     uploadedAt: string;
-    /** When true, FDE authorization copies the redacted content into Skill assets/templates/. */
-    useAsTemplate?: boolean;
   }>;
 };
 
@@ -172,7 +182,9 @@ export type SessionDto = {
   builtAgentId: string | null;
   draftSkillIds: string[];
   hasTestData: boolean;
+  testInputStatus: BuilderTestInputStatus;
   testResult: TestResultDto | null;
+  testProgress: BuilderTestProgressDto | null;
   lastRunId: string | null;
   lastAssistantMessage: string | null;
   draftState: BuilderDraftState;
@@ -1039,14 +1051,7 @@ export async function buildCapabilityPlan(brief: Brief, userId: string): Promise
     .toLowerCase();
 
   const agents = await prisma.agent.findMany({
-    // Reuse candidates are customer-private. A builder session may never infer
-    // another account's Agent names, prompts, or capabilities.
-    where: {
-      deletedAt: null,
-      status: { not: 'ARCHIVED' },
-      systemManaged: false,
-      createdBy: userId,
-    },
+    where: { deletedAt: null, status: { not: 'ARCHIVED' } },
     select: {
       id: true,
       name: true,
@@ -1325,11 +1330,20 @@ function asBuilderDraftState(raw: unknown): BuilderDraftState {
 
 export function toSessionDto(
   row: AgentBuildSession & { iterations?: AgentBuildIteration[] },
-  opts: { includeDraft?: boolean } = {},
+  opts: { includeDraft?: boolean; testProgress?: BuilderTestProgressDto | null } = {},
 ): SessionDto {
   const iterations = [...(row.iterations ?? [])]
     .sort((a, b) => a.sequence - b.sequence)
     .map(toIterationDto);
+  const latestHarness = [...iterations].reverse().find((iteration) => iteration.harness)?.harness ?? null;
+  const requirements = latestHarness?.testInputRequirements?.length
+    ? latestHarness.testInputRequirements
+    : inferTestInputRequirements({
+        identityName: latestHarness?.identity.name,
+        skills: latestHarness?.skills ?? [],
+        testIdeas: latestHarness?.testIdeas ?? [],
+      });
+  const testInputStatus = getTestInputStatus(requirements, parseBuilderTestData(row.testData));
   return {
     id: row.id,
     status: row.status,
@@ -1341,7 +1355,9 @@ export function toSessionDto(
     builtAgentId: row.builtAgentId,
     draftSkillIds: row.draftSkillIds ?? [],
     hasTestData: row.testData != null,
+    testInputStatus,
     testResult: asTestResult(row.testResult),
+    testProgress: opts.testProgress ?? null,
     lastRunId: row.lastRunId,
     lastAssistantMessage: row.lastAssistantMessage,
     // Unsubmitted text belongs to the operator. FDE review receives only
@@ -1354,6 +1370,84 @@ export function toSessionDto(
     latestIteration: iterations.at(-1) ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+type BuilderSessionRow = AgentBuildSession & { iterations?: AgentBuildIteration[] };
+
+/** Batch-hydrate safe progress snapshots without leaking raw run output. */
+async function hydrateSessionDtos(
+  rows: BuilderSessionRow[],
+  includeDraft: (row: BuilderSessionRow) => boolean,
+): Promise<SessionDto[]> {
+  const directRunIds = rows.map((row) => row.lastRunId).filter((id): id is string => Boolean(id));
+  const testingAgentIds = rows
+    .filter((row) => row.status === 'TESTING')
+    .map((row) => row.builtAgentId ?? row.targetAgentId)
+    .filter((id): id is string => Boolean(id));
+  const include = {
+    steps: { orderBy: { round: 'asc' as const } },
+    agent: { select: { maxRounds: true } },
+  };
+  const [directRuns, runningCandidates] = await Promise.all([
+    directRunIds.length
+      ? prisma.run.findMany({ where: { id: { in: directRunIds } }, include })
+      : [],
+    testingAgentIds.length
+      ? prisma.run.findMany({
+          where: { agentId: { in: testingAgentIds }, status: 'RUNNING' },
+          orderBy: { startedAt: 'desc' },
+          include,
+        })
+      : [],
+  ]);
+  const directById = new Map(directRuns.map((run) => [run.id, run]));
+  const runningBySession = new Map<string, (typeof runningCandidates)[number]>();
+  for (const run of runningCandidates) {
+    const input = run.input && typeof run.input === 'object' && !Array.isArray(run.input)
+      ? run.input as Record<string, unknown>
+      : {};
+    const evidence = input.builderTestEvidence && typeof input.builderTestEvidence === 'object'
+      ? input.builderTestEvidence as Record<string, unknown>
+      : {};
+    const sessionId = typeof evidence.sessionId === 'string' ? evidence.sessionId : null;
+    if (input.builderTest === true && sessionId && !runningBySession.has(sessionId)) {
+      runningBySession.set(sessionId, run);
+    }
+  }
+
+  return rows.map((row) => {
+    const run = row.status === 'TESTING'
+      ? runningBySession.get(row.id) ?? (row.lastRunId ? directById.get(row.lastRunId) : undefined)
+      : row.lastRunId ? directById.get(row.lastRunId) : undefined;
+    return toSessionDto(row, {
+      includeDraft: includeDraft(row),
+      testProgress: run
+        ? deriveBuilderTestProgress({ run, steps: run.steps, maxRounds: run.agent.maxRounds })
+        : null,
+    });
+  });
+}
+
+async function testInputContractForSession(sessionId: string): Promise<{
+  requirements: BuilderTestInputRequirement[];
+  expected: string;
+}> {
+  const iteration = await prisma.agentBuildIteration.findFirst({
+    where: { sessionId, status: 'READY', artifactSnapshot: { not: Prisma.DbNull } },
+    orderBy: { sequence: 'desc' },
+  });
+  const harness = iteration?.artifactSnapshot as HarnessSnapshot | null;
+  const requirements = harness?.testInputRequirements?.length
+    ? harness.testInputRequirements
+    : inferTestInputRequirements({
+        identityName: harness?.identity.name,
+        skills: harness?.skills ?? [],
+        testIdeas: harness?.testIdeas ?? [],
+      });
+  return {
+    requirements,
+    expected: harness?.testIdeas?.[0]?.expected?.trim() || '輸出符合這位 Agent 已定義的技能、政策與驗收條件，且通過跨模型驗證。',
   };
 }
 
@@ -1588,10 +1682,10 @@ export async function getBuilderSession(opts: {
   role: UserRole | string;
 }): Promise<SessionDto> {
   let row = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
-  // Crash recovery for an in-process test job. A normal test has an 8-minute
-  // timeout; anything still TESTING after 10 minutes is failed closed instead
+  // Crash recovery for an in-process test job. A normal test has a 20-minute
+  // timeout; anything still TESTING after 25 minutes is failed closed instead
   // of leaving the session permanently stuck.
-  if (row.status === 'TESTING' && Date.now() - row.updatedAt.getTime() > 10 * 60_000) {
+  if (row.status === 'TESTING' && Date.now() - row.updatedAt.getTime() > 25 * 60_000) {
     const testResult: TestResultDto = {
       ok: false,
       status: 'FAILED',
@@ -1618,7 +1712,7 @@ export async function getBuilderSession(opts: {
     include: { iterations: { orderBy: { sequence: 'asc' }, take: 50 } },
   });
   if (!hydrated) throw errors.notFound('Session not found');
-  return toSessionDto(hydrated, { includeDraft: row.userId === opts.userId });
+  return (await hydrateSessionDtos([hydrated], (item) => item.userId === opts.userId))[0]!;
 }
 
 /**
@@ -1650,7 +1744,7 @@ export async function listBuilderSessions(opts: { userId: string }): Promise<Ses
     take: 50,
     include: { iterations: { orderBy: { sequence: 'desc' }, take: 10 } },
   });
-  return rows.map((row) => toSessionDto(row));
+  return hydrateSessionDtos(rows, () => true);
 }
 
 /** Load the redacted unsent fields for a new flow or an owned existing flow. */
@@ -1711,9 +1805,6 @@ function skillMarkdownFromBrief(
   harness?: HarnessSnapshot | null,
   harnessSkill?: HarnessSnapshot['skills'][number] | null,
 ): string {
-  const templateAssets = (brief.sourceFiles ?? [])
-    .filter((file) => file.useAsTemplate)
-    .map((file) => templateAssetName(file.name));
   if (harnessSkill?.contentMd?.trim()) {
     const authored = String(deepRedactSecrets(harnessSkill.contentMd)).trim().slice(0, 60_000);
     return [
@@ -1722,13 +1813,6 @@ function skillMarkdownFromBrief(
       '## AIOS 治理狀態',
       '- 此檔案由外部 Agent Builder 同步為技能草稿。',
       '- 需通過測試與 FDE 最終確認後才會生效。',
-      ...(templateAssets.length
-        ? [
-            '',
-            '## 可重用範本',
-            ...templateAssets.map((name) => `- \`assets/templates/${name}\``),
-          ]
-        : []),
       '',
     ].join('\n');
   }
@@ -1736,9 +1820,7 @@ function skillMarkdownFromBrief(
     `### ${file.name}`,
     `前臺上傳時間：${file.uploadedAt}`,
     '',
-    file.useAsTemplate
-      ? `此檔案作為可重用範本保存於 \`assets/templates/${templateAssetName(file.name)}\`。`
-      : file.content,
+    file.content,
     '',
   ]);
   const lines = [
@@ -1760,13 +1842,6 @@ function skillMarkdownFromBrief(
     '',
     ...(sourceBlocks.length
       ? ['## 前臺上傳的訓練來源', '', ...sourceBlocks]
-      : []),
-    ...(templateAssets.length
-      ? [
-          '## 可重用範本',
-          ...templateAssets.map((name) => `- \`assets/templates/${name}\``),
-          '',
-        ]
       : []),
     '## 產出',
     brief.outputs ?? '（未填）',
@@ -1810,16 +1885,6 @@ function skillMarkdownFromBrief(
 
 const MAX_BUILDER_SOURCE_FILES = 6;
 const MAX_BUILDER_SOURCE_CHARS = 24_000;
-const MAX_BUILDER_TEMPLATE_CHARS = 500_000;
-const TEXT_TEMPLATE_EXTENSIONS = new Set([
-  '.md', '.txt', '.csv', '.tsv', '.json', '.yaml', '.yml', '.html', '.htm',
-]);
-
-function templateAssetName(sourceName: string): string {
-  const safe = sanitizeSegment(path.basename(sourceName), 'template').slice(0, 120);
-  const ext = path.extname(safe).toLowerCase();
-  return TEXT_TEMPLATE_EXTENSIONS.has(ext) ? safe : `${safe}.parsed.md`;
-}
 
 /** Attach a redacted, parsed source file to a Builder session before authorization. */
 export async function attachBuilderSourceFile(opts: {
@@ -1830,7 +1895,6 @@ export async function attachBuilderSourceFile(opts: {
   mimeType?: string;
   size: number;
   content: string;
-  useAsTemplate?: boolean;
 }): Promise<BuilderMessageResult> {
   const row = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
   if (row.userId !== opts.userId) throw errors.notFound('Session not found');
@@ -1843,7 +1907,7 @@ export async function attachBuilderSourceFile(opts: {
   const safeName = path.basename(opts.name).replace(/[\r\n]/g, ' ').slice(0, 160) || 'training-source';
   const redactedContent = String(deepRedactSecrets(opts.content)).slice(
     0,
-    opts.useAsTemplate ? MAX_BUILDER_TEMPLATE_CHARS : MAX_BUILDER_SOURCE_CHARS,
+    MAX_BUILDER_SOURCE_CHARS,
   );
   if (!redactedContent.trim()) throw errors.badRequest('Uploaded file contains no readable text');
 
@@ -1853,7 +1917,6 @@ export async function attachBuilderSourceFile(opts: {
     size: opts.size,
     content: redactedContent,
     uploadedAt: new Date().toISOString(),
-    useAsTemplate: opts.useAsTemplate === true,
   };
   const duplicateIndex = existing.findIndex((file) => file.name === safeName);
   if (duplicateIndex >= 0) existing[duplicateIndex] = nextFile;
@@ -1869,9 +1932,7 @@ export async function attachBuilderSourceFile(opts: {
       : `前臺上傳檔案：${safeName}`,
     sourceFiles: existing,
   }) as Brief;
-  const assistantMessage = opts.useAsTemplate
-    ? `我已讀取「${safeName}」，並把它標記為可重用範本。FDE 核准建置後，它會成為技能的範本資產；目前仍只是待審草稿。`
-    : `我已讀取「${safeName}」。現在會先從內容找出流程、欄位與例外，更新這位員工的學習草稿；你不需要逐欄重新說明。`;
+  const assistantMessage = `我已讀取「${safeName}」。現在會先從內容找出流程、欄位與例外，更新這位員工的學習草稿；你不需要逐欄重新說明。`;
   const transcript = pushTranscript(asTranscript(row.transcript), 'assistant', assistantMessage);
   const updated = await prisma.agentBuildSession.update({
     where: { id: row.id },
@@ -1885,7 +1946,6 @@ export async function attachBuilderSourceFile(opts: {
     name: safeName,
     size: opts.size,
     chars: redactedContent.length,
-    useAsTemplate: opts.useAsTemplate === true,
   });
   const iteration = await createBuilderEvolutionIteration({
     sessionId: row.id,
@@ -1912,7 +1972,7 @@ export async function listBuilderReviewQueue(): Promise<SessionDto[]> {
     orderBy: { updatedAt: 'asc' },
     include: { iterations: { orderBy: { sequence: 'desc' }, take: 50 } },
   });
-  return rows.map((row) => toSessionDto(row, { includeDraft: false }));
+  return hydrateSessionDtos(rows, () => false);
 }
 
 /** Role-aware evolution ledger. FDE sees the whole queue; members see only
@@ -1930,9 +1990,10 @@ export async function listBuilderEvolutionSessions(opts: {
     take: 100,
     include: { iterations: { orderBy: { sequence: 'desc' }, take: 50 } },
   });
-  return rows.map((row) => ({
-    ...toSessionDto(row, { includeDraft: false }),
-    ownedByCurrentUser: row.userId === opts.userId,
+  const sessions = await hydrateSessionDtos(rows, () => false);
+  return sessions.map((session, index) => ({
+    ...session,
+    ownedByCurrentUser: rows[index]!.userId === opts.userId,
   }));
 }
 
@@ -1942,7 +2003,7 @@ async function createInertSkillDraft(opts: {
   createdBy: string;
   harness?: HarnessSnapshot | null;
   harnessSkill?: HarnessSnapshot['skills'][number] | null;
-}): Promise<{ id: string; filePath: string; directoryPath: string }> {
+}): Promise<{ id: string; filePath: string }> {
   const id = ulid();
   const name = opts.name.slice(0, 80) || 'Builder 技能草稿';
   const contentMd = deepRedactSecrets(
@@ -1951,72 +2012,43 @@ async function createInertSkillDraft(opts: {
   const slug = await uniqueSkillSlug(slugify(name));
 
   const dest = safeJoin(paths.skills, slug, 'SKILL.md');
-  const directoryPath = path.dirname(dest);
-  // The slug is DB-unique, but an interrupted older build may have left a
-  // directory behind. Refuse to overwrite it so compensation can safely remove
-  // only the directory created by this call.
-  await mkdir(directoryPath, { recursive: false });
+  await mkdir(path.dirname(dest), { recursive: true });
+  await writeFile(dest, contentMd, 'utf8');
 
-  const templateAssets = [] as Array<{
-    path: string;
-    sourceName: string;
-    mimeType?: string;
-    parsed: boolean;
-  }>;
-  try {
-    await writeFile(dest, contentMd, 'utf8');
-    for (const source of (opts.brief.sourceFiles ?? []).filter((file) => file.useAsTemplate)) {
-      const assetName = templateAssetName(source.name);
-      const assetPath = safeJoin(directoryPath, 'assets', 'templates', assetName);
-      await mkdir(path.dirname(assetPath), { recursive: true });
-      await writeFile(assetPath, String(deepRedactSecrets(source.content)), 'utf8');
-      templateAssets.push({
-        path: `assets/templates/${assetName}`,
-        sourceName: source.name,
-        mimeType: source.mimeType,
-        parsed: !TEXT_TEMPLATE_EXTENSIONS.has(path.extname(source.name).toLowerCase()),
-      });
-    }
-
-    await prisma.skill.create({
-      data: {
-        id,
-        slug,
-        name,
-        origin: 'CLI_GENERATED',
-        kind: 'PROMPT_MANUAL',
-        contentMd,
-        assets: templateAssets.length ? { templates: templateAssets } : undefined,
-        generator: 'agent-builder',
-        // Builder discovery is deterministic and must never block on a model CLI.
-        // The structured brief itself is the human-readable understanding; the
-        // draft still requires an explicit FDE confirmation before it is effective.
-        reviewStatus: 'AWAITING_USER_CONFIRM',
-        understanding: deepRedactSecrets({
-          summary: opts.brief.objective ?? name,
-          capabilities: opts.harnessSkill?.instructions?.length
-            ? opts.harnessSkill.instructions
-            : [opts.brief.process ?? '依已確認流程處理測試資料'],
-          data_read: opts.harnessSkill?.inputs?.length
-            ? opts.harnessSkill.inputs
-            : [opts.brief.inputs ?? opts.brief.sources ?? '由使用者提供的測試資料'],
-          data_written: opts.harnessSkill?.outputs?.length
-            ? opts.harnessSkill.outputs
-            : ['只產生草稿；不執行外部寫入'],
-          external_calls: opts.harness?.tools?.map((tool) => `${tool.name}:${tool.status}`) ?? [],
-          irreversible_actions: [],
-          risks: [opts.brief.permissions ?? '不可逆操作一律需人工核准'],
-        }) as object,
-        executionEnv: 'CLI',
-      },
-    });
-  } catch (error) {
-    await rm(directoryPath, { recursive: true, force: true }).catch(() => {});
-    throw error;
-  }
+  await prisma.skill.create({
+    data: {
+      id,
+      slug,
+      name,
+      origin: 'CLI_GENERATED',
+      kind: 'PROMPT_MANUAL',
+      contentMd,
+      generator: 'agent-builder',
+      // Builder discovery is deterministic and must never block on a model CLI.
+      // The structured brief itself is the human-readable understanding; the
+      // draft still requires an explicit FDE confirmation before it is effective.
+      reviewStatus: 'AWAITING_USER_CONFIRM',
+      understanding: deepRedactSecrets({
+        summary: opts.brief.objective ?? name,
+        capabilities: opts.harnessSkill?.instructions?.length
+          ? opts.harnessSkill.instructions
+          : [opts.brief.process ?? '依已確認流程處理測試資料'],
+        data_read: opts.harnessSkill?.inputs?.length
+          ? opts.harnessSkill.inputs
+          : [opts.brief.inputs ?? opts.brief.sources ?? '由使用者提供的測試資料'],
+        data_written: opts.harnessSkill?.outputs?.length
+          ? opts.harnessSkill.outputs
+          : ['只產生草稿；不執行外部寫入'],
+        external_calls: opts.harness?.tools?.map((tool) => `${tool.name}:${tool.status}`) ?? [],
+        irreversible_actions: [],
+        risks: [opts.brief.permissions ?? '不可逆操作一律需人工核准'],
+      }) as object,
+      executionEnv: 'CLI',
+    },
+  });
 
   void opts.createdBy;
-  return { id, filePath: dest, directoryPath };
+  return { id, filePath: dest };
 }
 
 export async function authorizeBuilderSession(opts: {
@@ -2114,11 +2146,11 @@ export async function authorizeBuilderSession(opts: {
   let builtAgentId: string | null = row.builtAgentId;
   let targetAgentId: string | null = null;
   const draftSkillIds: string[] = [];
-  const draftSkillDirectories: string[] = [];
+  const draftSkillFiles: string[] = [];
   let createdAgentId: string | null = null;
 
   const makeSkillDrafts = async () => {
-    const created: Array<{ id: string; filePath: string; directoryPath: string }> = [];
+    const created: Array<{ id: string; filePath: string }> = [];
     for (const blueprint of skillBlueprints) {
       created.push(await createInertSkillDraft({
         name: blueprint.name || plan.proposedSkillName,
@@ -2142,9 +2174,7 @@ export async function authorizeBuilderSession(opts: {
         throw errors.badRequest('targetAgentId must be one of the reviewed reuse candidates');
       }
       const agent = await prisma.agent.findFirst({ where: { id: tid, deletedAt: null } });
-      if (!agent || agent.createdBy !== row.userId || agent.systemManaged) {
-        throw errors.notFound('Target agent not found');
-      }
+      if (!agent) throw errors.notFound('Target agent not found');
       targetAgentId = agent.id;
       // Do NOT rewrite identity/role/restrictions.
 
@@ -2152,7 +2182,7 @@ export async function authorizeBuilderSession(opts: {
       for (const skillDraft of skillDrafts) {
         const skillId = skillDraft.id;
         draftSkillIds.push(skillId);
-        draftSkillDirectories.push(skillDraft.directoryPath);
+        draftSkillFiles.push(skillDraft.filePath);
         await prisma.agentSkill.upsert({
           where: { agentId_skillId: { agentId: agent.id, skillId } },
           create: { agentId: agent.id, skillId },
@@ -2208,9 +2238,7 @@ export async function authorizeBuilderSession(opts: {
           restrictions: { ...BUILDER_LEAST_PRIVILEGE },
           riskTier: 'medium',
           status: 'PAUSED',
-          // The FDE is the approving actor, but the resulting employee belongs
-          // to the customer who authenticated the Claude/GPT builder session.
-          createdBy: row.userId,
+          createdBy: opts.userId,
         },
       });
       createdAgentId = agentId;
@@ -2220,7 +2248,7 @@ export async function authorizeBuilderSession(opts: {
       const skillDrafts = await makeSkillDrafts();
       for (const skillDraft of skillDrafts) {
         draftSkillIds.push(skillDraft.id);
-        draftSkillDirectories.push(skillDraft.directoryPath);
+        draftSkillFiles.push(skillDraft.filePath);
         await prisma.agentSkill.create({ data: { agentId, skillId: skillDraft.id } });
       }
 
@@ -2249,7 +2277,7 @@ export async function authorizeBuilderSession(opts: {
     if (createdAgentId) {
       await prisma.agent.deleteMany({ where: { id: createdAgentId } }).catch(() => {});
     }
-    await Promise.all(draftSkillDirectories.map((dir) => rm(dir, { recursive: true, force: true }).catch(() => {})));
+    await Promise.all(draftSkillFiles.map((file) => unlink(file).catch(() => {})));
     // Roll status back so FDE can retry.
     await prisma.agentBuildSession.update({
       where: { id: row.id },
@@ -2317,7 +2345,16 @@ export async function submitBuilderTestData(opts: {
     throw errors.badRequest('Session has no built agent/skill yet');
   }
 
-  const data = deepRedactSecrets(opts.data);
+  const contract = await testInputContractForSession(row.id);
+  const currentData = parseBuilderTestData(row.testData);
+  const data = deepRedactSecrets(
+    contract.requirements.length === 1 && contract.requirements[0]?.kind === 'TEXT'
+      ? {
+          ...currentData,
+          manualText: { ...currentData.manualText, [contract.requirements[0].key]: String(opts.data) },
+        }
+      : opts.data,
+  );
   const expected = deepRedactSecrets(opts.expected);
   if (data === undefined || data === null || data === '') {
     throw errors.badRequest('test data is required');
@@ -2348,6 +2385,87 @@ export async function submitBuilderTestData(opts: {
     hasData: true,
   });
 
+  return {
+    session: toSessionDto(updated),
+    assistantMessage,
+    status: updated.status,
+    progress: asProgress(updated.progress),
+  };
+}
+
+/** Attach one locally parsed, redacted fixture to the Agent-specific test contract. */
+export async function attachBuilderTestFixture(opts: {
+  sessionId: string;
+  userId: string;
+  role: UserRole | string;
+  requirementKey: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  content: string;
+}): Promise<BuilderMessageResult> {
+  const row = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
+  if (!['AWAITING_TEST_DATA', 'FAILED', 'PASSED'].includes(row.status)) {
+    throw errors.conflict(`Cannot attach test fixture from status=${row.status}`);
+  }
+  if (!row.draftSkillIds?.length && !row.builtAgentId && !row.targetAgentId) {
+    throw errors.badRequest('Session has no built agent/skill yet');
+  }
+  const contract = await testInputContractForSession(row.id);
+  const requirement = contract.requirements.find((item) => item.key === opts.requirementKey);
+  if (!requirement) throw errors.badRequest('Unknown test input requirement');
+  if (requirement.kind !== 'FILE') throw errors.badRequest('This test input expects text, not a file');
+  try {
+    assertFixtureExtension(requirement, opts.name);
+  } catch (error) {
+    throw errors.badRequest(error instanceof Error ? error.message : 'Unsupported test fixture type');
+  }
+  if (opts.size <= 0 || opts.size > 10 * 1024 * 1024) {
+    throw errors.badRequest('Test fixture must be between 1 byte and 10 MB');
+  }
+  const redactedContent = deepRedactSecrets(opts.content).slice(0, 60_000);
+  if (!redactedContent.trim()) throw errors.badRequest('Test fixture contains no readable text');
+
+  const current = parseBuilderTestData(row.testData);
+  const existing = current.fixtures.filter((fixture) => fixture.requirementKey === requirement.key);
+  const keep = requirement.maxFiles === 1
+    ? current.fixtures.filter((fixture) => fixture.requirementKey !== requirement.key)
+    : current.fixtures;
+  if (requirement.maxFiles > 1 && existing.length >= requirement.maxFiles) {
+    throw errors.badRequest(`${requirement.label}最多只能上傳 ${requirement.maxFiles} 份`);
+  }
+  const fixture = deepRedactSecrets({
+    id: ulid(),
+    requirementKey: requirement.key,
+    name: path.basename(opts.name).replace(/[\r\n]/g, '').slice(0, 240),
+    mimeType: opts.mimeType.slice(0, 160),
+    size: opts.size,
+    content: redactedContent,
+    uploadedAt: new Date().toISOString(),
+  });
+  const testData = deepRedactSecrets({ ...current, fixtures: [...keep, fixture] });
+  const status = getTestInputStatus(contract.requirements, parseBuilderTestData(testData));
+  const assistantMessage = status.complete
+    ? `已收到「${requirement.label}」，必填測試資料已完整，可以開始隔離試跑。`
+    : `已收到「${requirement.label}」，仍需補齊：${status.missingRequiredKeys.join('、')}。`;
+  const transcript = pushTranscript(asTranscript(row.transcript), 'assistant', assistantMessage);
+  const updated = await prisma.agentBuildSession.update({
+    where: { id: row.id },
+    data: {
+      status: 'AWAITING_TEST_DATA',
+      testData: testData as object,
+      testExpected: deepRedactSecrets(contract.expected),
+      testResult: Prisma.DbNull,
+      transcript,
+      lastAssistantMessage: deepRedactSecrets(assistantMessage),
+    },
+  });
+  await audit(opts.userId, 'agent_builder.test_fixture_uploaded', 'AgentBuildSession', row.id, {
+    requirementKey: requirement.key,
+    name: fixture.name,
+    size: fixture.size,
+    complete: status.complete,
+  });
   return {
     session: toSessionDto(updated),
     assistantMessage,
@@ -2453,6 +2571,8 @@ export async function runBuilderTest(opts: {
   background?: boolean;
   /** Internal recursion after the background path atomically claimed TESTING. */
   alreadyTesting?: boolean;
+  /** Allocated before background dispatch so clients can follow this exact run. */
+  runId?: string;
 }): Promise<BuilderMessageResult> {
   let row = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
   if (row.userId !== opts.userId && !isFde(opts.role)) {
@@ -2468,12 +2588,21 @@ export async function runBuilderTest(opts: {
   if (row.testData == null) {
     throw errors.badRequest('Test data is required before running a test');
   }
+  const contract = await testInputContractForSession(row.id);
+  const inputStatus = getTestInputStatus(contract.requirements, parseBuilderTestData(row.testData));
+  if (!inputStatus.complete) {
+    const missingLabels = inputStatus.requirements
+      .filter((item) => inputStatus.missingRequiredKeys.includes(item.key))
+      .map((item) => item.label);
+    throw errors.badRequest(`Required test data is incomplete: ${missingLabels.join('、')}`);
+  }
 
   const agentId = row.builtAgentId ?? row.targetAgentId;
   if (!agentId) throw errors.badRequest('No agent available for test');
 
   const agent = await prisma.agent.findFirst({ where: { id: agentId, deletedAt: null } });
   if (!agent) throw errors.notFound('Agent not found for test');
+  const plannedRunId = opts.runId ?? ulid();
 
   if (!opts.alreadyTesting) {
     const claimed = await prisma.agentBuildSession.updateMany({
@@ -2481,7 +2610,7 @@ export async function runBuilderTest(opts: {
         id: row.id,
         status: { in: ['AWAITING_TEST_DATA', 'FAILED', 'PASSED'] },
       },
-      data: { status: 'TESTING' },
+      data: { status: 'TESTING', lastRunId: plannedRunId },
     });
     if (claimed.count !== 1) throw errors.conflict('Test is already running');
     row = (await prisma.agentBuildSession.findUnique({ where: { id: row.id } }))!;
@@ -2498,6 +2627,7 @@ export async function runBuilderTest(opts: {
       ...opts,
       background: false,
       alreadyTesting: true,
+      runId: plannedRunId,
     }).catch(async (e) => {
       const detail = deepRedactSecrets(e instanceof Error ? e.message : String(e));
       const testResult: TestResultDto = {
@@ -2524,7 +2654,11 @@ export async function runBuilderTest(opts: {
     };
   }
 
-  const timeoutMs = opts.timeoutMs ?? 8 * 60_000;
+  // A five-round cross-model run can legitimately exceed eight minutes on a
+  // local subscription-backed CLI. Keep a hard fail-closed ceiling, but leave
+  // enough room for execute + verify + rework to finish and persist its real
+  // verdict instead of replacing it with a misleading timeout.
+  const timeoutMs = opts.timeoutMs ?? 20 * 60_000;
   const runAgentFn =
     opts.runAgentFn ??
     (async (o: RunAgentOptions) => {
@@ -2548,9 +2682,10 @@ export async function runBuilderTest(opts: {
 
   let outcome: RunOutcome;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  const controller = new AbortController();
+  const abortController = new AbortController();
   try {
     const runPromise = runAgentFn({
+      runId: plannedRunId,
       agentId,
       forceVerify: true,
       builderTestSessionId: row.id,
@@ -2561,14 +2696,14 @@ export async function runBuilderTest(opts: {
         expected: row.testExpected as object,
       },
       triggeredBy: opts.userId,
-      signal: controller.signal,
+      signal: abortController.signal,
     });
 
     outcome = await Promise.race([
       runPromise,
       new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(() => {
-          controller.abort();
+          abortController.abort(new Error('builder test timeout'));
           reject(new Error('builder test timeout'));
         }, timeoutMs);
       }),

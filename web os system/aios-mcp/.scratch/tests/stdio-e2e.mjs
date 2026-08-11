@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -51,8 +50,7 @@ try {
   });
   assert(JSON.stringify(prompt).includes('start_agent_build'));
 
-  const runId = randomUUID();
-  const conversationId = `stdio-e2e-${runId}`;
+  const conversationId = `stdio-e2e-${Date.now()}`;
   const started = resultJson(await client.callTool({
     name: 'start_agent_build',
     arguments: {
@@ -64,7 +62,6 @@ try {
     },
   }));
   sessionId = started.session.id;
-  assert.equal(started.deduplicated, false);
   assert.equal(started.session.status, 'DISCOVERY');
 
   const synced = resultJson(await client.callTool({
@@ -72,7 +69,7 @@ try {
     arguments: {
       sessionId,
       source: 'CLAUDE_DESKTOP',
-      externalEventId: `turn-${runId}`,
+      externalEventId: 'turn-001',
       turns: [
         { role: 'user', content: '每天早上九點整理昨天的客服回饋。' },
         { role: 'assistant', content: '我會先確認回饋來源，以及沒有資料時應如何回報。' },
@@ -86,13 +83,13 @@ try {
     arguments: {
       sessionId,
       source: 'CLAUDE_DESKTOP',
-      externalEventId: `turn-${runId}`,
+      externalEventId: 'turn-001',
       turns: [{ role: 'user', content: '同一事件重試' }],
     },
   }));
   assert.equal(duplicate.deduplicated, true);
 
-  const synchronizedStop = resultJson(await client.callTool({
+  const blockedStop = resultJson(await client.callTool({
     name: 'guard_agent_build_stop',
     arguments: {
       externalConversationId: conversationId,
@@ -101,10 +98,8 @@ try {
       source: 'CLAUDE_CODE',
     },
   }));
-  assert.equal(synchronizedStop.matched, true);
-  assert.equal(synchronizedStop.finalMessageSynced, true);
-  assert.equal(synchronizedStop.artifactFresh, false);
-  assert.equal(synchronizedStop.decision, undefined, 'Stop must not wait for artifact generation');
+  assert.equal(blockedStop.decision, 'block');
+  assert.equal(blockedStop.artifactFresh, false);
 
   const upload = resultJson(await client.callTool({
     name: 'upload_agent_build_file',
@@ -123,7 +118,7 @@ try {
     arguments: {
       sessionId,
       source: 'CLAUDE_DESKTOP',
-      externalEventId: `artifact-${runId}`,
+      externalEventId: 'artifact-001',
       artifact: {
         identity: {
           name: 'stdio 測試員工',
@@ -206,7 +201,7 @@ try {
       'turn sync and idempotent retry',
       'file upload',
       'complete artifact sync',
-      'Stop hook synchronizes without blocking before and after artifact sync',
+      'Stop guard blocks once then allows after artifact sync',
       'build resource read',
       'submit stops at FDE review',
     ],

@@ -22,6 +22,7 @@ import {
   BrainCircuit,
   GitBranch,
   BookOpen,
+  Rocket,
 } from 'lucide-react';
 import { useAuth, isFdeRole } from '@/lib/auth';
 import { useAwp } from '@/lib/awp';
@@ -46,6 +47,7 @@ const ADMIN_NAV = [
   { href: '/employees', label: '員工 Agents', icon: Users },
   { href: '/admin/devices', label: '裝置 Devices', icon: MonitorSmartphone },
   { href: '/admin/reflections', label: '反思與優化 Reflections', icon: BrainCircuit },
+  { href: '/admin/runtime', label: 'Runtime 部署', icon: Rocket },
   { href: '/org', label: '組織 Org', icon: Network },
   { href: '/skills', label: '技能 Skills', icon: Wrench },
   { href: '/workflows', label: '工作流 Workflows', icon: Workflow },
@@ -124,9 +126,9 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex h-screen">
         <aside className="flex w-64 flex-col border-r border-border bg-panel">
           <div className="flex items-center gap-2 px-5 py-4">
-            <div className="grid h-8 w-8 place-items-center rounded-lg bg-brand font-bold text-white">A</div>
+            <div className="grid h-8 w-8 place-items-center rounded-lg bg-brand font-bold text-white">L</div>
             <div>
-              <div className="text-sm font-semibold leading-tight">Aurion Builder</div>
+              <div className="text-sm font-semibold leading-tight">Lazyoffice Builder</div>
               <div className="text-[11px] text-muted">Agent 建置入口</div>
             </div>
           </div>

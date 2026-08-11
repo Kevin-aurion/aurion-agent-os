@@ -1,7 +1,7 @@
 # Codex Relay Bridge — Spike Report (Phase 1)
 
-**Binary baseline**: `/Applications/ChatGPT.app/Contents/Resources/codex` — `codex-cli 0.144.2`  
-**Date**: 2026-07-13  
+**Binary baseline**: `/Applications/ChatGPT.app/Contents/Resources/codex` — `codex-cli 0.144.2`
+**Date**: 2026-07-13
 **Scope**: Phase 1 only (fake-server integration + typecheck). Live smoke and GUI questions intentionally incomplete/unverified.
 
 ---
@@ -103,19 +103,19 @@ Passes with zero errors (see final report for full log).
 
 Suites (post Phase-1 review fix):
 
-1. `new-thread`  
-2. `resume`  
-3. `concurrent-resume` (exactly one `thread/resume` under concurrent continue)  
-4. `concurrent-turn`  
-5. `approval-fail-closed` (parameterized 11 kinds)  
-6. `crash-during-approval` (both directions)  
-7. `strict-reject`  
+1. `new-thread`
+2. `resume`
+3. `concurrent-resume` (exactly one `thread/resume` under concurrent continue)
+4. `concurrent-turn`
+5. `approval-fail-closed` (parameterized 11 kinds)
+6. `crash-during-approval` (both directions)
+7. `strict-reject`
 
 ### Live smoke — real end-to-end dispatch (VERIFIED 2026-07-13, by reviewer Opus)
 
 Driven through the **actual MCP tool surface** against the **real** `codex app-server` 0.144.2 (not the fake server):
 
-- `codex_start_task` { project: `/Users/kevin/Documents/aurion`, message: "reply with exactly PONG…", idempotency_key } → returned `task_id`, `thread_id`, `status: active` (`idempotent_replay: false`).
+- `codex_start_task` { project: `/Users/kevin/Documents/lazyoffice`, message: "reply with exactly PONG…", idempotency_key } → returned `task_id`, `thread_id`, `status: active` (`idempotent_replay: false`).
 - Normalized event sequence observed via `codex_read_output`: `turn_started → item_started → item_completed → agent_message_delta ×2 → agent_message → turn_completed`.
 - Final `codex_get_status` → `status: idle`, `summary: "PONG"`. No approvals were raised for this plain-text turn.
 - **Result: end-to-end dispatch works** — Claude → MCP → Relay Bridge → real Codex turn → agent output read back. No `jsonrpc` protocol-violation errors after the framing fix.
@@ -151,5 +151,5 @@ Prerequisite bug fixed during review: the real app-server omits the `jsonrpc` fi
 | (5) `tsc --noEmit` zero errors | Required | **PASS** |
 | (6) Spike Q1–Q6 filled | GUI may be UNVERIFIED | **PASS** (Q1/Q2/Q4/Q5 UNVERIFIED + steps) |
 
-**Draft recommendation**: **CONDITIONAL GO** for Phase 2 engineering (persistence / multi-client design) **after** live smoke passes and at least Q1/Q2/Q5 are filled by a human.  
+**Draft recommendation**: **CONDITIONAL GO** for Phase 2 engineering (persistence / multi-client design) **after** live smoke passes and at least Q1/Q2/Q5 are filled by a human.
 **No-Go triggers still open**: live smoke failure on 0.144.2 stdio app-server; any fail-closed regression; confirmation that Computer Use cannot be shared (then re-scope Bridge as independent thread dispatch only).

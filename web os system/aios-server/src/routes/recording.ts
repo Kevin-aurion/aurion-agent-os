@@ -8,7 +8,6 @@ import { requireAuth } from '../lib/guard.js';
 import { ok, errors, sendError } from '../lib/http.js';
 import { prisma } from '../lib/db.js';
 import { recordingService } from '../lib/recording.js';
-import { requireVisibleAgent } from '../lib/agentaccess.js';
 
 const toSkillBodySchema = z.object({
   hint: z.string().trim().max(4000).optional(),
@@ -28,7 +27,11 @@ export async function recordingRoutes(app: FastifyInstance) {
         throw errors.badRequest('請先選擇要訓練的 Agent', parsed.error.issues);
       }
       const userId = req.user!.sub;
-      const agent = await requireVisibleAgent(parsed.data.agentId, req.user!);
+      const agent = await prisma.agent.findFirst({
+        where: { id: parsed.data.agentId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!agent) throw errors.notFound('Agent not found');
       const result = await recordingService.start(userId, agent.id);
       return reply.send(ok(result));
     } catch (e) {
@@ -69,7 +72,8 @@ export async function recordingRoutes(app: FastifyInstance) {
       }
       const body = parsed.data;
       const userId = req.user!.sub;
-      await requireVisibleAgent(agentId, req.user!);
+      const agent = await prisma.agent.findFirst({ where: { id: agentId, deletedAt: null } });
+      if (!agent) throw errors.notFound('Agent not found');
 
       let sessionId = body.sessionId;
       if (!sessionId) {

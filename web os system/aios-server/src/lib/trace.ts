@@ -2,8 +2,9 @@
 // Ancillary / fail-safe: never throws to callers; never auto-confirms or promotes skills.
 import { createHash } from 'node:crypto';
 import { ulid } from 'ulid';
-import type { Prisma } from '@prisma/client';
+import type { Engine, Prisma } from '@prisma/client';
 import type { CompiledManifest, RunOutcome, StepResult } from '../engine/types.js';
+import type { NormalizedRunEvent } from '../runtime/adapter.js';
 import { redactSecrets } from '../memory/redactor.js';
 import { createProposal } from './changeproposal.js';
 import { prisma } from './db.js';
@@ -24,6 +25,11 @@ export type SelectedSkillTrace = {
 
 type TraceAgent = {
   id: string;
+};
+
+export type RunTraceRuntimeMeta = {
+  runtimeKind?: 'NATIVE' | 'LANGFLOW';
+  artifactId?: string | null;
 };
 
 function capRedact(text: string | undefined | null): string | undefined {
@@ -97,14 +103,16 @@ function computeTrajectoryKey(
 /**
  * Fail-safe post-run trace ingest. Never throws.
  * Persists a redacted RunTrace and may emit one deduped TRAJECTORY proposal.
+ * Optional `runtime` writes runtimeKind/artifactId; omitted = legacy null columns.
  */
 export async function ingestRunTrace(input: {
   agent: TraceAgent;
   manifest: CompiledManifest;
   outcome: RunOutcome;
+  runtime?: RunTraceRuntimeMeta;
 }): Promise<void> {
   try {
-    const { agent, manifest, outcome } = input;
+    const { agent, manifest, outcome, runtime } = input;
     const agentId = agent.id;
     const runId = outcome.runId;
     if (!agentId || !runId) return;
@@ -133,6 +141,12 @@ export async function ingestRunTrace(input: {
           trajectoryKey,
           engineExecute: manifest.engineExecute,
           engineVerify: manifest.engineVerify,
+          ...(runtime?.runtimeKind != null
+            ? { runtimeKind: runtime.runtimeKind }
+            : {}),
+          ...(runtime && 'artifactId' in runtime
+            ? { artifactId: runtime.artifactId ?? null }
+            : {}),
         },
       });
     } catch (e: unknown) {
@@ -156,6 +170,110 @@ export async function ingestRunTrace(input: {
   } catch (e) {
     console.warn(
       '[trace] ingestRunTrace failed (non-fatal)',
+      e instanceof Error ? e.message : e,
+    );
+  }
+}
+
+function mapPilotEventsToTrajectory(events: NormalizedRunEvent[]): Array<Record<string, unknown>> {
+  return events.map((ev) => {
+    const entry: Record<string, unknown> = {
+      type: ev.type,
+      at: 'at' in ev ? ev.at : undefined,
+    };
+    if ('stepKey' in ev && typeof ev.stepKey === 'string') {
+      entry.stepKey = ev.stepKey;
+    }
+    if ('ok' in ev && typeof ev.ok === 'boolean') {
+      entry.ok = ev.ok;
+    }
+    if (ev.type === 'step.finished' && ev.summary != null) {
+      const summary = capRedact(ev.summary);
+      if (summary !== undefined) entry.summary = summary;
+    }
+    if (ev.type === 'run.error') {
+      const message = capRedact(ev.message);
+      if (message !== undefined) entry.message = message;
+      entry.code = ev.code;
+    }
+    if (ev.type === 'approval.required') {
+      const reason = capRedact(ev.reason);
+      if (reason !== undefined) entry.reason = reason;
+    }
+    if (ev.type === 'tool.call') {
+      entry.tool = redactSecrets(String(ev.tool)).slice(0, SNIPPET_CAP);
+    }
+    if (ev.type === 'run.finished') {
+      entry.status = ev.status;
+    }
+    return entry;
+  });
+}
+
+/**
+ * Fail-safe Langflow pilot RunTrace ingest. Never throws.
+ * AWAITING_REVIEW → no-op (run not finished). trajectoryKey always null
+ * (do not trigger trajectory-dedupe proposals). P2002 on runId → silent no-op.
+ */
+export async function ingestPilotRunTrace(input: {
+  runId: string;
+  agentId: string;
+  artifactId: string | null | undefined;
+  engineExecute: Engine;
+  engineVerify: Engine;
+  status: 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | 'AWAITING_REVIEW';
+  events: NormalizedRunEvent[];
+}): Promise<void> {
+  try {
+    const { runId, agentId, artifactId, engineExecute, engineVerify, status, events } =
+      input;
+    if (!runId || !agentId) return;
+    if (status === 'AWAITING_REVIEW') return;
+
+    const trajectory = mapPilotEventsToTrajectory(events ?? []);
+    const traceOutcome = status === 'SUCCEEDED' ? 'SUCCEEDED' : 'FAILED';
+
+    // Idempotent: existing row for runId → silent no-op (also covers P2002).
+    const existing = await prisma.runTrace.findUnique({
+      where: { runId },
+      select: { id: true },
+    });
+    if (existing) return;
+
+    const id = ulid();
+    try {
+      await prisma.runTrace.create({
+        data: {
+          id,
+          agentId,
+          runId,
+          selectedSkills: [] as unknown as Prisma.InputJsonValue,
+          trajectory: trajectory as unknown as Prisma.InputJsonValue,
+          verifierFeedback: [] as unknown as Prisma.InputJsonValue,
+          outcome: traceOutcome,
+          trajectoryKey: null,
+          engineExecute,
+          engineVerify,
+          runtimeKind: 'LANGFLOW',
+          artifactId: artifactId ?? null,
+        },
+      });
+    } catch (e: unknown) {
+      const code =
+        e && typeof e === 'object' && 'code' in e
+          ? String((e as { code: unknown }).code)
+          : '';
+      if (code !== 'P2002') {
+        console.warn(
+          '[trace] ingestPilotRunTrace create failed',
+          e instanceof Error ? e.message : e,
+        );
+      }
+      // P2002 → silent no-op (idempotent race)
+    }
+  } catch (e) {
+    console.warn(
+      '[trace] ingestPilotRunTrace failed (non-fatal)',
       e instanceof Error ? e.message : e,
     );
   }

@@ -18,7 +18,7 @@
 - `org/` — 組織圖與權限（OWNER/TRAINER/MEMBER；Kevin 為 OWNER 最高管理）。
 - `audit/` — 中文稽核紀錄。
 - `proposals/` — FDE 提案審核。
-- `agent-builds/` — **獨立 Agent 建置入口**；同一組登入、單一側欄。FDE 看全部，MEMBER 只看本人。對話／版本由背景自動更新；可送交 FDE、建立 PAUSED + `AWAITING_USER_CONFIRM` 待測草稿、提交測試資料並呼叫真實跨模型隔離試跑；不提供最終自動啟用。
+- `agent-builds/` — **獨立 Agent 建置治理入口**；同一組登入、單一側欄。FDE 看全部，MEMBER 只看本人。訓練、Shadow Agent 試教與除錯全部留在 Claude MCP 對話；本頁只顯示版本、每回合反思、送審狀態與 FDE 正式放行，不再提供 End User 測試表單。
 - `admin/devices/` — 多裝置執行平台管理。
 
 ## 三表面（Agent Workbench + Builder Portal）

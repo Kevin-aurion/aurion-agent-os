@@ -13,6 +13,7 @@ import { mcpOAuthRoutes } from './routes/mcpoauth.js';
 import { agentRoutes } from './routes/agents.js';
 import { skillRoutes } from './routes/skills.js';
 import { evalRoutes } from './routes/evals.js';
+import { runtimeRoutes } from './routes/runtime.js';
 import { workflowRoutes } from './routes/workflows.js';
 import { runRoutes } from './routes/runs.js';
 import { approvalRoutes } from './routes/approvals.js';
@@ -35,11 +36,16 @@ import { devicesRoutes } from './routes/devices.js';
 import { deviceRoutes } from './routes/device.js';
 import { integrationRoutes } from './integrations/routes.js';
 import { channelRoutes } from './channels/routes.js';
+import { modelGatewayRoutes } from './routes/modelgateway.js';
+import { knowledgeGatewayRoutes } from './routes/knowledgegateway.js';
+import { knowledgePilotRoutes } from './routes/knowledgepilot.js';
+import { graphRoutes } from './routes/graph.js';
 
 const featureRoutes = [
   agentRoutes,
   skillRoutes,
   evalRoutes,
+  runtimeRoutes,
   workflowRoutes,
   runRoutes,
   approvalRoutes,
@@ -62,6 +68,10 @@ const featureRoutes = [
   deviceRoutes,
   integrationRoutes,
   channelRoutes,
+  modelGatewayRoutes,
+  knowledgeGatewayRoutes,
+  knowledgePilotRoutes,
+  graphRoutes,
 ] as const;
 
 async function main() {
@@ -129,6 +139,14 @@ async function registerFeatureRoutes(app: import('fastify').FastifyInstance) {
   for (const routes of featureRoutes) {
     await app.register(routes);
   }
+
+  // Ticket 22: the web client + Next rewrite reach the backend under `/api/*`;
+  // re-register the FDE registry route groups (MCP + A2A) with that prefix so
+  // the dashboard panels resolve. Bare `/mcp/*` and `/a2a/*` stay as the
+  // public Remote-MCP-era contract; both registrations share the exact same
+  // handlers and guard functions.
+  await app.register(mcpRoutes, { prefix: '/api' });
+  await app.register(a2aRoutes, { prefix: '/api' });
 }
 
 async function startSchedulerIfPresent() {

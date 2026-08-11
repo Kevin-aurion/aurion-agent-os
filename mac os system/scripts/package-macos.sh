@@ -33,7 +33,7 @@ CLEAN="$ROOT/build/pkg-clean"
 PKGDIR="$ROOT/build/pkg-flat"
 RELEASE_ENTS="$ROOT/aios-system/aios-system.Release.entitlements"
 VERSION="1.0"
-IDENTIFIER="aurion.aios-system"
+IDENTIFIER="lazyoffice.aios-system"
 INSTALL_LOCATION="/Applications"
 SIGN_IDENTITY=""
 

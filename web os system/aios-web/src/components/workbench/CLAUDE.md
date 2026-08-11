@@ -9,6 +9,7 @@ Phase 1 從員工詳情訓練／對話分頁抽出的可重用塊，供 `/work` 
 | `VoiceInput.tsx` | 麥克風 → `/api/voice/transcribe`（OpenAI Whisper） |
 | `SkillDraftCard.tsx` | 技能草稿卡：能力／資料讀寫／外部呼叫／不可逆／風險；FDE 確認掛載、MEMBER 送提案 |
 | `ChatRunTimeline.tsx` | 使用者訊息下的 `run.*` 步驟時間線 |
+| `SkillPalettePanel.tsx` | 唯讀技能／授權／排程面板，業務語言，無 mutation 控制 |
 
 ## Agent Builder（業務語言）
 - 入口：`/work` 左欄「建立 AI 員工」（不需先選 Agent）；`?mode=builder`。
@@ -28,3 +29,7 @@ Phase 1 從員工詳情訓練／對話分頁抽出的可重用塊，供 `/work` 
 - 前臺「教它新工作」可用「錄製操作示範」；開始前須確認隱私提醒與示範目的。錄製工作階段綁定開始時選定的 Agent，錯誤原樣顯示，不假成功。
 - 後端 `requireTrainer` / 擁有者隔離仍是權限真實來源。
 - `run.step` 用 **`phase`**（非 status）；終態 phase 停轉圈。
+- teach 四入口：打字／語音／上傳教學文件／錄製操作示範；上傳走 `train/message` 產惰性草稿，**不**走 trainer-only 的 skills/upload。
+- 錄製跨 Agent 匯入：前端 `recordingImportTarget` 會先拒絕（不 stop、不匯入），後端仍是最終守門。
+- train 失敗的錯誤泡泡可帶「重試」：原訊息保留在 transcript，用同一 payload 重送。
+- 排程與授權在工作台唯讀；變更入口只在 FDE 管理中心（後端 requireTrainer）。

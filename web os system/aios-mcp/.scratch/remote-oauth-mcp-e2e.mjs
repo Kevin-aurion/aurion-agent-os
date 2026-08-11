@@ -2,8 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-const MCP_URL = process.env.TEST_MCP_URL || 'https://aurion-aios-mcp.lazyoffice.app/mcp';
-const OAUTH_ORIGIN = process.env.TEST_OAUTH_ORIGIN || 'https://aurion-aios-mcp.lazyoffice.app';
+const MCP_URL = process.env.TEST_MCP_URL || 'https://aios-mcp.lazyoffice.app/mcp';
+const OAUTH_ORIGIN = process.env.TEST_OAUTH_ORIGIN || 'https://aios-mcp.lazyoffice.app';
 const email = process.env.AIOS_MCP_EMAIL;
 const password = process.env.AIOS_MCP_PASSWORD;
 if (!email || !password) throw new Error('AIOS_MCP_EMAIL/AIOS_MCP_PASSWORD are required');
@@ -37,7 +37,7 @@ const registration = await asJson(`${OAUTH_ORIGIN}/oauth/register`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({
-    client_name: 'Aurion Remote MCP E2E',
+    client_name: 'Lazyoffice Remote MCP E2E',
     redirect_uris: [callback],
     grant_types: ['authorization_code', 'refresh_token'],
     token_endpoint_auth_method: 'none',
@@ -90,7 +90,7 @@ check(token.response.status === 200, `token exchange failed: ${JSON.stringify(to
 const transport = new StreamableHTTPClientTransport(new URL(MCP_URL), {
   requestInit: { headers: { authorization: `Bearer ${token.body.access_token}` } },
 });
-const mcp = new Client({ name: 'aurion-remote-e2e', version: '1.0.0' });
+const mcp = new Client({ name: 'lazyoffice-remote-e2e', version: '1.0.0' });
 await mcp.connect(transport);
 const tools = await mcp.listTools();
 check(tools.tools.length === 12, `expected 12 builder tools, received ${tools.tools.length}`);

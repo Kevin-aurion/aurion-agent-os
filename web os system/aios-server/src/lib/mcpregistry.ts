@@ -70,10 +70,15 @@ export function assertLoopbackUrl(url: string): URL {
   try {
     parsed = new URL(url);
   } catch {
-    throw errors.badRequest(`invalid url: ${url}`);
+    // Constant message — never echo untrusted URL (may contain userinfo credentials).
+    throw errors.badRequest('invalid url');
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw errors.badRequest(`url protocol must be http or https, got ${parsed.protocol}`);
+  }
+  // Ticket 25: reject embedded username/password (userinfo). Never reflect credentials.
+  if (parsed.username !== '' || parsed.password !== '') {
+    throw errors.badRequest('url must not contain username or password');
   }
   const host = parsed.hostname;
   // Exact string compare — reject 127.0.0.1.evil.com, 0.0.0.0, 10.x, etc.

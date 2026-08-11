@@ -9,23 +9,24 @@ import { hashPassword } from '../lib/auth.js';
 import { audit } from '../lib/audit.js';
 import { prisma } from '../lib/db.js';
 
-const accounts = [
-  { email: 'vincent@aurion-group.com', displayName: 'Vincent' },
-  { email: 'lauren@aurion-group.com', displayName: 'Lauren' },
-  { email: 'kate@aurion-group.com', displayName: 'Kate' },
-] as const;
+const customerEmailDomain = process.env.AIOS_CUSTOMER_EMAIL_DOMAIN?.trim() || 'lazyoffice.app';
+const ownerEmail = process.env.AIOS_OWNER_EMAIL?.trim() || 'fde@aios.test';
+const accounts = ['Vincent', 'Lauren', 'Kate'].map((displayName) => ({
+  email: `${displayName.toLowerCase()}@${customerEmailDomain}`,
+  displayName,
+}));
 
 const handoffPath = path.resolve(
   process.env.AIOS_ACCOUNT_HANDOFF_PATH?.trim()
-    || path.join(homedir(), 'Documents', 'Aurion AIOS Private', '客戶帳號-2026-08-08.txt'),
+    || path.join(homedir(), 'Documents', 'Lazyoffice AIOS Private', '客戶帳號-2026-08-08.txt'),
 );
 const tempPath = `${handoffPath}.${process.pid}.tmp`;
 const loginUrl = process.env.AIOS_PUBLIC_LOGIN_URL?.trim()
-  || 'https://aurion-aios.lazyoffice.app/login';
+  || 'https://aios-new.lazyoffice.app/login';
 
 async function main() {
   const owner = await prisma.user.findFirst({
-    where: { email: 'kevin@aurion-group.com', deletedAt: null, role: 'OWNER' },
+    where: { email: ownerEmail, deletedAt: null, role: 'OWNER' },
     select: { id: true, email: true, role: true },
   });
   if (!owner) throw new Error('Kevin OWNER account not found; refusing to provision');
@@ -79,7 +80,7 @@ async function main() {
   }
 
   const handoff = [
-    'Aurion AIOS 客戶帳號（機密）',
+    'Lazyoffice AIOS 客戶帳號（機密）',
     `建立時間：${new Date().toISOString()}`,
     `登入網址：${loginUrl}`,
     '',

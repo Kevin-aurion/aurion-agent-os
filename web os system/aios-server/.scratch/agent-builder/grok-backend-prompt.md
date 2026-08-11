@@ -1,8 +1,8 @@
 Continue the Agent Builder implementation. The prior oversized turn was interrupted
 before it edited files. Implement BACKEND ONLY now.
 
-Read `/Users/kevin/Documents/aurion/web os system/aios-server/.scratch/agent-builder/spec.md`
-and `/Users/kevin/Documents/aurion/AGENTS.md`, then make these concrete changes in
+Read `/Users/kevin/Documents/lazyoffice/web os system/aios-server/.scratch/agent-builder/spec.md`
+and `/Users/kevin/Documents/lazyoffice/AGENTS.md`, then make these concrete changes in
 `web os system/aios-server`:
 
 1. Add durable Prisma `AgentBuildSession` plus a multiline status enum and relation

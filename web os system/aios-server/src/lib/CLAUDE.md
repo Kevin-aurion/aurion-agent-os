@@ -13,8 +13,8 @@
 - `skilltraining.ts` — 口述草稿；`skillId` 必須已 `AgentSkill` 連結到該 agent（fail-closed）。
 - `agentbuilder.ts` — Agent Builder 對話管線：Grill 決策樹每輪自行選擇最重要分支（`fallbackFocus` 只供離線退路，不控制順序），提出一題＋具體建議；可重訪／推翻舊決策。使用者明確要求送審才進 `PLAN_READY`。能力計畫、authorize／test／finalize 與原治理閘不變。
 - `agentbuilderevolution.ts` — Agent Builder 演進管線：每一輪對話／檔案新增 append-only `AgentBuildIteration`，由背景 worker 編譯 decision graph 與 shadow Harness（identity／skills／memory／tools／policies／testIdeas）。READY 僅代表草稿完成，**不得**建立或改動 live Agent/Skill；FDE authorize 時才把最新 READY snapshot 編譯為 PAUSED Agent + `AWAITING_USER_CONFIRM` 技能。所有輸入、輸出、錯誤落地前 deep-redact。
-- `externalagentbuilder.ts` — ChatGPT／Claude／Codex／Cursor ingress。無 lifecycle hook 的客戶端可用 `external-snapshot` 可重試地同步一組對話與完整 shadow draft；Claude Code `UserPromptSubmit` 會保守辨識明確建置意圖、自動開案／續接、保存 user turn 並排入背景 iteration，`Stop` 補存 assistant turn 與漏接 user turn且不阻擋停止。續接前先用 `createdBy` 做帳號隔離的 Agent 清單／名稱比對；無法唯一判斷時只回候選、不得新建。Agent Builder 內部試跑與 verifier prompt 必須略過 hooks，避免遞迴建員工。
-- `agentbuilder.ts` — 使用者標記為 Template 的上傳內容，在 FDE 建置 inert Skill 草稿時另存於 `assets/templates/` 並登錄 `Skill.assets`；解析型二進位文件使用 `.parsed.md`，不得假裝保存了原始 binary。失敗補償需移除整個本次新建的 Skill 目錄。
+- `externalagentbuilder.ts` — ChatGPT／Claude／Codex／Cursor ingress。無 lifecycle hook 的客戶端可用 `external-snapshot` 可重試地同步一組對話與完整 shadow draft；Claude Code `UserPromptSubmit` 保存 user turn，`Stop` 補存完整 pair 並排入冪等 `reflection` iteration。反思只更新 Shadow Skill／規則／測試，不修改 live rows。
+- `builderconversation.ts` — Claude MCP 對話式 Shadow Agent 試教。只載入最新 READY Harness，以 safe mode 且全面禁用工具執行一則 End User 輸入；回覆與輸入先 deep-redact，再保存為反思證據。不得用於待審／正式版本，也不得宣稱外部動作成功。
 - `mcpoauth.ts` — Remote MCP OAuth 的 fail-closed 純邏輯：簽署 DCR client id 與短效 authorize ticket、限制 Claude／ChatGPT hosted callback 或 RFC 8252 loopback redirect、PKCE S256、固定且不允許額外 scope、resource indicator 與 JWT audience 精確綁定。簽發 token 一律 MEMBER-effective；`guard.ts` 再把 scoped token 限制在 `/api/agent-builder/*` 與 `/api/auth/me`，且禁止 FDE、一般 WS 與 integrations OAuth。
 - `skillgate.ts` — `confirmAwaitingSkill` / `assertCodexGateForLinkedAgents`（RECORDED/COMPUTER_CONTROL → CODEX）。
 - `changeproposal.ts` — 提案佇列。SKILL：`action=confirm_skill`（伺服器確認，不信 client content）或 `contentMd`（SkillVersion）。

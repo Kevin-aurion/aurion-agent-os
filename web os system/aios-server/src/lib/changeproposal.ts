@@ -134,14 +134,13 @@ export async function listPendingProposals(): Promise<PendingProposal[]> {
   }));
 }
 
-function parseSkillChange(raw: unknown): { action?: string; contentMd?: string; guidance?: string; name?: string } {
+function parseSkillChange(raw: unknown): { action?: string; contentMd?: string; guidance?: string } {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
   const o = raw as Record<string, unknown>;
   return {
     action: typeof o.action === 'string' ? o.action : undefined,
     contentMd: typeof o.contentMd === 'string' ? o.contentMd : undefined,
     guidance: typeof o.guidance === 'string' ? o.guidance : undefined,
-    name: typeof o.name === 'string' ? o.name : undefined,
   };
 }
 
@@ -338,44 +337,8 @@ export async function approveProposal(
       throw errors.badRequest('AGENT proposal targetId must match agentId');
     }
     const change = parseSkillChange(existing.proposedChange);
-    if (change.action === 'rename') {
-      const name = redactSecrets(change.name ?? '').trim();
-      if (name.length < 2 || name.length > 120) {
-        throw errors.badRequest('AGENT rename requires a name between 2 and 120 characters');
-      }
-      const result = await prisma.$transaction(async (tx) => {
-        const claimed = await tx.changeProposal.updateMany({
-          where: { id, status: 'PENDING' },
-          data: { status: 'APPROVED', decidedBy, decidedAt: new Date() },
-        });
-        if (claimed.count !== 1) throw errors.conflict('Proposal already decided');
-        const agent = await tx.agent.findFirst({
-          where: { id: existing.agentId, deletedAt: null, systemManaged: false },
-        });
-        if (!agent) throw errors.notFound('Editable Agent not found');
-        const nextPrompt = agent.rolePrompt.replace(
-          new RegExp(`你是[「『“\"]${agent.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[」』”\"]`),
-          `你是「${name}」`,
-        );
-        await tx.agent.update({
-          where: { id: agent.id },
-          data: { name, rolePrompt: nextPrompt },
-        });
-        return tx.changeProposal.findUniqueOrThrow({ where: { id } });
-      });
-      await audit(decidedBy, 'proposal.approved', 'ChangeProposal', id, {
-        agentId: existing.agentId,
-        targetType: existing.targetType,
-        targetId: existing.targetId,
-        resultingVersionId: null,
-        source: existing.source,
-        action: 'rename',
-        name,
-      });
-      return { proposal: result };
-    }
     if (change.action !== 'append_role_guidance') {
-      throw errors.badRequest('AGENT proposal requires proposedChange.action=append_role_guidance|rename');
+      throw errors.badRequest('AGENT proposal requires proposedChange.action=append_role_guidance');
     }
     const guidance = approvedGuidance(change.guidance);
     const result = await prisma.$transaction(async (tx) => {

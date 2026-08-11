@@ -1,8 +1,8 @@
 Implement FRONTEND ONLY for the already-created Agent Builder backend.
 
 Read:
-- `/Users/kevin/Documents/aurion/web os system/aios-server/.scratch/agent-builder/spec.md`
-- `/Users/kevin/Documents/aurion/AGENTS.md`
+- `/Users/kevin/Documents/lazyoffice/web os system/aios-server/.scratch/agent-builder/spec.md`
+- `/Users/kevin/Documents/lazyoffice/AGENTS.md`
 - `web os system/aios-server/src/routes/agentbuilder.ts`
 - exported DTOs in `web os system/aios-server/src/lib/agentbuilder.ts`
 - current `web os system/aios-web/src/app/work/page.tsx`, workbench components/types,

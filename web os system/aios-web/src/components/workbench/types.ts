@@ -155,7 +155,13 @@ export type TeachChatMsg =
       skills: AgentFlows['skills'];
       workflows: AgentFlows['workflows'];
     }
-  | { id: string; kind: 'error'; text: string };
+  | {
+      id: string;
+      kind: 'error';
+      text: string;
+      /** Present when train/message failed and the user may resend the same payload. */
+      retry?: { message: string; display?: string };
+    };
 
 export function normalizeUnderstanding(raw: unknown): SkillUnderstanding | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -273,6 +279,7 @@ export type BuilderHarnessSnapshot = {
   tools: Array<{ name: string; purpose: string; status: 'AVAILABLE' | 'NEEDS_FDE' | 'NOT_NEEDED' }>;
   policies: { allowed: string[]; requiresApproval: string[]; forbidden: string[] };
   testIdeas: Array<{ name: string; input: string; expected: string }>;
+  testInputRequirements: BuilderTestInputRequirement[];
   workflows?: Array<{
     name: string;
     description: string;
@@ -291,6 +298,27 @@ export type BuilderHarnessSnapshot = {
     externalEventId: string;
     syncedAt: string;
   };
+};
+
+export type BuilderTestInputRequirement = {
+  key: string;
+  label: string;
+  description: string;
+  kind: 'FILE' | 'TEXT';
+  required: boolean;
+  acceptedExtensions: string[];
+  minFiles: number;
+  maxFiles: number;
+};
+
+export type BuilderTestInputStatus = {
+  requirements: Array<BuilderTestInputRequirement & {
+    suppliedCount: number;
+    supplied: boolean;
+    files: Array<{ id: string; name: string; mimeType: string; size: number; uploadedAt: string }>;
+  }>;
+  complete: boolean;
+  missingRequiredKeys: string[];
 };
 
 export type BuilderIteration = {
@@ -360,6 +388,28 @@ export type BuilderTestResult = {
   detail?: string;
 };
 
+export type BuilderTestProgress = {
+  runId: string;
+  status: string;
+  stage: 'QUEUED' | 'EXECUTING' | 'VERIFYING' | 'REWORKING' | 'COMPLETED';
+  currentRound: number;
+  maxRounds: number;
+  startedAt: string;
+  finishedAt: string | null;
+  deadlineAt: string;
+  elapsedSeconds: number;
+  latestUpdateAt: string;
+  latestMessage: string;
+  rounds: Array<{
+    round: number;
+    status: string;
+    approved: boolean | null;
+    summary: string;
+    startedAt: string;
+    endedAt: string | null;
+  }>;
+};
+
 export type BuilderTranscriptEntry = {
   role: 'user' | 'assistant' | 'system' | string;
   content: string;
@@ -378,7 +428,9 @@ export type BuilderSession = {
   builtAgentId: string | null;
   draftSkillIds: string[];
   hasTestData: boolean;
+  testInputStatus: BuilderTestInputStatus;
   testResult: BuilderTestResult | null;
+  testProgress: BuilderTestProgress | null;
   lastRunId: string | null;
   lastAssistantMessage: string | null;
   draftState: {
