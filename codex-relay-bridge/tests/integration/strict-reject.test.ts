@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  LAZYOFFICE_PROJECT,
+  AURION_PROJECT,
   createTestRelay,
   readJsonLinesAsync,
   waitFor,
@@ -42,7 +42,7 @@ describe("strict-reject", () => {
 
     try {
       const started = await relay.startTask({
-        project: LAZYOFFICE_PROJECT,
+        project: AURION_PROJECT,
         message: "strict",
         idempotency_key: `key-strict-${Date.now()}`,
       });

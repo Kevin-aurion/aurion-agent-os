@@ -1,11 +1,11 @@
-You are the implementation engineer for Lazyoffice AIOS. Implement the complete Agent
+You are the implementation engineer for Aurion AIOS. Implement the complete Agent
 Builder vertical slice described in:
 
-- /Users/kevin/Documents/lazyoffice/web os system/aios-server/.scratch/agent-builder/spec.md
+- /Users/kevin/Documents/aurion/web os system/aios-server/.scratch/agent-builder/spec.md
 
 Before editing, fully read:
 
-- /Users/kevin/Documents/lazyoffice/AGENTS.md
+- /Users/kevin/Documents/aurion/AGENTS.md
 - relevant module CLAUDE.md files under aios-server and aios-web
 - current Prisma schema, migrations, routes/agents.ts, agents/compose.ts,
   lib/skilltraining.ts, lib/changeproposal.ts, lib/eval.ts, engine/runner.ts,

@@ -24,7 +24,7 @@
 
 ## 2. 目錄與模組地圖
 
-### 2.1 頂層目錄（`/Users/kevin/Documents/lazyoffice/`）
+### 2.1 頂層目錄（`/Users/kevin/Documents/aurion/`）
 
 | 目錄 | 屬性 | 說明 |
 |---|---|---|
@@ -383,7 +383,7 @@ fail-closed 判決 oracle 三層收斂｜`BudgetExceededError` 永不被吞｜be
 ## 附：關鍵檔案絕對路徑速查
 
 ```
-後端根：      /Users/kevin/Documents/lazyoffice/web os system/aios-server/
+後端根：      /Users/kevin/Documents/aurion/web os system/aios-server/
   進入點：    src/index.ts
   設定：      src/config.ts
   引擎核心：  src/engine/runner.ts（runAgent/compileManifest/runDoStep）
@@ -396,9 +396,9 @@ fail-closed 判決 oracle 三層收斂｜`BudgetExceededError` 永不被吞｜be
   排程：      src/scheduler/index.ts
   記憶：      src/memory/memoryService.ts、redactor.ts、embedding.ts
   耐久：      src/temporal/{client,worker,workflows,activities}.ts
-基建：        /Users/kevin/Documents/lazyoffice/web os system/docker-compose.yml
-前端根：      /Users/kevin/Documents/lazyoffice/web os system/aios-web/
-macOS App：   /Users/kevin/Documents/lazyoffice/mac os system/
+基建：        /Users/kevin/Documents/aurion/web os system/docker-compose.yml
+前端根：      /Users/kevin/Documents/aurion/web os system/aios-web/
+macOS App：   /Users/kevin/Documents/aurion/mac os system/
 ```
 
 

@@ -1,6 +1,6 @@
 # Task: align MCP stdio E2E with the current non-blocking Stop reflection contract
 
-Repository: `/Users/kaikaiwu/Desktop/LazyOffice/AI OS Langflow`
+Repository: `/Users/kaikaiwu/Desktop/Aurion/AI OS Langflow`
 
 The merge is in progress. Do not commit, push, reset, abort, or rewrite unrelated files.
 

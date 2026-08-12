@@ -4,14 +4,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const defaultTarget = path.resolve(packageRoot, '../../..', 'lazyoffice-aios-plugin-marketplace');
-const pluginName = 'lazyoffice-aios-builder';
-const marketplaceName = 'lazyoffice-aios-plugin-marketplace';
-const marketplaceDisplayName = 'Lazyoffice AIOS';
-const markerName = '.lazyoffice-aios-marketplace';
+const defaultTarget = path.resolve(packageRoot, '../../..', 'aurion-aios-plugin-marketplace');
+const pluginName = 'aurion-aios-builder';
+const marketplaceName = 'aurion-aios-plugin-marketplace';
+const marketplaceDisplayName = 'Aurion AIOS';
+const markerName = '.aurion-aios-marketplace';
 const expectedMcpUrl = 'https://aios-mcp.lazyoffice.app/mcp';
 const marketplaceRepository = process.env.AIOS_MARKETPLACE_REPOSITORY?.trim()
-  || 'inventra/lazyoffice-aios-plugin-marketplace';
+  || 'Kevin-aurion/aurion-aios-plugin-marketplace';
 
 function argValue(name) {
   const index = process.argv.indexOf(name);
@@ -128,9 +128,9 @@ await writeFile(
 );
 await writeFile(
   path.join(targetRoot, 'README.md'),
-  `# Lazyoffice AIOS Plugin Marketplace
+  `# Aurion AIOS Plugin Marketplace
 
-Shared Plugin marketplace for Lazyoffice AIOS customers.
+Shared Plugin marketplace for Aurion AIOS customers.
 
 **One private GitHub repository** (\`${marketplaceRepository}\`) supports **ChatGPT Desktop Plugins**, **Codex CLI**, and **Claude**. Claude reads \`.claude-plugin/marketplace.json\`; ChatGPT Desktop and Codex CLI read \`.agents/plugins/marketplace.json\`. Both catalogs install the same plugin: \`${pluginName}\`.
 

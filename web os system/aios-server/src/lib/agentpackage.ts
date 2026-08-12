@@ -12,7 +12,7 @@ import { errors } from './http.js';
 import { assertInsideRoot, sanitizeSegment } from './safepath.js';
 import { createZipArchive, type ZipEntry } from './ziparchive.js';
 
-const FORMAT_KIND = 'lazyoffice.aios.agent-package';
+const FORMAT_KIND = 'aurion.aios.agent-package';
 const SCHEMA_VERSION = '1.0';
 const MAX_TEMPLATE_FILES = 100;
 const MAX_TEMPLATE_BYTES = 20 * 1024 * 1024;
@@ -26,7 +26,7 @@ export interface AgentPackageManifest {
   packageId: string;
   exportedAt: string;
   source: {
-    product: 'LazyOffice AIOS';
+    product: 'Aurion AIOS';
     builderSessionId: string;
     agentId: string;
   };
@@ -101,7 +101,7 @@ function packageSchema(): JsonObject {
   return {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
     $id: 'https://aios-new.lazyoffice.app/schemas/agent-package-v1.json',
-    title: 'LazyOffice AIOS Portable Agent Package',
+    title: 'Aurion AIOS Portable Agent Package',
     type: 'object',
     required: ['kind', 'schemaVersion', 'packageId', 'exportedAt', 'source', 'agent', 'skills', 'workflows', 'memory', 'tests', 'governance', 'checksums'],
     properties: {
@@ -145,7 +145,7 @@ function assertRelativeAssetPath(value: string): string {
 function readme(agentName: string): string {
   return `# ${agentName} — Portable Agent Package
 
-This ZIP is a portable, review-first export from LazyOffice AIOS.
+This ZIP is a portable, review-first export from Aurion AIOS.
 
 ## Start here
 
@@ -416,7 +416,7 @@ export async function buildAgentPackage(opts: {
     kind: FORMAT_KIND,
     schemaVersion: SCHEMA_VERSION,
     exportedAt,
-    source: { product: 'LazyOffice AIOS', builderSessionId: session.id, agentId: agent.id },
+    source: { product: 'Aurion AIOS', builderSessionId: session.id, agentId: agent.id },
     agent: {
       id: agent.id,
       slug: agent.slug,

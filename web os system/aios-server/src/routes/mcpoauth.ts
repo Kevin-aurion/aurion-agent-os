@@ -55,14 +55,14 @@ function loginPage(opts: { ticket: string; clientName: string; error?: string })
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>連接 Lazyoffice AIOS</title>
+  <title>連接 Aurion AIOS</title>
   <style>
     :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#090d15;color:#e8ecf6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.card{width:min(440px,calc(100vw - 32px));padding:32px;border:1px solid #293246;border-radius:18px;background:#121824;box-shadow:0 24px 80px #0008}.brand{display:flex;gap:12px;align-items:center;margin-bottom:24px}.logo{display:grid;place-items:center;width:44px;height:44px;border-radius:12px;background:#7b83ff;font-weight:800}.muted{color:#9aa5ba;line-height:1.55}h1{font-size:24px;margin:0 0 8px}label{display:block;margin:18px 0 7px;font-size:14px;color:#cbd3e2}input{width:100%;padding:13px 14px;border:1px solid #354057;border-radius:10px;background:#0b1019;color:#fff;font-size:16px}button{width:100%;margin-top:22px;padding:13px;border:0;border-radius:10px;background:#7b83ff;color:#fff;font-size:16px;font-weight:700;cursor:pointer}.notice{margin-top:18px;padding:12px 14px;border-radius:10px;background:#182132;color:#b8c3d8;font-size:13px;line-height:1.5}.error{margin:16px 0 0;padding:11px 13px;border:1px solid #8b3141;border-radius:10px;background:#371923;color:#ffb3c0}
   </style>
 </head>
 <body>
   <main class="card">
-    <div class="brand"><div class="logo">L</div><div><strong>Lazyoffice AIOS</strong><div class="muted">Remote MCP Connector</div></div></div>
+    <div class="brand"><div class="logo">A</div><div><strong>Aurion AIOS</strong><div class="muted">Remote MCP Connector</div></div></div>
     <h1>授權 AI 助理建置 AI 員工</h1>
     <p class="muted">「${escapeHtml(opts.clientName)}」要求把 Agent 建置對話、Skill 草稿與測試資料同步到您的 AIOS 帳號。</p>
     ${error}

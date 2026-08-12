@@ -9,7 +9,7 @@ import { hashPassword } from '../lib/auth.js';
 import { audit } from '../lib/audit.js';
 import { prisma } from '../lib/db.js';
 
-const customerEmailDomain = process.env.AIOS_CUSTOMER_EMAIL_DOMAIN?.trim() || 'lazyoffice.app';
+const customerEmailDomain = process.env.AIOS_CUSTOMER_EMAIL_DOMAIN?.trim() || 'aurion-group.com';
 const ownerEmail = process.env.AIOS_OWNER_EMAIL?.trim() || 'fde@aios.test';
 const accounts = ['Vincent', 'Lauren', 'Kate'].map((displayName) => ({
   email: `${displayName.toLowerCase()}@${customerEmailDomain}`,
@@ -18,7 +18,7 @@ const accounts = ['Vincent', 'Lauren', 'Kate'].map((displayName) => ({
 
 const handoffPath = path.resolve(
   process.env.AIOS_ACCOUNT_HANDOFF_PATH?.trim()
-    || path.join(homedir(), 'Documents', 'Lazyoffice AIOS Private', '客戶帳號-2026-08-08.txt'),
+    || path.join(homedir(), 'Documents', 'Aurion AIOS Private', '客戶帳號-2026-08-08.txt'),
 );
 const tempPath = `${handoffPath}.${process.pid}.tmp`;
 const loginUrl = process.env.AIOS_PUBLIC_LOGIN_URL?.trim()
@@ -80,7 +80,7 @@ async function main() {
   }
 
   const handoff = [
-    'Lazyoffice AIOS 客戶帳號（機密）',
+    'Aurion AIOS 客戶帳號（機密）',
     `建立時間：${new Date().toISOString()}`,
     `登入網址：${loginUrl}`,
     '',

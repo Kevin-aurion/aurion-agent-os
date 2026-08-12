@@ -13,7 +13,7 @@ export const meta = {
   ],
 }
 
-const ROOT = '/Users/kaikaiwu/Desktop/LazyOffice/AI OS Langflow'
+const ROOT = '/Users/kaikaiwu/Desktop/Aurion/AI OS Langflow'
 const SERVER = ROOT + '/web os system/aios-server'
 const WEB = ROOT + '/web os system/aios-web'
 const MCP = ROOT + '/web os system/aios-mcp'

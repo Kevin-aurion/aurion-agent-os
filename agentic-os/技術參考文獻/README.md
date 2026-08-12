@@ -1,4 +1,4 @@
-# Lazyoffice Agentic OS — 技術參考文獻（L0–L9 開源選型）
+# Aurion Agentic OS — 技術參考文獻（L0–L9 開源選型）
 
 > 來源：WAIC 2026 開發藍圖（Codex+Grok 雙軌查證，逐一核對 LICENSE 原檔）＋ 本輪 WebSearch 即時查驗。所有效能數字均為廠商/第三方單方宣稱，寫入正式 SLO 前須自有硬體重測。
 

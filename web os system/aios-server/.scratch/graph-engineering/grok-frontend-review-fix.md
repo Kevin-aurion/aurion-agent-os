@@ -1,6 +1,6 @@
 # Graph Workbench release-blocker fixes
 
-You are the implementation model for Lazyoffice AIOS. Work only in `web os system/aios-studio/` and the existing graph-engineering scratch tests. Do not touch backend code or unrelated user WIP. Follow the root AGENTS.md red lines. Implement and test these fixes; do not merely describe them.
+You are the implementation model for Aurion AIOS. Work only in `web os system/aios-studio/` and the existing graph-engineering scratch tests. Do not touch backend code or unrelated user WIP. Follow the root AGENTS.md red lines. Implement and test these fixes; do not merely describe them.
 
 ## Release blockers
 

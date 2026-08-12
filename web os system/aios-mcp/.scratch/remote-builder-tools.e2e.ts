@@ -19,7 +19,7 @@ const token = await signAccess({
   scope: 'aios:agent-builder',
   audience: serverConfig.remoteMcp.resourceUrl,
 });
-const client = new Client({ name: 'lazyoffice-remote-e2e', version: '1.0.0' });
+const client = new Client({ name: 'aurion-remote-e2e', version: '1.0.0' });
 const transport = new StreamableHTTPClientTransport(
   new URL('https://aios-mcp.lazyoffice.app/mcp'),
   { requestInit: { headers: { authorization: `Bearer ${token}` } } },

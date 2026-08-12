@@ -6,7 +6,7 @@ import {
   isAgentBuildPrompt,
   stateFileName,
   transitionLifecycle,
-} from '../../plugins/lazyoffice-aios-builder/scripts/lifecycle-hook-core.mjs';
+} from '../../plugins/aurion-aios-builder/scripts/lifecycle-hook-core.mjs';
 
 const SESSION_ID = 'claude-session-123';
 
@@ -75,14 +75,14 @@ test('successful start and prompt tools close the pre-response half of the loop'
   state = transition(state, {
     hook_event_name: 'PostToolUse',
     prompt_id: 'prompt-1',
-    tool_name: 'mcp__plugin_lazyoffice-aios-builder_lazyoffice_aios__start_agent_build',
+    tool_name: 'mcp__plugin_aurion-aios-builder_aurion_aios__start_agent_build',
     tool_input: { externalConversationId: SESSION_ID },
     tool_response: { session: { id: 'build-1' } },
   }).state;
   state = transition(state, {
     hook_event_name: 'PostToolUse',
     prompt_id: 'prompt-1',
-    tool_name: 'mcp__plugin_lazyoffice-aios-builder_lazyoffice_aios__prepare_agent_build_prompt',
+    tool_name: 'mcp__plugin_aurion-aios-builder_aurion_aios__prepare_agent_build_prompt',
     tool_input: { externalConversationId: SESSION_ID },
     tool_response: { matched: true, sessionId: 'build-1' },
   }).state;
@@ -105,7 +105,7 @@ test('captures the internal build session id from wrapped MCP responses without 
   const result = transition(pending, {
     hook_event_name: 'PostToolUse',
     prompt_id: 'prompt-1',
-    tool_name: 'mcp__claude_ai_lazyoffice_aios__start_agent_build',
+    tool_name: 'mcp__claude_ai_aurion_aios__start_agent_build',
     tool_input: { externalConversationId: SESSION_ID },
     tool_response: {
       content: [{
@@ -173,7 +173,7 @@ test('successful stop guard lets the next Stop finish and resets only turn state
   state = transition(state, {
     hook_event_name: 'PostToolUse',
     prompt_id: 'prompt-1',
-    tool_name: 'mcp__plugin_lazyoffice-aios-builder_lazyoffice_aios__guard_agent_build_stop',
+    tool_name: 'mcp__plugin_aurion-aios-builder_aurion_aios__guard_agent_build_stop',
     tool_input: { externalConversationId: SESSION_ID },
     tool_response: { matched: true, finalMessageSynced: true },
   }).state;
@@ -236,7 +236,7 @@ test('unrelated or spoofed tool calls cannot mark synchronization complete', () 
   const wrongSession = transition(pending, {
     hook_event_name: 'PostToolUse',
     prompt_id: 'prompt-1',
-    tool_name: 'mcp__plugin_lazyoffice-aios-builder_lazyoffice_aios__prepare_agent_build_prompt',
+    tool_name: 'mcp__plugin_aurion-aios-builder_aurion_aios__prepare_agent_build_prompt',
     tool_input: { externalConversationId: 'different-session' },
   });
 
@@ -252,8 +252,8 @@ test('accepts the exact Claude Desktop connector aliases observed at runtime', (
     promptRequired: true,
   };
   for (const toolName of [
-    'mcp__claude_ai_lazyoffice_aios__prepare_agent_build_prompt',
-    'mcp__claude_ai_lazyoffice_aios_2__prepare_agent_build_prompt',
+    'mcp__claude_ai_aurion_aios__prepare_agent_build_prompt',
+    'mcp__claude_ai_aurion_aios_2__prepare_agent_build_prompt',
   ]) {
     const result = transition(pending, {
       hook_event_name: 'PostToolUse',
@@ -275,7 +275,7 @@ test('auto-allows only lifecycle MCP calls for the active matching session', () 
   const allowed = transition(active, {
     hook_event_name: 'PermissionRequest',
     prompt_id: 'prompt-1',
-    tool_name: 'mcp__claude_ai_lazyoffice_aios__prepare_agent_build_prompt',
+    tool_name: 'mcp__claude_ai_aurion_aios__prepare_agent_build_prompt',
     tool_input: { externalConversationId: SESSION_ID, prompt: 'not persisted' },
   });
   const unrelated = transition(active, {
@@ -287,7 +287,7 @@ test('auto-allows only lifecycle MCP calls for the active matching session', () 
   const wrongSession = transition(active, {
     hook_event_name: 'PermissionRequest',
     prompt_id: 'prompt-1',
-    tool_name: 'mcp__claude_ai_lazyoffice_aios__prepare_agent_build_prompt',
+    tool_name: 'mcp__claude_ai_aurion_aios__prepare_agent_build_prompt',
     tool_input: { externalConversationId: 'different-session' },
   });
 
@@ -309,13 +309,13 @@ test('PreToolUse allows only required lifecycle tools before connector permissio
   const allowed = transition(active, {
     hook_event_name: 'PreToolUse',
     prompt_id: 'prompt-1',
-    tool_name: 'mcp__claude_ai_lazyoffice_aios__start_agent_build',
+    tool_name: 'mcp__claude_ai_aurion_aios__start_agent_build',
     tool_input: { externalConversationId: SESSION_ID, initialRequest: 'not persisted' },
   });
   const forbidden = transition(active, {
     hook_event_name: 'PreToolUse',
     prompt_id: 'prompt-1',
-    tool_name: 'mcp__claude_ai_lazyoffice_aios__submit_agent_build_for_fde_review',
+    tool_name: 'mcp__claude_ai_aurion_aios__submit_agent_build_for_fde_review',
     tool_input: { externalConversationId: SESSION_ID },
   });
 
@@ -342,7 +342,7 @@ test('auto-allows inert draft synchronization only for the captured internal bui
     const result = transition(active, {
       hook_event_name: 'PreToolUse',
       prompt_id: 'prompt-1',
-      tool_name: `mcp__claude_ai_lazyoffice_aios__${toolKind}`,
+      tool_name: `mcp__claude_ai_aurion_aios__${toolKind}`,
       tool_input: { sessionId: active.buildSessionId, artifact: { secret: 'not persisted' } },
     });
     assert.equal(result.output.hookSpecificOutput.permissionDecision, 'allow');
@@ -352,19 +352,19 @@ test('auto-allows inert draft synchronization only for the captured internal bui
   const wrongBuild = transition(active, {
     hook_event_name: 'PreToolUse',
     prompt_id: 'prompt-1',
-    tool_name: 'mcp__claude_ai_lazyoffice_aios__upsert_agent_build_snapshot',
+    tool_name: 'mcp__claude_ai_aurion_aios__upsert_agent_build_snapshot',
     tool_input: { sessionId: 'different-build' },
   });
   const upload = transition(active, {
     hook_event_name: 'PreToolUse',
     prompt_id: 'prompt-1',
-    tool_name: 'mcp__claude_ai_lazyoffice_aios__upload_agent_build_file',
+    tool_name: 'mcp__claude_ai_aurion_aios__upload_agent_build_file',
     tool_input: { sessionId: active.buildSessionId },
   });
   const submit = transition(active, {
     hook_event_name: 'PreToolUse',
     prompt_id: 'prompt-1',
-    tool_name: 'mcp__claude_ai_lazyoffice_aios__submit_agent_build_for_fde_review',
+    tool_name: 'mcp__claude_ai_aurion_aios__submit_agent_build_for_fde_review',
     tool_input: { sessionId: active.buildSessionId },
   });
 
@@ -383,13 +383,13 @@ test('PermissionRequest applies the same internal build-id boundary to inert dra
   const allowed = transition(active, {
     hook_event_name: 'PermissionRequest',
     prompt_id: 'prompt-1',
-    tool_name: 'mcp__claude_ai_lazyoffice_aios_2__upsert_agent_build_snapshot',
+    tool_name: 'mcp__claude_ai_aurion_aios_2__upsert_agent_build_snapshot',
     tool_input: { sessionId: 'build-verified' },
   });
   const denied = transition(active, {
     hook_event_name: 'PermissionRequest',
     prompt_id: 'prompt-1',
-    tool_name: 'mcp__claude_ai_lazyoffice_aios_2__upsert_agent_build_snapshot',
+    tool_name: 'mcp__claude_ai_aurion_aios_2__upsert_agent_build_snapshot',
     tool_input: { sessionId: 'build-spoofed' },
   });
 

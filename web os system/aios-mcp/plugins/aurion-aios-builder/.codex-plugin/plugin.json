@@ -1,0 +1,42 @@
+{
+  "name": "aurion-aios-builder",
+  "version": "1.4.0",
+  "description": "Build governed AI employees, invoke approved employees, and request FDE-reviewed schedules through Aurion AIOS.",
+  "author": {
+    "name": "Aurion",
+    "url": "https://aios-new.lazyoffice.app/agent-builds"
+  },
+  "homepage": "https://aios-new.lazyoffice.app/agent-builds",
+  "keywords": [
+    "agent-builder",
+    "ai-employee",
+    "mcp",
+    "skills",
+    "agent-runtime"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Aurion AIOS Builder",
+    "shortDescription": "Build and use governed AI employees",
+    "longDescription": "Train and debug governed AI employees conversationally in ChatGPT, Codex, Claude or Cursor while Aurion AIOS keeps every reflection and Shadow Skill version behind mandatory FDE release gates. Invoke approved employees and request FDE-reviewed schedules through the same account-scoped Remote MCP.",
+    "developerName": "Aurion",
+    "category": "Productivity",
+    "capabilities": [
+      "Adaptive agent interviews",
+      "Agent and Skill drafting",
+      "Conversational Shadow Agent coaching",
+      "Per-turn reflection and governed release",
+      "Approved Agent invocation",
+      "FDE-reviewed recurring schedules"
+    ],
+    "websiteURL": "https://aios-new.lazyoffice.app/agent-builds",
+    "defaultPrompt": [
+      "Help me build an AI employee for a recurring business task.",
+      "Continue one of my unfinished AI employee builds.",
+      "Review and improve the latest draft of my AI employee.",
+      "Use one of my approved AIOS employees to complete this task."
+    ],
+    "brandColor": "#7B83FF"
+  }
+}

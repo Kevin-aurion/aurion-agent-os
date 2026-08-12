@@ -9,13 +9,13 @@ const releasesRoot = path.join(mcpRoot, 'releases');
 const destinationRoot = path.join(webRoot, 'public', 'downloads', 'agent-builder');
 
 const files = [
-  ['lazyoffice-aios-builder-plugin.zip', path.join(releasesRoot, 'lazyoffice-aios-builder-plugin.zip')],
+  ['aurion-aios-builder-plugin.zip', path.join(releasesRoot, 'aurion-aios-builder-plugin.zip')],
   ['build-aios-agent.skill.zip', path.join(releasesRoot, 'build-aios-agent.skill.zip')],
   ['use-aios-agent.skill.zip', path.join(releasesRoot, 'use-aios-agent.skill.zip')],
-  ['lazyoffice-aios-one-click-install.zip', path.join(releasesRoot, 'lazyoffice-aios-one-click-install.zip')],
+  ['aurion-aios-one-click-install.zip', path.join(releasesRoot, 'aurion-aios-one-click-install.zip')],
   ['SHA256SUMS.txt', path.join(releasesRoot, 'SHA256SUMS.txt')],
   ['REMOTE-MCP-URL.txt', path.join(releasesRoot, 'REMOTE-MCP-URL.txt')],
-  ['aios-remote-mcp.json', path.join(mcpRoot, 'plugins', 'lazyoffice-aios-builder', '.mcp.json')],
+  ['aios-remote-mcp.json', path.join(mcpRoot, 'plugins', 'aurion-aios-builder', '.mcp.json')],
   ['AIOS-Agent-Builder-Installation-Guide.zh-TW.md', path.join(mcpRoot, 'docs', 'INSTALLATION.zh-TW.md')],
 ];
 

@@ -1,4 +1,4 @@
-# Lazyoffice Agentic OS — 重構工作區
+# Aurion Agentic OS — 重構工作區
 
 > 由 WAIC 2026 上海參展情報（L0–L9 藍圖）＋ 我們的「AI 第一性原理」融合而成的 Agentic OS 重構規劃與前端雛形。
 > 產出時間：2026-07。方法：Sonnet 精讀 → WebSearch 即時查驗 → Opus 逐層 Review（實讀 aios-server 程式碼）→ Opus 融合 Spec → Fable 架構＋派工開發前端。

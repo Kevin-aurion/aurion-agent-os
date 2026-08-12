@@ -199,7 +199,7 @@ export function formatKnowledgeAnswer(
   }));
 
   const lines = [
-    `已從 LazyOffice AI 知識庫找到 ${citations.length} 筆可追溯證據。以下內容是依命中證據整理，不包含即時網路資料：`,
+    `已從 Aurion AI 知識庫找到 ${citations.length} 筆可追溯證據。以下內容是依命中證據整理，不包含即時網路資料：`,
     '',
   ];
   for (const citation of citations) {
@@ -313,7 +313,7 @@ export async function runKnowledgePilot(
       agentId: 'shadow-ai-knowledge-collector',
       artifactId: config.knowledgePilot.flowId,
       input: {
-        schema: 'lazyoffice.knowledge-pilot.v1',
+        schema: 'aurion.knowledge-pilot.v1',
         runId,
         question,
         answer,

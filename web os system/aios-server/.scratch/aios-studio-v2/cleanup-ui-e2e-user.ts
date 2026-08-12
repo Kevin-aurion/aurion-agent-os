@@ -1,6 +1,6 @@
 import { prisma } from '../../src/lib/db.js';
 
-const email = 'studio-e2e-20260810@lazyoffice.test';
+const email = 'studio-e2e-20260810@aurion.test';
 const user = await prisma.user.findUnique({ where: { email } });
 if (user) {
   await prisma.session.deleteMany({ where: { userId: user.id } });

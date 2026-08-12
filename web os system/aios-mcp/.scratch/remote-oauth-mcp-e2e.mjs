@@ -37,7 +37,7 @@ const registration = await asJson(`${OAUTH_ORIGIN}/oauth/register`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({
-    client_name: 'Lazyoffice Remote MCP E2E',
+    client_name: 'Aurion Remote MCP E2E',
     redirect_uris: [callback],
     grant_types: ['authorization_code', 'refresh_token'],
     token_endpoint_auth_method: 'none',
@@ -90,7 +90,7 @@ check(token.response.status === 200, `token exchange failed: ${JSON.stringify(to
 const transport = new StreamableHTTPClientTransport(new URL(MCP_URL), {
   requestInit: { headers: { authorization: `Bearer ${token.body.access_token}` } },
 });
-const mcp = new Client({ name: 'lazyoffice-remote-e2e', version: '1.0.0' });
+const mcp = new Client({ name: 'aurion-remote-e2e', version: '1.0.0' });
 await mcp.connect(transport);
 const tools = await mcp.listTools();
 check(tools.tools.length === 12, `expected 12 builder tools, received ${tools.tools.length}`);

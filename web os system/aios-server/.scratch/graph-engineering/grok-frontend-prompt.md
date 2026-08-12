@@ -2,7 +2,7 @@
 
 Work only inside:
 
-`/Users/kaikaiwu/Desktop/LazyOffice/AI OS Langflow/web os system/aios-studio`
+`/Users/kaikaiwu/Desktop/Aurion/AI OS Langflow/web os system/aios-studio`
 
 Read the repository `AGENTS.md`, applicable `CLAUDE.md`, the Graph spec/tickets in sibling `aios-server/.scratch/graph-engineering/`, and the existing Studio pages/components/styles before editing. Preserve all current WIP. Do not touch the old `aios-web` frontend. Do not commit or push.
 

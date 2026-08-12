@@ -7,9 +7,9 @@ import { prisma } from '../../../src/lib/db.js';
 
 const baseUrl = process.env.AIOS_TEST_BASE_URL || 'https://aios-new.lazyoffice.app';
 const handoffPath = process.env.AIOS_ACCOUNT_HANDOFF_PATH
-  || '/Users/kevin/Documents/Lazyoffice AIOS Private/客戶帳號-2026-08-08.txt';
+  || '/Users/kevin/Documents/Aurion AIOS Private/客戶帳號-2026-08-08.txt';
 const ownerEmail = process.env.AIOS_OWNER_EMAIL || 'fde@aios.test';
-const customerEmailDomain = process.env.AIOS_CUSTOMER_EMAIL_DOMAIN || 'lazyoffice.app';
+const customerEmailDomain = process.env.AIOS_CUSTOMER_EMAIL_DOMAIN || 'aurion-group.com';
 const marker = `isolation-${Date.now()}`;
 
 type TokenIdentity = {

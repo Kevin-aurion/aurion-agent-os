@@ -4,7 +4,7 @@ App 的非 UI 基礎設施：設定、憑證、網路、狀態、裝置代理執
 
 ## 檔案
 - `AIOSConfig.swift` — 可設定 server base URL（UserDefaults，預設 `http://127.0.0.1:8700`）、http→ws / https→wss、固定本機路徑常數。
-- `Keychain.swift` — 使用者 JWT（`com.lazyoffice.aios-system`）與裝置憑證（`com.lazyoffice.aios-system.device`）**分離**。
+- `Keychain.swift` — 使用者 JWT（`com.aurion.aios-system`）與裝置憑證（`com.aurion.aios-system.device`）**分離**。
 - `APIClient.swift` — 使用者 REST（Bearer JWT）。
 - `AwpClient.swift` — 使用者 hub WebSocket `/ws`（JWT query；既有契約）。
 - `AppState.swift` — 全域狀態；開機時若已註冊則啟動 `DeviceAgentService`。

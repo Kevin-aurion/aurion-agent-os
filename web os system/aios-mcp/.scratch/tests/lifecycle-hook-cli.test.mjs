@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import test from 'node:test';
 
 const hookScript = path.resolve(
-  'plugins/lazyoffice-aios-builder/scripts/lifecycle-hook.mjs',
+  'plugins/aurion-aios-builder/scripts/lifecycle-hook.mjs',
 );
 
 function runHook(pluginData, input) {
@@ -32,7 +32,7 @@ function runHook(pluginData, input) {
 }
 
 test('CLI persists a complete prompt-to-stop lifecycle without sensitive content', async () => {
-  const pluginData = await mkdtemp(path.join(tmpdir(), 'lazyoffice-hook-test-'));
+  const pluginData = await mkdtemp(path.join(tmpdir(), 'aurion-hook-test-'));
   const common = { session_id: 'cli-session-1', prompt_id: 'prompt-1' };
 
   assert.deepEqual(await runHook(pluginData, {
@@ -50,13 +50,13 @@ test('CLI persists a complete prompt-to-stop lifecycle without sensitive content
   await runHook(pluginData, {
     ...common,
     hook_event_name: 'PostToolUse',
-    tool_name: 'mcp__plugin_lazyoffice-aios-builder_lazyoffice_aios__start_agent_build',
+    tool_name: 'mcp__plugin_aurion-aios-builder_aurion_aios__start_agent_build',
     tool_input: { externalConversationId: 'cli-session-1' },
   });
   await runHook(pluginData, {
     ...common,
     hook_event_name: 'PostToolUse',
-    tool_name: 'mcp__plugin_lazyoffice-aios-builder_lazyoffice_aios__prepare_agent_build_prompt',
+    tool_name: 'mcp__plugin_aurion-aios-builder_aurion_aios__prepare_agent_build_prompt',
     tool_input: { externalConversationId: 'cli-session-1' },
   });
   const stopOutput = await runHook(pluginData, {
@@ -70,7 +70,7 @@ test('CLI persists a complete prompt-to-stop lifecycle without sensitive content
   await runHook(pluginData, {
     ...common,
     hook_event_name: 'PostToolUse',
-    tool_name: 'mcp__plugin_lazyoffice-aios-builder_lazyoffice_aios__guard_agent_build_stop',
+    tool_name: 'mcp__plugin_aurion-aios-builder_aurion_aios__guard_agent_build_stop',
     tool_input: { externalConversationId: 'cli-session-1' },
   });
   assert.deepEqual(await runHook(pluginData, {
@@ -90,7 +90,7 @@ test('CLI persists a complete prompt-to-stop lifecycle without sensitive content
 });
 
 test('CLI fails safe on malformed JSON and missing plugin data path', async () => {
-  const pluginData = await mkdtemp(path.join(tmpdir(), 'lazyoffice-hook-test-'));
+  const pluginData = await mkdtemp(path.join(tmpdir(), 'aurion-hook-test-'));
   assert.deepEqual(await runHook(pluginData, '{broken'), {});
   assert.deepEqual(await runHook('', {
     session_id: 'cli-session-2',

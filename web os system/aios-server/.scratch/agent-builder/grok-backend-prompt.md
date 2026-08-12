@@ -1,8 +1,8 @@
 Continue the Agent Builder implementation. The prior oversized turn was interrupted
 before it edited files. Implement BACKEND ONLY now.
 
-Read `/Users/kevin/Documents/lazyoffice/web os system/aios-server/.scratch/agent-builder/spec.md`
-and `/Users/kevin/Documents/lazyoffice/AGENTS.md`, then make these concrete changes in
+Read `/Users/kevin/Documents/aurion/web os system/aios-server/.scratch/agent-builder/spec.md`
+and `/Users/kevin/Documents/aurion/AGENTS.md`, then make these concrete changes in
 `web os system/aios-server`:
 
 1. Add durable Prisma `AgentBuildSession` plus a multiline status enum and relation
@@ -40,5 +40,5 @@ and `/Users/kevin/Documents/lazyoffice/AGENTS.md`, then make these concrete chan
 7. Update relevant server lib/routes CLAUDE.md minimally.
 
 Use ok/sendError/guards, ESM `.js`, ulid, slug/safepath helpers, audit. Do not touch
-frontend, AGENTS.md, lazyoffice, unrelated WIP. Do not commit/push. Run migrate dev,
+frontend, AGENTS.md, aurion, unrelated WIP. Do not commit/push. Run migrate dev,
 prisma generate, server tsc and the new tests. Implement now and report exact evidence.

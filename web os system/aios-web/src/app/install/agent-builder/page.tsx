@@ -27,8 +27,8 @@ import {
 } from 'lucide-react';
 
 export const metadata: Metadata = {
-  title: 'Agent Builder 安裝中心 — Lazyoffice AIOS',
-  description: '在 ChatGPT、Codex 或 Claude 安裝 Lazyoffice AIOS Agent Builder，並下載 Plugin、Skill 與安裝文件。',
+  title: 'Agent Builder 安裝中心 — Aurion AIOS',
+  description: '在 ChatGPT、Codex 或 Claude 安裝 Aurion AIOS Agent Builder，並下載 Plugin、Skill 與安裝文件。',
 };
 
 const DOWNLOAD_ROOT = '/downloads/agent-builder';
@@ -45,14 +45,14 @@ type DownloadItem = {
 const downloads: DownloadItem[] = [
   {
     title: 'Universal Plugin',
-    filename: 'lazyoffice-aios-builder-plugin.zip',
+    filename: 'aurion-aios-builder-plugin.zip',
     description: 'ChatGPT／Codex 與 Claude Plugin 共用套件，包含 Skill、Remote MCP 設定與 Claude Hooks。',
     icon: PackageCheck,
     primary: true,
   },
   {
     title: '跨平台一鍵安裝包',
-    filename: 'lazyoffice-aios-one-click-install.zip',
+    filename: 'aurion-aios-one-click-install.zip',
     description: '提供 macOS 與 Windows 安裝器，適合 Claude Code／Cowork 客戶端部署。',
     icon: Laptop,
   },
@@ -65,7 +65,7 @@ const downloads: DownloadItem[] = [
   {
     title: 'Remote MCP 設定',
     filename: 'aios-remote-mcp.json',
-    description: '只連線 Lazyoffice 公開服務，不會在客戶電腦啟動 AIOS Server。',
+    description: '只連線 Aurion 公開服務，不會在客戶電腦啟動 AIOS Server。',
     icon: FileCode2,
   },
   {
@@ -88,12 +88,12 @@ const chatGptSteps = [
     body: '在 ChatGPT Settings → Security and login 開啟 Developer mode，進入 Plugins／Connectors 管理頁。',
   },
   {
-    title: '加入 Lazyoffice Remote MCP',
+    title: '加入 Aurion Remote MCP',
     body: `新增 Remote MCP，網址填入 ${REMOTE_MCP}。不需要安裝本機 Server，也不要填 127.0.0.1。`,
   },
   {
     title: '登入 AIOS 並授權',
-    body: '瀏覽器會開啟 Lazyoffice AIOS OAuth 頁。使用自己的 AIOS 帳號登入，連線只取得 Agent Builder 草稿權限。',
+    body: '瀏覽器會開啟 Aurion AIOS OAuth 頁。使用自己的 AIOS 帳號登入，連線只取得 Agent Builder 草稿權限。',
   },
   {
     title: '直接描述要建立的員工',
@@ -173,7 +173,7 @@ export default function AgentBuilderInstallPage() {
           <Link href="/" className="flex items-center gap-3">
             <span className="grid h-9 w-9 place-items-center rounded-xl bg-brand font-bold text-white">L</span>
             <span>
-              <span className="block text-sm font-semibold">Lazyoffice AIOS</span>
+              <span className="block text-sm font-semibold">Aurion AIOS</span>
               <span className="block text-[10px] tracking-wide text-slate-500">AGENT BUILDER</span>
             </span>
           </Link>
@@ -340,7 +340,7 @@ export default function AgentBuilderInstallPage() {
           你不需要先理解 Agent、Skill、MCP 或 Harness。AI 會用自然對話整理需求，AIOS 則負責版本、治理與測試。
         </p>
         <div className="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
-          <a href={`${DOWNLOAD_ROOT}/lazyoffice-aios-builder-plugin.zip`} download className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-5 py-3 text-sm font-semibold text-white hover:brightness-110">
+          <a href={`${DOWNLOAD_ROOT}/aurion-aios-builder-plugin.zip`} download className="inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-5 py-3 text-sm font-semibold text-white hover:brightness-110">
             <Download className="h-4 w-4" /> 下載 Universal Plugin
           </a>
           <Link href="/agent-builds" className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/15 px-5 py-3 text-sm font-medium hover:bg-white/5">
@@ -351,7 +351,7 @@ export default function AgentBuilderInstallPage() {
 
       <footer className="border-t border-white/10 py-8">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 px-5 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-8">
-          <div className="flex items-center gap-2"><span className="grid h-6 w-6 place-items-center rounded-md bg-brand text-[10px] font-bold text-white">L</span> Lazyoffice AIOS Agent Builder</div>
+          <div className="flex items-center gap-2"><span className="grid h-6 w-6 place-items-center rounded-md bg-brand text-[10px] font-bold text-white">L</span> Aurion AIOS Agent Builder</div>
           <div>Remote MCP · OAuth 2.1 · FDE governed</div>
         </div>
       </footer>

@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 const exec = promisify(execFile);
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const entrypoint = path.join(packageRoot, 'dist', 'index.js');
-const label = 'app.lazyoffice.aios-remote-mcp';
+const label = 'app.aurion.aios-remote-mcp';
 const launchAgents = path.join(os.homedir(), 'Library', 'LaunchAgents');
 const logs = path.join(os.homedir(), 'Library', 'Logs');
 const plist = path.join(launchAgents, `${label}.plist`);
@@ -44,8 +44,8 @@ const content = `<?xml version="1.0" encoding="UTF-8"?>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>5</integer>
-  <key>StandardOutPath</key><string>${xml(path.join(logs, 'lazyoffice-aios-remote-mcp.stdout.log'))}</string>
-  <key>StandardErrorPath</key><string>${xml(path.join(logs, 'lazyoffice-aios-remote-mcp.stderr.log'))}</string>
+  <key>StandardOutPath</key><string>${xml(path.join(logs, 'aurion-aios-remote-mcp.stdout.log'))}</string>
+  <key>StandardErrorPath</key><string>${xml(path.join(logs, 'aurion-aios-remote-mcp.stderr.log'))}</string>
 </dict>
 </plist>
 `;

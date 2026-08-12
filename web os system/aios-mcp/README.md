@@ -6,13 +6,13 @@ The MCP process is a REST client of aios-server. External Builder writes are sto
 
 ## Customer one-click install
 
-Use `releases/lazyoffice-aios-one-click-install.zip`:
+Use `releases/aurion-aios-one-click-install.zip`:
 
-- macOS: double-click `Install Lazyoffice AIOS.command`.
-- Windows: run `Install-Lazyoffice-AIOS.ps1` with PowerShell.
-- Claude Code/Cowork plugin-only upload: `releases/lazyoffice-aios-builder-plugin.zip`.
+- macOS: double-click `Install Aurion AIOS.command`.
+- Windows: run `Install-Aurion-AIOS.ps1` with PowerShell.
+- Claude Code/Cowork plugin-only upload: `releases/aurion-aios-builder-plugin.zip`.
 - Claude Chat fallback: add the Remote MCP URL in Claude Connectors, then upload `releases/build-aios-agent.skill.zip`.
-- ChatGPT/Codex: install the Universal Plugin from `releases/lazyoffice-aios-builder-plugin.zip`, or register the same Remote MCP in ChatGPT Developer mode and add the bundled Skill.
+- ChatGPT/Codex: install the Universal Plugin from `releases/aurion-aios-builder-plugin.zip`, or register the same Remote MCP in ChatGPT Developer mode and add the bundled Skill.
 
 The Universal Plugin bundles the adaptive Skill and Remote MCP connector while retaining supported Claude lifecycle hooks. First use starts OAuth in the browser; each customer signs in with their own AIOS account. Completed turns then appear at `https://aios-new.lazyoffice.app/agent-builds`.
 
@@ -22,7 +22,7 @@ Claude Chat custom Skill ZIPs cannot themselves add a Connector. That product su
 
 ```bash
 export PATH="$HOME/.local/node/bin:$PATH"   # Node 22
-cd "/Users/kevin/Documents/lazyoffice/web os system/aios-mcp"
+cd "/Users/kevin/Documents/aurion/web os system/aios-mcp"
 npm install
 cp .env.example .env    # then fill in AIOS_MCP_EMAIL / AIOS_MCP_PASSWORD
 npm run build           # -> dist/index.js
@@ -32,7 +32,7 @@ For local stdio development on the AIOS host, the least-privilege setup is autom
 
 ```bash
 export PATH="$HOME/.local/node/bin:$PATH"
-cd "/Users/kevin/Documents/lazyoffice/web os system/aios-mcp"
+cd "/Users/kevin/Documents/aurion/web os system/aios-mcp"
 npm run build
 npm run provision:local-user
 npm run install:local-clients
@@ -74,7 +74,7 @@ npm run typecheck  # tsc --noEmit
   "mcpServers": {
     "aios": {
       "command": "node",
-      "args": ["/Users/kevin/Documents/lazyoffice/web os system/aios-mcp/dist/index.js"]
+      "args": ["/Users/kevin/Documents/aurion/web os system/aios-mcp/dist/index.js"]
     }
   }
 }
@@ -85,7 +85,7 @@ npm run typecheck  # tsc --noEmit
 ## Register with Claude Code
 
 ```bash
-claude mcp add aios -- node "/Users/kevin/Documents/lazyoffice/web os system/aios-mcp/dist/index.js"
+claude mcp add aios -- node "/Users/kevin/Documents/aurion/web os system/aios-mcp/dist/index.js"
 ```
 
 or a project-level `.mcp.json`:
@@ -95,7 +95,7 @@ or a project-level `.mcp.json`:
   "mcpServers": {
     "aios": {
       "command": "node",
-      "args": ["/Users/kevin/Documents/lazyoffice/web os system/aios-mcp/dist/index.js"]
+      "args": ["/Users/kevin/Documents/aurion/web os system/aios-mcp/dist/index.js"]
     }
   }
 }
@@ -108,7 +108,7 @@ or a project-level `.mcp.json`:
 ```toml
 [mcp_servers.aios]
 command = "node"
-args = ["/Users/kevin/Documents/lazyoffice/web os system/aios-mcp/dist/index.js"]
+args = ["/Users/kevin/Documents/aurion/web os system/aios-mcp/dist/index.js"]
 ```
 
 ## Hosted OAuth Remote MCP
@@ -194,9 +194,9 @@ Async note: `run_workflow`, `test_workflow`, and `converse_with_agent` return im
 - MCP prompt: `use-aios-agent`
 - Skill source: `skills/build-aios-agent/`
 - Runtime Skill source: `skills/use-aios-agent/`
-- Restricted GitHub Marketplace: `inventra/lazyoffice-aios-plugin-marketplace`
-- Claude Plugin: `releases/lazyoffice-aios-builder-plugin.zip`
-- Cross-platform one-click bundle: `releases/lazyoffice-aios-one-click-install.zip`
+- Restricted GitHub Marketplace: `Kevin-aurion/aurion-aios-plugin-marketplace`
+- Claude Plugin: `releases/aurion-aios-builder-plugin.zip`
+- Cross-platform one-click bundle: `releases/aurion-aios-one-click-install.zip`
 - Claude Chat Skill fallback: `releases/build-aios-agent.skill.zip`
 - Runtime Skill fallback: `releases/use-aios-agent.skill.zip`
 

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  LAZYOFFICE_PROJECT,
+  AURION_PROJECT,
   createTestRelay,
   readJsonLinesAsync,
 } from "../helpers/spawn-bridge.js";
@@ -29,7 +29,7 @@ describe("concurrent-turn", () => {
 
     try {
       const started = await relay.startTask({
-        project: LAZYOFFICE_PROJECT,
+        project: AURION_PROJECT,
         message: "first",
         idempotency_key: "key-concurrent-1",
       });

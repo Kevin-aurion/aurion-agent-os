@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const hooksPath = new URL(
-  '../../plugins/lazyoffice-aios-builder/hooks/hooks.json',
+  '../../plugins/aurion-aios-builder/hooks/hooks.json',
   import.meta.url,
 );
 
@@ -44,8 +44,8 @@ test('plugin declares the complete command-hook lifecycle', async () => {
   for (const event of Object.values(hooks)) {
     for (const group of event) {
       if (!group.matcher) continue;
-      assert.match(group.matcher, /lazyoffice_aios/);
-      assert.doesNotMatch(group.matcher, /plugin_lazyoffice-aios-builder_aios\|/);
+      assert.match(group.matcher, /aurion_aios/);
+      assert.doesNotMatch(group.matcher, /plugin_aurion-aios-builder_aios\|/);
     }
   }
 });

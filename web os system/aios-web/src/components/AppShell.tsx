@@ -128,7 +128,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="flex items-center gap-2 px-5 py-4">
             <div className="grid h-8 w-8 place-items-center rounded-lg bg-brand font-bold text-white">L</div>
             <div>
-              <div className="text-sm font-semibold leading-tight">Lazyoffice Builder</div>
+              <div className="text-sm font-semibold leading-tight">Aurion Builder</div>
               <div className="text-[11px] text-muted">Agent 建置入口</div>
             </div>
           </div>

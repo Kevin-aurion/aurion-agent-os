@@ -1,8 +1,8 @@
 You are the independent verification reviewer for the new AIOS Agent Builder. Do not
 edit any file. Review the current dirty worktree against:
 
-- `/Users/kevin/Documents/lazyoffice/web os system/aios-server/.scratch/agent-builder/spec.md`
-- `/Users/kevin/Documents/lazyoffice/AGENTS.md`
+- `/Users/kevin/Documents/aurion/web os system/aios-server/.scratch/agent-builder/spec.md`
+- `/Users/kevin/Documents/aurion/AGENTS.md`
 
 Scope only these new/current changes:
 

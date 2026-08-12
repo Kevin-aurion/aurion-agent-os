@@ -22,7 +22,7 @@
 ## 安裝
 
 ```bash
-git clone git@github.com:Kevin-lazyoffice/codex-bridge.git
+git clone git@github.com:Kevin-aurion/codex-bridge.git
 cd codex-bridge
 npm install
 npm run build          # 產生協定型別 + 編譯到 dist/

@@ -177,7 +177,7 @@ try {
         name: '提案樣板製作',
         contentMd: '---\nname: proposal-template\ndescription: 依核准範本製作提案\n---\n\n# 提案樣板製作',
       }],
-      tests: [{ name: '套版', input: '客戶：Lazyoffice', expected: 'HTML 標題含 Lazyoffice' }],
+      tests: [{ name: '套版', input: '客戶：Aurion', expected: 'HTML 標題含 Aurion' }],
     },
   });
   await submitExternalBuilderForReview({

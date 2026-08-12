@@ -26,7 +26,7 @@
 - TypeScript: passed
 - Production build: passed (11 routes)
 - Dependency audit: 0 vulnerabilities
-- Local service: `app.lazyoffice.aios-studio`, running on `127.0.0.1:3300`
+- Local service: `app.aurion.aios-studio`, running on `127.0.0.1:3300`
 - Public page: `https://aios-studio.lazyoffice.app/login`, HTTP 200
 - Public backend health: HTTP 200, database healthy
 - Unauthenticated MCP registry: HTTP 401 as expected

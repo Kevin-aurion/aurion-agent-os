@@ -1,8 +1,8 @@
 Implement FRONTEND ONLY for the already-created Agent Builder backend.
 
 Read:
-- `/Users/kevin/Documents/lazyoffice/web os system/aios-server/.scratch/agent-builder/spec.md`
-- `/Users/kevin/Documents/lazyoffice/AGENTS.md`
+- `/Users/kevin/Documents/aurion/web os system/aios-server/.scratch/agent-builder/spec.md`
+- `/Users/kevin/Documents/aurion/AGENTS.md`
 - `web os system/aios-server/src/routes/agentbuilder.ts`
 - exported DTOs in `web os system/aios-server/src/lib/agentbuilder.ts`
 - current `web os system/aios-web/src/app/work/page.tsx`, workbench components/types,
@@ -38,6 +38,6 @@ In `web os system/aios-web` add the CEO-friendly Agent Builder experience:
 9. Use existing Tailwind/ui conventions, accessible buttons/labels and responsive
    overflow. Update frontend module CLAUDE.md minimally.
 10. Run `npx tsc --noEmit`. Do not run `next build` while dev is live. Do not touch
-    backend, AGENTS.md, lazyoffice, or unrelated WIP. Do not commit/push.
+    backend, AGENTS.md, aurion, or unrelated WIP. Do not commit/push.
 
 Implement now, then report files and typecheck outcome.

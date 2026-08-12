@@ -11,7 +11,7 @@ import {
 const SOURCE_BUILD_ID = '01KZKJQ5VX86TCA0XWRHJ4ZNEZ';
 const OWNER_EMAIL = 'kevin@lazyoffice.app';
 
-const purpose = '偷懶辦公室的提案報價 AI 員工：把客戶會議逐字稿（SRT）或需求文件（PDF）轉成專業報價單、擬真互動 Dashboard 示意與嵌入截圖的功能總覽提案頁，並負責後續多輪修訂，讓提案可在會議當天交付。';
+const purpose = 'Aurion的提案報價 AI 員工：把客戶會議逐字稿（SRT）或需求文件（PDF）轉成專業報價單、擬真互動 Dashboard 示意與嵌入截圖的功能總覽提案頁，並負責後續多輪修訂，讓提案可在會議當天交付。';
 
 const skills: NonNullable<ExternalArtifactInput['skills']> = [
   {
@@ -27,10 +27,10 @@ const skills: NonNullable<ExternalArtifactInput['skills']> = [
     edgeCases: ['來源互相矛盾時標示差異並要求確認', '金額或工時未確認時不得推測'],
   },
   {
-    name: '報價單產出（偷懶辦公室模板）',
+    name: '報價單產出（Aurion模板）',
     purpose: '依確認範圍產出可人工審核的 HTML 報價單。',
     instructions: [
-      '沿用偷懶辦公室的報價模板、付款條件、驗收條款與附件結構。',
+      '沿用Aurion的報價模板、付款條件、驗收條款與附件結構。',
       '未確認金額一律標示待報價，未確認工時一律標示待確認。',
       '補金額後重算未稅、稅額、含稅總額與分期金額。',
     ],
@@ -77,9 +77,9 @@ const skills: NonNullable<ExternalArtifactInput['skills']> = [
 ];
 
 const facts = [
-  '公司：偷懶辦公室股份有限公司（乙方）；對外品牌：偷懶辦公室・AI 落地師。',
+  '公司：Aurion股份有限公司（乙方）；對外品牌：Aurion・AI 落地師。',
   '聯絡人：吳文凱 Kevin／0975059080／kevin@lazyoffice.app。',
-  '匯款：玉山銀行（808）三和分行；戶名偷懶辦公室股份有限公司；帳號由正式資料確認。',
+  '匯款：玉山銀行（808）三和分行；戶名Aurion股份有限公司；帳號由正式資料確認。',
   '現行客戶：克拉拉旅遊（Clara Travel）；窗口思羽 Sophie、老闆背鴻；每月約 80–100 組訂單；ERP 為 Galaxy 系統；使用 104 打卡。',
   '克拉拉專案一旅遊訂單自動化：7 模組版 20260703；三模組第一階段版 20260713，未稅 100,000、含稅 105,000、22 個工作天。',
   '克拉拉專案二 LINE 客服與行銷自動化：6 模組、QUO20260723001，金額與工時待確認；介面為三欄式工作台。',

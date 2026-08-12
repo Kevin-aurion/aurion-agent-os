@@ -1,11 +1,11 @@
-# LazyOffice AIOS Design System
+# Aurion AIOS Design System
 
 ## Design goal
 
 Make enterprise Agent configuration feel calm and progressive while keeping
 governance states explicit. Public Cherry Studio interaction patterns informed
 the navigation and configuration density; all components, styles, wording and
-data bindings here are original LazyOffice work.
+data bindings here are original Aurion work.
 
 ## Foundations
 

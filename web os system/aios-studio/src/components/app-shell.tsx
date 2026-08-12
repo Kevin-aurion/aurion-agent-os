@@ -30,11 +30,11 @@ export function AppShell({ children }: { children: ReactNode }) {
     if (!loading && !user) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
   }, [loading, pathname, router, user]);
   const groups = useMemo(() => [...new Set(studioSections.map((item) => item.group))], []);
-  if (loading || !user) return <div className="app-loading"><Sparkles className="spin-slow" /><span>LazyOffice AIOS Studio</span></div>;
+  if (loading || !user) return <div className="app-loading"><Sparkles className="spin-slow" /><span>Aurion AIOS Studio</span></div>;
 
   return <div className="app-frame">
     <aside className={`sidebar ${menuOpen ? 'sidebar-open' : ''}`}>
-      <div className="brand"><div className="brand-mark">L</div><div><strong>LazyOffice</strong><span>AIOS Studio</span></div><button className="icon-button mobile-close" onClick={() => setMenuOpen(false)} aria-label="關閉導覽"><X size={18} /></button></div>
+      <div className="brand"><div className="brand-mark">L</div><div><strong>Aurion</strong><span>AIOS Studio</span></div><button className="icon-button mobile-close" onClick={() => setMenuOpen(false)} aria-label="關閉導覽"><X size={18} /></button></div>
       <div className="nav-search"><Search size={16} /><span>尋找設定</span><kbd>⌘ K</kbd></div>
       <nav aria-label="主要導覽">
         {groups.map((group) => <div className="nav-group" key={group}><p>{group}</p>{studioSections.map((item) => {

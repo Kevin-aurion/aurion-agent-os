@@ -3,11 +3,11 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 const packageRoot = new URL('../../', import.meta.url);
-const expectedMarketplace = 'lazyoffice-aios-plugin-marketplace';
-const expectedPlugin = 'lazyoffice-aios-builder';
-const expectedRepository = 'inventra/lazyoffice-aios-plugin-marketplace';
+const expectedMarketplace = 'aurion-aios-plugin-marketplace';
+const expectedPlugin = 'aurion-aios-builder';
+const expectedRepository = 'Kevin-aurion/aurion-aios-plugin-marketplace';
 const expectedPluginPath = `./plugins/${expectedPlugin}`;
-const expectedDisplayName = 'Lazyoffice AIOS';
+const expectedDisplayName = 'Aurion AIOS';
 
 async function text(relativePath) {
   return readFile(new URL(relativePath, packageRoot), 'utf8');
@@ -40,37 +40,37 @@ function extractGptMarketplaceFromSyncScript(syncScript) {
     .replaceAll(/\bmarketplaceName\b/g, JSON.stringify(expectedMarketplace))
     .replaceAll(/\bmarketplaceDisplayName\b/g, JSON.stringify(expectedDisplayName))
     .replaceAll(/\bpluginName\b/g, JSON.stringify(expectedPlugin));
-  // Template literals like `./plugins/${"lazyoffice-aios-builder"}` evaluate correctly here.
+  // Template literals like `./plugins/${"aurion-aios-builder"}` evaluate correctly here.
   return Function(`"use strict"; return (${objectSource});`)();
 }
 
 test('marketplace identity matches the private GitHub repository slug in every installer path', async () => {
   const marketplace = JSON.parse(await text('installers/marketplace.json'));
   const syncScript = await text('scripts/sync-github-marketplace.mjs');
-  const macInstaller = await text('installers/Install Lazyoffice AIOS.command');
-  const windowsInstaller = await text('installers/Install-Lazyoffice-AIOS.ps1');
+  const macInstaller = await text('installers/Install Aurion AIOS.command');
+  const windowsInstaller = await text('installers/Install-Aurion-AIOS.ps1');
 
   assert.equal(marketplace.name, expectedMarketplace);
   assert.match(syncScript, new RegExp(`const marketplaceName = '${expectedMarketplace}'`));
-  assert.match(macInstaller, new RegExp(`plugin install --scope user lazyoffice-aios-builder@${expectedMarketplace}\\b`));
-  assert.match(windowsInstaller, new RegExp(`plugin install --scope user lazyoffice-aios-builder@${expectedMarketplace}\\b`));
+  assert.match(macInstaller, new RegExp(`plugin install --scope user aurion-aios-builder@${expectedMarketplace}\\b`));
+  assert.match(windowsInstaller, new RegExp(`plugin install --scope user aurion-aios-builder@${expectedMarketplace}\\b`));
 });
 
 test('marketplace and plugin manifests publish one identical version', async () => {
   const marketplace = JSON.parse(await text('installers/marketplace.json'));
-  const claudePlugin = JSON.parse(await text('plugins/lazyoffice-aios-builder/.claude-plugin/plugin.json'));
-  const codexPlugin = JSON.parse(await text('plugins/lazyoffice-aios-builder/.codex-plugin/plugin.json'));
+  const claudePlugin = JSON.parse(await text('plugins/aurion-aios-builder/.claude-plugin/plugin.json'));
+  const codexPlugin = JSON.parse(await text('plugins/aurion-aios-builder/.codex-plugin/plugin.json'));
 
   assert.equal(marketplace.plugins[0].version, claudePlugin.version);
   assert.equal(codexPlugin.version, claudePlugin.version);
 });
 
 test('plugin uses a product-specific MCP server id so stale generic aios connectors cannot win', async () => {
-  const mcp = JSON.parse(await text('plugins/lazyoffice-aios-builder/.mcp.json'));
+  const mcp = JSON.parse(await text('plugins/aurion-aios-builder/.mcp.json'));
   const serverNames = Object.keys(mcp.mcpServers ?? {});
 
-  assert.deepEqual(serverNames, ['lazyoffice_aios']);
-  assert.equal(mcp.mcpServers.lazyoffice_aios.url, 'https://aios-mcp.lazyoffice.app/mcp');
+  assert.deepEqual(serverNames, ['aurion_aios']);
+  assert.equal(mcp.mcpServers.aurion_aios.url, 'https://aios-mcp.lazyoffice.app/mcp');
   assert.equal(mcp.mcpServers.aios, undefined);
 });
 
@@ -87,15 +87,15 @@ test('sync script publishes Codex GPT marketplace with official schema and share
   // Official Codex schema — exact literals
   assert.deepEqual(Object.keys(gptMarketplace).sort(), ['interface', 'name', 'plugins']);
   assert.equal(gptMarketplace.name, expectedMarketplace);
-  assert.equal(gptMarketplace.name, 'lazyoffice-aios-plugin-marketplace');
+  assert.equal(gptMarketplace.name, 'aurion-aios-plugin-marketplace');
   assert.deepEqual(gptMarketplace.interface, { displayName: expectedDisplayName });
-  assert.deepEqual(gptMarketplace.interface, { displayName: 'Lazyoffice AIOS' });
+  assert.deepEqual(gptMarketplace.interface, { displayName: 'Aurion AIOS' });
   assert.equal(gptMarketplace.plugins?.length, 1);
   const entry = gptMarketplace.plugins[0];
   assert.equal(entry.name, expectedPlugin);
-  assert.equal(entry.name, 'lazyoffice-aios-builder');
+  assert.equal(entry.name, 'aurion-aios-builder');
   assert.deepEqual(entry.source, { source: 'local', path: expectedPluginPath });
-  assert.deepEqual(entry.source, { source: 'local', path: './plugins/lazyoffice-aios-builder' });
+  assert.deepEqual(entry.source, { source: 'local', path: './plugins/aurion-aios-builder' });
   assert.deepEqual(entry.policy, { installation: 'AVAILABLE', authentication: 'ON_INSTALL' });
   assert.equal(entry.policy.installation, 'AVAILABLE');
   assert.equal(entry.policy.authentication, 'ON_INSTALL');
@@ -161,8 +161,8 @@ test('sync script uses a single marketplace repository slug (no second repo)', a
   // Must not introduce an alternate default marketplace org/repo constant
   assert.doesNotMatch(syncScript, /openai\/.*marketplace/i);
   assert.doesNotMatch(syncScript, /anthropic\/.*marketplace/i);
-  assert.doesNotMatch(syncScript, /lazyoffice-aios-plugin-marketplace-codex/);
-  assert.doesNotMatch(syncScript, /lazyoffice-aios-plugin-marketplace-gpt/);
+  assert.doesNotMatch(syncScript, /aurion-aios-plugin-marketplace-codex/);
+  assert.doesNotMatch(syncScript, /aurion-aios-plugin-marketplace-gpt/);
 });
 
 test('GPT marketplace extraction fails closed on missing object (negative)', async () => {

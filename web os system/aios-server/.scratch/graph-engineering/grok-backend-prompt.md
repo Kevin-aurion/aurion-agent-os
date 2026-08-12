@@ -2,7 +2,7 @@
 
 Work only inside:
 
-`/Users/kaikaiwu/Desktop/LazyOffice/AI OS Langflow/web os system/aios-server`
+`/Users/kaikaiwu/Desktop/Aurion/AI OS Langflow/web os system/aios-server`
 
 Read completely before editing:
 

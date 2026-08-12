@@ -1,9 +1,9 @@
-# LazyOffice AIOS Studio V2 — Product & Technical Spec
+# Aurion AIOS Studio V2 — Product & Technical Spec
 
 ## Outcome
 
 Create a clean-room, independently deployable AIOS client at
-`aios-studio.lazyoffice.app`. It reuses LazyOffice AIOS APIs and governance,
+`aios-studio.lazyoffice.app`. It reuses Aurion AIOS APIs and governance,
 but does not replace or modify the current `aios-new.lazyoffice.app` client.
 
 Create a shadow copy of the `AI 知識採集` builder draft for an isolated

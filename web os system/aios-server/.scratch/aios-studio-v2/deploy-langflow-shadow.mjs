@@ -7,7 +7,7 @@ const apiKey = process.env.AIOS_LANGFLOW_SANDBOX_API_KEY;
 const flowId = '4ec97062-f088-45b6-a304-a4fe1d1c9f26';
 const sourceSessionId = '01KZQBCD2BSWV28YPD6RWC3VXB';
 const fixture = JSON.stringify({
-  schema: 'lazyoffice.knowledge-pilot.v1',
+  schema: 'aurion.knowledge-pilot.v1',
   runId: `deploy-proof-${Date.now()}`,
   question: 'PDF 轉文字工具有哪些？',
   answer: '這是由 AIOS 既有知識索引產生的 grounded answer fixture。',

@@ -1,4 +1,4 @@
-# Lazyoffice AIOS Graph Engineering v2 — Technical Spec
+# Aurion AIOS Graph Engineering v2 — Technical Spec
 
 ## 1. Goal
 

@@ -1,4 +1,4 @@
-// AWP/1 — Lazyoffice Wire Protocol v1. User channel `/ws` (JWT + ring/replay) and
+// AWP/1 — Aurion Wire Protocol v1. User channel `/ws` (JWT + ring/replay) and
 // dedicated device channel `/device/ws` (Authorization Bearer only; no user ring).
 // JSON envelope, topic pub/sub with wildcard suffix, 25s heartbeat.
 import { WebSocketServer, WebSocket } from 'ws';

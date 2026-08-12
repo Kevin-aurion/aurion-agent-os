@@ -26,7 +26,7 @@ export const config = {
   databaseUrl: req('DATABASE_URL'),
   redisUrl: req('REDIS_URL'),
   dataDir: opt('AIOS_DATA_DIR', path.resolve(process.cwd(), '../../aios-data')),
-  // Human-browsable agent workspace at the lazyoffice top level (sibling of the
+  // Human-browsable agent workspace at the aurion top level (sibling of the
   // "mac os system" / "web os system" folders). Agents are materialized under
   // MyAgent/<department>/<slug>/.
   myAgentDir: opt('AIOS_MYAGENT_DIR', path.resolve(process.cwd(), '..', '..', 'MyAgent')),

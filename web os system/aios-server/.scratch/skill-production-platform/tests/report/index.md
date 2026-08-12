@@ -34,7 +34,7 @@ Database schema is up to date!
 ### 1.3 Docker compose
 
 ```text
-$ docker compose -f "/Users/kevin/Documents/lazyoffice/web os system/docker-compose.yml" ps
+$ docker compose -f "/Users/kevin/Documents/aurion/web os system/docker-compose.yml" ps
 NAME            IMAGE                                              SERVICE    STATUS                 PORTS
 aios-db         postgres:16-alpine                                 db         Up 13 days (healthy)   127.0.0.1:5433->5432/tcp
 aios-docparse   ghcr.io/docling-project/docling-serve-cpu:latest   docparse   Up 6 days (healthy)    127.0.0.1:5001->5001/tcp

@@ -1,4 +1,4 @@
-# LazyOffice AIOS Portable Agent Package v1
+# Aurion AIOS Portable Agent Package v1
 
 `Agent Package` is the exchange format produced by **Agent Building → 匯出 Agent ZIP**. The ZIP expands to a normal folder and is intentionally readable without an AIOS database.
 
@@ -35,7 +35,7 @@ tests/builder-test.json
 provenance/builder.json
 ```
 
-`manifest.json.kind` is `lazyoffice.aios.agent-package`, and `schemaVersion` is `1.0`. Every payload file except `manifest.json` has a SHA-256 entry in `checksums`.
+`manifest.json.kind` is `aurion.aios.agent-package`, and `schemaVersion` is `1.0`. Every payload file except `manifest.json` has a SHA-256 entry in `checksums`.
 
 Internal ZIP entry paths are ASCII-only for compatibility with older macOS, Windows and command-line extractors. Human-readable CJK Agent/Skill names and original slugs remain in `manifest.json` and the Markdown/metadata files.
 

@@ -8,7 +8,7 @@
 
 ```bash
 export PATH="$HOME/.local/node/bin:$PATH"
-cd "/Users/kevin/Documents/lazyoffice/web os system/aios-mcp"
+cd "/Users/kevin/Documents/aurion/web os system/aios-mcp"
 npm install
 npm run build
 npm run provision:local-user

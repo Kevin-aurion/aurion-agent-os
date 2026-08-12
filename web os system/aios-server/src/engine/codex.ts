@@ -1,4 +1,4 @@
-// Codex CLI wrapper — spawns `codex exec` (see the reference lazyoffice
+// Codex CLI wrapper — spawns `codex exec` (see the reference
 // engine's codex.ts). Supports the JSON event stream, thread-id extraction
 // for verifier-thread resume across rounds, and the deterministic
 // isApproved() oracle shared by every verify call in the runner (fail-closed).

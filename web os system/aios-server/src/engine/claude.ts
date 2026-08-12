@@ -1,5 +1,5 @@
 // Claude Code CLI wrapper — spawns `claude -p` non-interactively (see the
-// reference lazyoffice engine's claude.ts). Exposes a plain call and a
+// reference implementation's claude.ts). Exposes a plain call and a
 // streaming variant that reports each output line as it arrives, so callers
 // can forward it onto the WS hub as `run.log` events.
 import { spawn } from 'node:child_process';

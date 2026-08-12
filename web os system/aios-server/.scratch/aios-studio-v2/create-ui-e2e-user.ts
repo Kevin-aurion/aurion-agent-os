@@ -2,7 +2,7 @@ import { ulid } from 'ulid';
 import { prisma } from '../../src/lib/db.js';
 import { hashPassword } from '../../src/lib/auth.js';
 
-const email = 'studio-e2e-20260810@lazyoffice.test';
+const email = 'studio-e2e-20260810@aurion.test';
 await prisma.user.upsert({
   where: { email },
   create: {

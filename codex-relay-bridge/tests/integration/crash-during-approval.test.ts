@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  LAZYOFFICE_PROJECT,
+  AURION_PROJECT,
   createTestRelay,
   readJsonLinesAsync,
   waitFor,
@@ -31,7 +31,7 @@ describe("crash-during-approval", () => {
       });
 
       const started = await relay.startTask({
-        project: LAZYOFFICE_PROJECT,
+        project: AURION_PROJECT,
         message: "crash-a",
         idempotency_key: `key-crash-a-${Date.now()}`,
       });
@@ -83,7 +83,7 @@ describe("crash-during-approval", () => {
       });
 
       const started = await relay.startTask({
-        project: LAZYOFFICE_PROJECT,
+        project: AURION_PROJECT,
         message: "crash-b",
         idempotency_key: `key-crash-b-${Date.now()}`,
       });

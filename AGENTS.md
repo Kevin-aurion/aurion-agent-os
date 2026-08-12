@@ -1,4 +1,4 @@
-# AGENTS.md — Lazyoffice AIOS 交接文件（給 Codex / 任何協同 AI）
+# AGENTS.md — Aurion AIOS 交接文件（給 Codex / 任何協同 AI）
 
 > **這份是給「接手開發的 AI」看的權威現況文件**（Codex 讀 `AGENTS.md`，Claude 讀 `CLAUDE.md`；兩者內容以本檔為最新）。
 > 最後更新：2026-07-27。對應分支 `feat/agentic-os-p0-p1`；Agent Workbench Phase 1 目前在本機工作樹驗收中，尚未提交。

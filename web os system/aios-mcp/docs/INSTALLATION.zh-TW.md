@@ -4,7 +4,7 @@
 
 ## 0. ChatGPT／Codex Universal Plugin
 
-`releases/lazyoffice-aios-builder-plugin.zip` 同時包含 `.codex-plugin/plugin.json`、共用 Skill 與公開 `.mcp.json`。在支援 Universal Plugin 的 ChatGPT／Codex 介面直接安裝即可；第一次使用時，以 AIOS OAuth 登入，不需要輸入或部署伺服器網址以外的主機設定。
+`releases/aurion-aios-builder-plugin.zip` 同時包含 `.codex-plugin/plugin.json`、共用 Skill 與公開 `.mcp.json`。在支援 Universal Plugin 的 ChatGPT／Codex 介面直接安裝即可；第一次使用時，以 AIOS OAuth 登入，不需要輸入或部署伺服器網址以外的主機設定。
 
 若使用 ChatGPT 網頁的個人 Developer mode：
 
@@ -17,10 +17,10 @@ ChatGPT 網頁沒有 Claude Code 的 Stop Hook，因此 Skill 會在每一個會
 
 ## 1. 客戶端一鍵安裝（建議）
 
-客戶取得 `releases/lazyoffice-aios-one-click-install.zip` 後解壓縮：
+客戶取得 `releases/aurion-aios-one-click-install.zip` 後解壓縮：
 
-- macOS：雙擊 `Install Lazyoffice AIOS.command`。
-- Windows：用 PowerShell 執行 `Install-Lazyoffice-AIOS.ps1`。
+- macOS：雙擊 `Install Aurion AIOS.command`。
+- Windows：用 PowerShell 執行 `Install-Aurion-AIOS.ps1`。
 
 安裝器只把 Claude Plugin 放進使用者的 Claude 設定，內容包含 Skill、Remote MCP Connector 與支援環境中的對話 Hook。它不會安裝或啟動 AIOS server、PostgreSQL、Redis、Qdrant、Cloudflare Tunnel、Node 常駐程式或本機 MCP 服務。
 
@@ -40,7 +40,7 @@ https://aios-mcp.lazyoffice.app/mcp
 
 ```bash
 export PATH="$HOME/.local/node/bin:$PATH"
-cd "/Users/kevin/Documents/lazyoffice/web os system/aios-mcp"
+cd "/Users/kevin/Documents/aurion/web os system/aios-mcp"
 npm install
 npm run build
 npm run provision:local-user
@@ -59,7 +59,7 @@ npm run install:local-clients
 
 ## 3. Claude Plugin／Skill 檔案
 
-完整 Plugin 位於 `releases/lazyoffice-aios-builder-plugin.zip`；跨平台安裝包位於 `releases/lazyoffice-aios-one-click-install.zip`；建置 Skill 位於 `releases/build-aios-agent.skill.zip`；Runtime Skill 位於 `releases/use-aios-agent.skill.zip`。
+完整 Plugin 位於 `releases/aurion-aios-builder-plugin.zip`；跨平台安裝包位於 `releases/aurion-aios-one-click-install.zip`；建置 Skill 位於 `releases/build-aios-agent.skill.zip`；Runtime Skill 位於 `releases/use-aios-agent.skill.zip`。
 
 在 Claude Desktop 的自訂／Skills 頁面上傳對應 zip。壓縮檔根層包含 `build-aios-agent/` 與 `use-aios-agent/` Skill 資料夾。若桌面版帳號尚未顯示自訂 Skill 功能，仍可使用 MCP prompt `build-aios-agent`／`use-aios-agent`；Claude Code 則會直接讀取安裝到 `~/.claude/skills/` 的版本。
 
@@ -119,6 +119,6 @@ Claude Code Plugin 的 Hook 行為如下：
 
 ## 8. 重新安裝與撤銷
 
-- 客戶端重跑一鍵安裝器會先備份前一版 Lazyoffice marketplace，再重新安裝 Lazyoffice Plugin；不會動其他 Plugin 或 MCP。
+- 客戶端重跑一鍵安裝器會先備份前一版 Aurion marketplace，再重新安裝 Aurion Plugin；不會動其他 Plugin 或 MCP。
 - 使用者可在 Claude 的 `/mcp` 或 Connectors 頁撤銷 OAuth；AIOS refresh session 會被撤銷。
 - 中央主機的 `npm run provision:local-user` 與 `install:local-clients` 只供本機 stdio 開發，不應在客戶電腦執行。

@@ -1,9 +1,0 @@
-{
-  "name": "lazyoffice-aios-builder",
-  "description": "Build AIOS employees naturally, invoke approved employees, and request governed schedules through the hosted Lazyoffice AIOS Remote MCP.",
-  "version": "1.4.0",
-  "author": {
-    "name": "Lazyoffice"
-  },
-  "homepage": "https://aios-new.lazyoffice.app/agent-builds"
-}

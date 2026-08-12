@@ -4,15 +4,15 @@
 
 Targets to build (net-new, do not modify the reference):
 
-- macOS app: `/Users/kevin/Documents/lazyoffice/mac os system` (SwiftUI project `aios-system`, already scaffolded)
-- Web app: `/Users/kevin/Documents/lazyoffice/web os system` (empty; scaffold per §7)
-- Reference (read-only, borrow concepts/code): `/Users/kevin/Documents/lazyoffice/lazyoffice-system-main/ai-agent/lazyoffice`
+- macOS app: `/Users/kevin/Documents/aurion/mac os system` (SwiftUI project `aios-system`, already scaffolded)
+- Web app: `/Users/kevin/Documents/aurion/web os system` (empty; scaffold per §7)
+- Reference (read-only, borrow concepts/code): `/Users/kevin/Documents/aurion/lazyoffice-system-main/ai-agent/lazyoffice`
 
 ---
 
 ## 1. Executive Summary — What to Reuse from the Reference Framework
 
-The LazyOffice reference contains five battle-tested design patterns. We port the *design essence* (and selectively lift code) rather than developing inside the reference tree.
+The Aurion reference contains five battle-tested design patterns. We port the *design essence* (and selectively lift code) rather than developing inside the reference tree.
 
 ### 1.1 Launch contract (port as-is, conceptually)
 An agent is a **directory** with `agent.md` (YAML frontmatter + body) as its manifest. A single loader (`src/manifest.ts`) fully validates and path-resolves the manifest **before anything runs**: engine pair valid, every step's verify rubric exists, input source exists. Runs flow through one entrypoint — `runAgent(manifest, runDir, {rawInput})` — with a preflight gate that checks the `claude` and `codex` CLIs are installed and authenticated, and every run leaves a timestamped `.runs/<stamp>/` directory with a JSON + Markdown report. **We keep this exact shape**: filesystem-defined agent → validated manifest → preflight → single run entrypoint → persisted report; but we add a DB record per run on top (the reference is filesystem-only).
@@ -74,7 +74,7 @@ Access control is **code, not prompts**: (a) tool-layer parameter binding (param
 │  │ 127.0.0.1:3100                │  HTTP  │ (web client)   │  │ macOS app              │   │
 │  └───────────────────────────────┘        └────────────────┘  │ URLSessionWebSocketTask│   │
 │                                                               └────────────────────────┘   │
-│  Agents workspace: ~/Documents/lazyoffice/aios-data/agents/<slug>/  (agent.md, skills/, tools/,│
+│  Agents workspace: ~/Documents/aurion/aios-data/agents/<slug>/  (agent.md, skills/, tools/,│
 │  verify/, .runs/) — DB rows are the index; the directory is the execution ground truth.    │
 └────────────────────────────────────────────────────────────────────────────────────────────┘
         Only outbound traffic: graph.microsoft.com, *.googleapis.com, api.line.me,
@@ -88,9 +88,9 @@ Access control is **code, not prompts**: (a) tool-layer parameter binding (param
 3. **`aios-system`** — the SwiftUI macOS app. Native client of aios-server; also the host-side actor for computer-control skills (it can `open -a Codex` and surface run status in the menu bar).
 4. **Docker Desktop** — Postgres + Redis containers, both bound to `127.0.0.1` only.
 
-**Hybrid agent storage.** Agents/skills/workflows are **rows in Postgres** (the UI edits rows), and the server **materializes** each agent to a directory under `~/Documents/lazyoffice/aios-data/agents/<slug>/` (agent.md, CLAUDE.md, skills/, tools/, verify/) before every run — because the ported engine and the `claude`/`codex` CLIs operate on directories. DB is source of truth; the directory is a build artifact, regenerated on change (checksum-skipped when unchanged).
+**Hybrid agent storage.** Agents/skills/workflows are **rows in Postgres** (the UI edits rows), and the server **materializes** each agent to a directory under `~/Documents/aurion/aios-data/agents/<slug>/` (agent.md, CLAUDE.md, skills/, tools/, verify/) before every run — because the ported engine and the `claude`/`codex` CLIs operate on directories. DB is source of truth; the directory is a build artifact, regenerated on change (checksum-skipped when unchanged).
 
-### 2.2 Realtime protocol: **AWP/1** (Lazyoffice Wire Protocol, version 1)
+### 2.2 Realtime protocol: **AWP/1** (Aurion Wire Protocol, version 1)
 
 One WebSocket endpoint `ws://127.0.0.1:8700/ws?token=<jwt>` serves web and macOS identically. Every frame is a JSON envelope:
 
@@ -392,7 +392,7 @@ AIOS_HTTP_PORT=8700
 AIOS_WEB_PORT=3100
 DATABASE_URL=postgresql://aios:aios@127.0.0.1:5433/aios
 REDIS_URL=redis://127.0.0.1:6380
-AIOS_DATA_DIR=/Users/kevin/Documents/lazyoffice/aios-data
+AIOS_DATA_DIR=/Users/kevin/Documents/aurion/aios-data
 
 # ── Microsoft 365 (Azure App Registration) ───────────
 MS_CLIENT_ID=
@@ -562,14 +562,14 @@ It must shell out to `claude`/`codex` CLIs and trigger the Codex macOS app — i
 | Files | `xlsx` (spreadsheet status columns), `yaml`, `ulid` |
 | API contract | Uniform `{success:true,data}` / `{success:false,error:{code,message}}` envelope (reference `api-client.ts` pattern) |
 
-### 7.2 Web — `aios-web` at `/Users/kevin/Documents/lazyoffice/web os system`
+### 7.2 Web — `aios-web` at `/Users/kevin/Documents/aurion/web os system`
 
 - **Next.js 15 (App Router) + React 19 + TypeScript**, UI-only (all data via aios-server REST + AWP/1 — no Next API routes except the dev proxy).
 - **Tailwind CSS 4 + shadcn/ui (Radix primitives) + lucide-react** — start from the reference `dashboard` subproject's stack, not the main app's ad-hoc style.
 - **TanStack Query** for REST state + a thin `useAwp()` hook (WS client with resume) that invalidates queries on events; `react-hook-form` + Zod for forms.
 - Pages: Dashboard (live runs), Employees (agent cards → detail: role, skills, file targets dropdown, workflows, run history, chat), Skills (library + review/confirm cards + "Build a skill"), Workflows (step editor + run timeline with per-round verdicts), Settings (Connect Microsoft / Connect Google, LINE bindings, `.env` health check), Audit.
 
-### 7.3 macOS — `aios-system` at `/Users/kevin/Documents/lazyoffice/mac os system`
+### 7.3 macOS — `aios-system` at `/Users/kevin/Documents/aurion/mac os system`
 
 - **SwiftUI, macOS 14+, zero third-party dependencies.**
 - `AwpClient` actor on `URLSessionWebSocketTask`: connect → subscribe → ping/pong → reconnect w/ backoff → `lastSeq` resume (Discord-adapter state machine, in Swift).
@@ -635,7 +635,7 @@ Lessons loop + review UI, deterministic security tests (token encryption at rest
 
 ### Appendix — Reference files to lift code from
 
-| Purpose | Path (under `/Users/kevin/Documents/lazyoffice/lazyoffice-system-main/`) |
+| Purpose | Path (under `/Users/kevin/Documents/aurion/lazyoffice-system-main/`) |
 |---|---|
 | Step engine, round loop, on_fail, templating | `ai-agent/lazyoffice/src/runner.ts`, `src/manifest.ts`, `src/types.ts` |
 | Engine invocation + approval oracle | `ai-agent/lazyoffice/src/claude.ts`, `src/codex.ts` |

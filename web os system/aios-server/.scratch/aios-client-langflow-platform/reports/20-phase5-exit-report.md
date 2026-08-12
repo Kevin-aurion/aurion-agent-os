@@ -11,7 +11,7 @@
 **Production code 變更：** 無（zero `src/**` / `prisma/**` / `package.json` / compose 改動）。
 
 **實跑 log 根目錄：**
-`/private/tmp/claude-501/-Users-kaikaiwu-Desktop-LazyOffice-AI-OS-Langflow/b1811c62-a49f-4930-867d-9af46d134e04/scratchpad/`
+`/private/tmp/claude-501/-Users-kaikaiwu-Desktop-Aurion-AI-OS-Langflow/b1811c62-a49f-4930-867d-9af46d134e04/scratchpad/`
 
 ---
 

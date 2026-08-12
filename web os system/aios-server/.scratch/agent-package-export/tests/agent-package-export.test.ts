@@ -243,7 +243,7 @@ try {
     governance: Record<string, boolean>;
     checksums: Record<string, string>;
   };
-  assert.equal(manifest.kind, 'lazyoffice.aios.agent-package');
+  assert.equal(manifest.kind, 'aurion.aios.agent-package');
   assert.equal(manifest.schemaVersion, '1.0');
   assert.equal(manifest.skills.length, 1, 'only confirmed Skills may export');
   assert.equal(manifest.skills[0]?.name, 'Confirmed portable skill');
