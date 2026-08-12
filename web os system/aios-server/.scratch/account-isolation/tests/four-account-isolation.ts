@@ -5,7 +5,7 @@ import { config, paths } from '../../../src/config.js';
 import { signAccess } from '../../../src/lib/auth.js';
 import { prisma } from '../../../src/lib/db.js';
 
-const baseUrl = process.env.AIOS_TEST_BASE_URL || 'https://aios-new.lazyoffice.app';
+const baseUrl = process.env.AIOS_TEST_BASE_URL || 'https://aurion-aios.lazyoffice.app';
 const handoffPath = process.env.AIOS_ACCOUNT_HANDOFF_PATH
   || '/Users/kevin/Documents/Aurion AIOS Private/客戶帳號-2026-08-08.txt';
 const ownerEmail = process.env.AIOS_OWNER_EMAIL || 'fde@aios.test';

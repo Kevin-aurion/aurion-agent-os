@@ -22,7 +22,7 @@ const handoffPath = path.resolve(
 );
 const tempPath = `${handoffPath}.${process.pid}.tmp`;
 const loginUrl = process.env.AIOS_PUBLIC_LOGIN_URL?.trim()
-  || 'https://aios-new.lazyoffice.app/login';
+  || 'https://aurion-aios.lazyoffice.app/login';
 
 async function main() {
   const owner = await prisma.user.findFirst({

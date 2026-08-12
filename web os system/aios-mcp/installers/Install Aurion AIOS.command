@@ -29,5 +29,5 @@ echo "https://aios-mcp.lazyoffice.app/mcp"
 echo
 echo "請重新啟動 Claude。第一次使用時，Claude 會要求登入並授權 AIOS。"
 echo "完成對話後可在此查看建置記錄："
-echo "https://aios-new.lazyoffice.app/agent-builds"
+echo "https://aurion-aios.lazyoffice.app/agent-builds"
 read -r "?按 Enter 結束..."

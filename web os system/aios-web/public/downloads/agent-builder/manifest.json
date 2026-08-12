@@ -1,35 +1,35 @@
 {
-  "generatedAt": "2026-08-12T04:02:29.492Z",
+  "generatedAt": "2026-08-12T04:08:03.045Z",
   "files": [
     {
       "name": "aurion-aios-builder-plugin.zip",
-      "bytes": 22585,
-      "sha256": "530e5be0b283029f5f5cfe277ed4f4f3dfe4a852032d5316fbfe6965a4bdea76"
+      "bytes": 22588,
+      "sha256": "49e80cf432a9f6663b06b9e6eb40f177afe0ddaebf272f704f28ff507864fa3d"
     },
     {
       "name": "build-aios-agent.skill.zip",
-      "bytes": 8478,
-      "sha256": "abf0058f697f389e73806662c51b53cb65a8b0366276d2b9e674af135bd71bfc"
+      "bytes": 8482,
+      "sha256": "39827642f5db1735da95d96f85ca5c8944ff44b984149a72785d9b99336ef18e"
     },
     {
       "name": "use-aios-agent.skill.zip",
       "bytes": 2721,
-      "sha256": "9c91e15f5125d2a78dcd859435f2ae19d1ddcca83eb250c6bad86cfb64a21f74"
+      "sha256": "63d8129b79b7813c4882b70bcdd39a507dfc00b2de521ed131e80fe7ce209458"
     },
     {
       "name": "aurion-aios-one-click-install.zip",
-      "bytes": 40688,
-      "sha256": "03173be14ce7a9a1433c4d982ef8f696a068d1a128cde89c5529215503ef4297"
+      "bytes": 40689,
+      "sha256": "b6156b89a877752856422d211307317ff84dbaed0db125d78f83a19065f853c4"
     },
     {
       "name": "SHA256SUMS.txt",
       "bytes": 381,
-      "sha256": "ba86f90fa6c593ca70e913297823d91433cbf40121cc3cb1933d4864f6105524"
+      "sha256": "4f8a694cc51433f232ac00f3e907d10499612a562c4f85369ece86e720ad6850"
     },
     {
       "name": "REMOTE-MCP-URL.txt",
-      "bytes": 96,
-      "sha256": "8f14ba66147ef131a550d2b906ec3f247b13676a61b3a9fa110776286084fbab"
+      "bytes": 99,
+      "sha256": "f0d7294ead5b242a3c0f4077f026e727e95df25fbeabf47553e8eb67f8c1e200"
     },
     {
       "name": "aios-remote-mcp.json",
@@ -38,8 +38,8 @@
     },
     {
       "name": "AIOS-Agent-Builder-Installation-Guide.zh-TW.md",
-      "bytes": 9764,
-      "sha256": "fa26acc05a2fe1cb678983b063126ad6085bd505c3d3f277a6f6543bc7e69030"
+      "bytes": 9770,
+      "sha256": "cbd1f010dfb4e6a23de19007bd23dae3e16c8275b1a0570de5679f51aa440b5d"
     }
   ]
 }

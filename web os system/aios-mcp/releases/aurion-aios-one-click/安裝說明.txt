@@ -18,7 +18,7 @@ Windows：右鍵「Install-Aurion-AIOS.ps1」，選擇使用 PowerShell 執行
 2. 直接說「我想建立一位……的 AI 員工」。
 3. 第一次使用會開啟 AIOS 登入與 OAuth 授權頁；請使用自己的 AIOS 帳號。
 4. 對話與背景 Agent／Skill 草稿會傳回中央 AIOS。
-5. 到 https://aios-new.lazyoffice.app/agent-builds 查看。
+5. 到 https://aurion-aios.lazyoffice.app/agent-builds 查看。
 6. 若要使用既有員工，直接說「請用我的 AIOS 員工……」；Claude 會列出自己的已啟用員工並在執行後追蹤結果。
 7. 若要求定期執行，Claude 只會送出排程提案；必須由 FDE 核准後才生效。
 

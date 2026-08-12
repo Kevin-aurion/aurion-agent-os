@@ -14,7 +14,7 @@ Use `releases/aurion-aios-one-click-install.zip`:
 - Claude Chat fallback: add the Remote MCP URL in Claude Connectors, then upload `releases/build-aios-agent.skill.zip`.
 - ChatGPT/Codex: install the Universal Plugin from `releases/aurion-aios-builder-plugin.zip`, or register the same Remote MCP in ChatGPT Developer mode and add the bundled Skill.
 
-The Universal Plugin bundles the adaptive Skill and Remote MCP connector while retaining supported Claude lifecycle hooks. First use starts OAuth in the browser; each customer signs in with their own AIOS account. Completed turns then appear at `https://aios-new.lazyoffice.app/agent-builds`.
+The Universal Plugin bundles the adaptive Skill and Remote MCP connector while retaining supported Claude lifecycle hooks. First use starts OAuth in the browser; each customer signs in with their own AIOS account. Completed turns then appear at `https://aurion-aios.lazyoffice.app/agent-builds`.
 
 Claude Chat custom Skill ZIPs cannot themselves add a Connector. That product surface requires the one-time Connector step above and has no Claude Code-equivalent Stop hook; the Skill explicitly synchronizes each turn instead.
 

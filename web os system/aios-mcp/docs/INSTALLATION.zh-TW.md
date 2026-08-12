@@ -30,7 +30,7 @@ Plugin 固定連線至：
 https://aios-mcp.lazyoffice.app/mcp
 ```
 
-第一次使用時，客戶端會開瀏覽器顯示 AIOS OAuth 頁。使用者必須用自己的 AIOS 帳號登入並授權；安裝包內沒有共用帳號、密碼或靜態 Token。對話完成後，建置記錄會出現在 `https://aios-new.lazyoffice.app/agent-builds`。
+第一次使用時，客戶端會開瀏覽器顯示 AIOS OAuth 頁。使用者必須用自己的 AIOS 帳號登入並授權；安裝包內沒有共用帳號、密碼或靜態 Token。對話完成後，建置記錄會出現在 `https://aurion-aios.lazyoffice.app/agent-builds`。
 
 若使用純 Claude Chat、沒有 Claude Code CLI，請在 Claude 的 Connectors 設定新增上述 Remote MCP URL，再上傳 `build-aios-agent.skill.zip`。Claude Chat 的 Skill ZIP 目前無法替使用者自動新增 Connector，也沒有 Claude Code 同等的 Stop Hook，因此該 Skill 會在每次回覆前主動同步。
 
@@ -79,7 +79,7 @@ npm run install:local-clients
 6. 使用者明確確認後才送 FDE 審核。
 7. FDE 初審後，要求測試資料、實跑，再由 FDE 最終啟用。
 
-登入 `https://aios-new.lazyoffice.app/agent-builds` 可在獨立入口看到外部對話、每次迭代、Agent／Skill、記憶、流程與測試；**所有角色（含 FDE）都只看該登入帳號自己的建置**。FDE 跨帳號審核走管理頁／admin evolution-queue。
+登入 `https://aurion-aios.lazyoffice.app/agent-builds` 可在獨立入口看到外部對話、每次迭代、Agent／Skill、記憶、流程與測試；**所有角色（含 FDE）都只看該登入帳號自己的建置**。FDE 跨帳號審核走管理頁／admin evolution-queue。
 
 公開 Remote MCP 以 OAuth 對應每位 AIOS 使用者；每個人的建置資料仍依登入身分隔離。沒有共用 Builder 密碼。
 

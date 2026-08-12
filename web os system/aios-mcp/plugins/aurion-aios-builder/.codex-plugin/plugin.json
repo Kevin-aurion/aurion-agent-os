@@ -4,9 +4,9 @@
   "description": "Build governed AI employees, invoke approved employees, and request FDE-reviewed schedules through Aurion AIOS.",
   "author": {
     "name": "Aurion",
-    "url": "https://aios-new.lazyoffice.app/agent-builds"
+    "url": "https://aurion-aios.lazyoffice.app/agent-builds"
   },
-  "homepage": "https://aios-new.lazyoffice.app/agent-builds",
+  "homepage": "https://aurion-aios.lazyoffice.app/agent-builds",
   "keywords": [
     "agent-builder",
     "ai-employee",
@@ -30,7 +30,7 @@
       "Approved Agent invocation",
       "FDE-reviewed recurring schedules"
     ],
-    "websiteURL": "https://aios-new.lazyoffice.app/agent-builds",
+    "websiteURL": "https://aurion-aios.lazyoffice.app/agent-builds",
     "defaultPrompt": [
       "Help me build an AI employee for a recurring business task.",
       "Continue one of my unfinished AI employee builds.",

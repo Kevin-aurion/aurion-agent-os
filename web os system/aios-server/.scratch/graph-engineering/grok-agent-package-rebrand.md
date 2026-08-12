@@ -3,7 +3,7 @@ Work in the repository's current uncommitted merge result. Do not commit/push. F
 Required canonical contract for this not-yet-released package feature:
 - manifest kind: `aurion.aios.agent-package`
 - source product: `Aurion AIOS`
-- JSON Schema id: `https://aios-new.lazyoffice.app/schemas/agent-package-v1.json`
+- JSON Schema id: `https://aurion-aios.lazyoffice.app/schemas/agent-package-v1.json`
 - schema/readme/title/docs: `Aurion AIOS Portable Agent Package`
 
 Update consistently:

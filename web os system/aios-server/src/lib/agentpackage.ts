@@ -100,7 +100,7 @@ function portableSlug(value: string, fallback: string): string {
 function packageSchema(): JsonObject {
   return {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
-    $id: 'https://aios-new.lazyoffice.app/schemas/agent-package-v1.json',
+    $id: 'https://aurion-aios.lazyoffice.app/schemas/agent-package-v1.json',
     title: 'Aurion AIOS Portable Agent Package',
     type: 'object',
     required: ['kind', 'schemaVersion', 'packageId', 'exportedAt', 'source', 'agent', 'skills', 'workflows', 'memory', 'tests', 'governance', 'checksums'],

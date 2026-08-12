@@ -144,7 +144,7 @@ Before saying the work is finished or paused:
 
 1. In a client without hooks, save the final paired turn and full artifact with `upsert_agent_build_snapshot`.
 2. Call `get_agent_build` and report the real status in ordinary language.
-3. Include the AIOS build session id so the user and FDE can find it at `https://aios-new.lazyoffice.app/agent-builds`.
+3. Include the AIOS build session id so the user and FDE can find it at `https://aurion-aios.lazyoffice.app/agent-builds`.
 
 ## Handle hook context silently
 

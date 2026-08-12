@@ -22,7 +22,7 @@ export const config = {
   httpPort: Number(opt('AIOS_HTTP_PORT', '8700')),
   webPort: Number(opt('AIOS_WEB_PORT', '3100')),
   webOrigin: opt('AIOS_WEB_ORIGIN', 'http://localhost:3100'),
-  publicOrigin: opt('AIOS_PUBLIC_ORIGIN', 'https://aios-new.lazyoffice.app').replace(/\/+$/, ''),
+  publicOrigin: opt('AIOS_PUBLIC_ORIGIN', 'https://aurion-aios.lazyoffice.app').replace(/\/+$/, ''),
   databaseUrl: req('DATABASE_URL'),
   redisUrl: req('REDIS_URL'),
   dataDir: opt('AIOS_DATA_DIR', path.resolve(process.cwd(), '../../aios-data')),

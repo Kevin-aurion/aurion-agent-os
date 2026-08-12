@@ -71,7 +71,7 @@ await writeFile(path.join(releases, 'SHA256SUMS.txt'), `${checksumLines.join('\n
 
 await writeFile(
   path.join(releases, 'REMOTE-MCP-URL.txt'),
-  `${expectedUrl}\n\nAgent Builds: https://aios-new.lazyoffice.app/agent-builds\n`,
+  `${expectedUrl}\n\nAgent Builds: https://aurion-aios.lazyoffice.app/agent-builds\n`,
   'utf8',
 );
 

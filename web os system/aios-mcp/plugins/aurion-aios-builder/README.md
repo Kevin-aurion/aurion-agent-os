@@ -9,7 +9,7 @@
 
 客戶電腦不會安裝 AIOS server、資料庫、Cloudflare Tunnel 或本機 MCP 服務。第一次使用 MCP 時，ChatGPT、Codex 或 Claude 會開啟 AIOS OAuth 登入與授權頁；使用者用自己的 AIOS 帳號登入。建置結果會出現在：
 
-https://aios-new.lazyoffice.app/agent-builds
+https://aurion-aios.lazyoffice.app/agent-builds
 
 所有外部建置內容都先是 shadow draft。這個 Plugin 沒有 FDE 核准、確認 Skill 或啟用 Agent 的能力。
 
