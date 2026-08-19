@@ -12,7 +12,7 @@ Targets to build (net-new, do not modify the reference):
 
 ## 1. Executive Summary — What to Reuse from the Reference Framework
 
-The LazyOffice reference contains five battle-tested design patterns. We port the *design essence* (and selectively lift code) rather than developing inside the reference tree.
+The Aurion reference contains five battle-tested design patterns. We port the *design essence* (and selectively lift code) rather than developing inside the reference tree.
 
 ### 1.1 Launch contract (port as-is, conceptually)
 An agent is a **directory** with `agent.md` (YAML frontmatter + body) as its manifest. A single loader (`src/manifest.ts`) fully validates and path-resolves the manifest **before anything runs**: engine pair valid, every step's verify rubric exists, input source exists. Runs flow through one entrypoint — `runAgent(manifest, runDir, {rawInput})` — with a preflight gate that checks the `claude` and `codex` CLIs are installed and authenticated, and every run leaves a timestamped `.runs/<stamp>/` directory with a JSON + Markdown report. **We keep this exact shape**: filesystem-defined agent → validated manifest → preflight → single run entrypoint → persisted report; but we add a DB record per run on top (the reference is filesystem-only).

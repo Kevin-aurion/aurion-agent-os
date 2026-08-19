@@ -3,6 +3,8 @@ import Observation
 
 /// AWP/1 client over URLSessionWebSocketTask. Connect → subscribe → ping/pong →
 /// reconnect with backoff → resume via lastSeq. Same protocol as the web client.
+///
+/// User-hub only (`/ws` + JWT). Device work uses `DeviceChannel` on `/device/ws`.
 @Observable
 final class AwpClient: NSObject {
     private(set) var connected = false
@@ -29,7 +31,8 @@ final class AwpClient: NSObject {
 
     private func openSocket() {
         guard let token = Keychain.get("access") else { return }
-        let t = session.webSocketTask(with: AIOSConfig.wsURL(token: token))
+        // User hub may put JWT in query (existing contract). Device channel never does.
+        let t = session.webSocketTask(with: AIOSConfig.userWsURL(token: token))
         task = t
         t.resume()
         connected = true
@@ -44,7 +47,12 @@ final class AwpClient: NSObject {
     }
 
     func send(kind: String, topic: String? = nil, reqId: String? = nil, payload: [String: Any] = [:]) {
-        var obj: [String: Any] = ["v": 1, "id": UUID().uuidString, "kind": kind, "ts": ISO8601DateFormatter().string(from: Date())]
+        var obj: [String: Any] = [
+            "v": 1,
+            "id": UUID().uuidString,
+            "kind": kind,
+            "ts": ISO8601DateFormatter().string(from: Date()),
+        ]
         if let topic { obj["topic"] = topic }
         if let reqId { obj["reqId"] = reqId }
         if !payload.isEmpty { obj["payload"] = payload }

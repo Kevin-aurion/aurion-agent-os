@@ -21,6 +21,9 @@ export interface RunGrokOpts {
   /** Hard-disable the web search / web fetch tools (agent restriction). */
   disableWebSearch?: boolean;
   onLine?: (line: string) => void;
+  /** Opt-in L6 write sandbox profile path; forwarded to execCli. */
+  sandboxProfilePath?: string;
+  signal?: AbortSignal;
 }
 
 export interface RunGrokResult {
@@ -40,9 +43,12 @@ export async function runGrok(opts: RunGrokOpts): Promise<RunGrokResult> {
   const res = await execCli(config.engines.grokPath, args, {
     cwd: opts.cwd,
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    sandboxProfilePath: opts.sandboxProfilePath,
     onLine: opts.onLine ? (line) => opts.onLine!(line) : undefined,
+    signal: opts.signal,
   });
 
+  if (res.aborted) throw new Error('grok aborted');
   if (res.timedOut) throw new Error(`grok timed out after ${opts.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms`);
   if (res.code !== 0) {
     throw new Error(`grok exited ${res.code}: ${(res.stderr || res.stdout).slice(0, 400)}`);

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "aurion_aios": {
+      "type": "http",
+      "url": "https://aios-mcp.lazyoffice.app/mcp"
+    }
+  }
+}

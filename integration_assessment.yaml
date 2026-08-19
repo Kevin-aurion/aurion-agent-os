@@ -1,0 +1,68 @@
+document: AI OS × Langflow Integration Assessment
+version: 1.0
+status: architecture-review
+instructions: >-
+  Each item should be marked pass, partial, fail, not_applicable, or unknown. A production go decision requires
+  all blocker=true items to be pass or have an accepted risk exception.
+sections:
+  - id: current_architecture
+    name: 現有 AI OS 架構盤點
+    items:
+      - {id: CA-01, blocker: true, question: 是否已有 Agent Registry 與不可變版本模型？, evidence: null, status: unknown}
+      - {id: CA-02, blocker: true, question: 是否已有 Tool/MCP Registry，且可描述 scope、風險與版本？, evidence: null, status: unknown}
+      - {id: CA-03, blocker: true, question: 是否已有 Tenant、使用者與服務身分的授權模型？, evidence: null, status: unknown}
+      - {id: CA-04, blocker: false, question: 是否已有工作流程或 Agent Runtime 抽象介面？, evidence: null, status: unknown}
+      - {id: CA-05, blocker: true, question: 是否已有 Secret Vault 或可交換的 credential reference？, evidence: null, status: unknown}
+  - id: product_fit
+    name: 產品與 UX 適配
+    items:
+      - {id: PF-01, blocker: true, question: 能否將對話分成即時命令、教學、規則、排程、知識與連線需求？, evidence: null, status: unknown}
+      - {id: PF-02, blocker: true, question: 教學是否先形成 Change Proposal，而非直接修改正式 Agent？, evidence: null, status: unknown}
+      - {id: PF-03, blocker: true, question: 使用者是否能看懂能力、權限、風險、成本與測試差異？, evidence: null, status: unknown}
+      - {id: PF-04, blocker: false, question: 是否支援 Skill 版本比較、回滾與生命週期？, evidence: null, status: unknown}
+  - id: langflow_adapter
+    name: Langflow Adapter
+    items:
+      - {id: LA-01, blocker: true, question: Flow CRUD 是否完全透過 Adapter，不讓業務模組依賴 Langflow JSON？, evidence: null, status: unknown}
+      - {id: LA-02, blocker: true, question: 是否封裝 v1/v2 執行、事件與 HITL Resume 差異？, evidence: null, status: unknown}
+      - {id: LA-03, blocker: true, question: Workflow API v2 Beta 變更是否能由 contract tests 偵測？, evidence: null, status: unknown}
+      - {id: LA-04, blocker: false, question: 是否支援 Flow artifact digest、模板版本與 compiled-from Skill version？, evidence: null, status: unknown}
+      - {id: LA-05, blocker: false, question: 是否可在未來替換為 LangGraph 或自研 Runtime？, evidence: null, status: unknown}
+  - id: security
+    name: 安全與治理
+    items:
+      - {id: SEC-01, blocker: true, question: Authoring/Sandbox 與 Production Runtime 是否實體隔離？, evidence: null, status: unknown}
+      - {id: SEC-02, blocker: true, question: 未受信任 Tenant 是否不共享同一 Langflow Runtime 信任邊界？, evidence: null, status: unknown}
+      - {id: SEC-03, blocker: true, question: Custom Component 與 Code Interpreter 是否預設停用或僅限受控管理員？, evidence: null, status: unknown}
+      - {id: SEC-04, blocker: true, question: MCP 是否經 Gateway 做 allowlist、scope、schema validation、timeout、rate limit、audit？, evidence: null, status: unknown}
+      - {id: SEC-05, blocker: true, question: 外寄、刪除、付款、退款、合約與權限變更是否 deterministic 地要求核准？, evidence: null, status: unknown}
+      - {id: SEC-06, blocker: true, question: Email、文件與 RAG 內容是否一律視為不可信，不能覆寫政策？, evidence: null, status: unknown}
+      - {id: SEC-07, blocker: true, question: Log/Trace 是否遮罩 PII、Token、附件與機密正文？, evidence: null, status: unknown}
+      - {id: SEC-08, blocker: true, question: Runtime 是否使用唯讀 RootFS、最小權限、網路 egress policy 與短期憑證？, evidence: null, status: unknown}
+  - id: data_and_knowledge
+    name: 資料、Knowledge 與 Memory
+    items:
+      - {id: DK-01, blocker: true, question: Knowledge ACL 是否在 retrieval 前強制執行，而非只靠 Prompt？, evidence: null, status: unknown}
+      - {id: DK-02, blocker: true, question: Knowledge 與 Memory 是否分開建模與設定 retention？, evidence: null, status: unknown}
+      - {id: DK-03, blocker: true, question: 是否定義可刪除、可追溯與資料區域政策？, evidence: null, status: unknown}
+      - {id: DK-04, blocker: false, question: 是否有 reranking、citation、freshness 與 index version 測試？, evidence: null, status: unknown}
+  - id: operations
+    name: 維運與非功能需求
+    items:
+      - {id: OPS-01, blocker: true, question: 是否有每次 Run、Tool Call、Approval、版本與成本的完整 Audit Trail？, evidence: null, status: unknown}
+      - {id: OPS-02, blocker: true, question: 是否有 idempotency、retry、timeout、circuit breaker 與 dead-letter queue？, evidence: null, status: unknown}
+      - {id: OPS-03, blocker: true, question: 是否能以 canary 或 blue-green 發布並快速回滾？, evidence: null, status: unknown}
+      - {id: OPS-04, blocker: true, question: 是否有 SLO、容量、備份、災難復原與升級策略？, evidence: null, status: unknown}
+      - {id: OPS-05, blocker: false, question: 是否可監控模型成本、token、cache hit、tool error 與 approval latency？, evidence: null, status: unknown}
+  - id: poc_exit_criteria
+    name: POC 退出條件
+    items:
+      - {id: POC-01, blocker: true, question: Read-only Email POC 能以聊天建立 Skill 草稿並顯示結構化差異？, evidence: null, status: unknown}
+      - {id: POC-02, blocker: true, question: 退款信件測試必定暫停且不產生外寄 Tool Call？, evidence: null, status: unknown}
+      - {id: POC-03, blocker: true, question: Prompt Injection 測試無法新增 Tool、擴權或修改政策？, evidence: null, status: unknown}
+      - {id: POC-04, blocker: true, question: 同一 message_id 重跑不會重複建立工單或處理結果？, evidence: null, status: unknown}
+      - {id: POC-05, blocker: true, question: Langflow 停機或版本切換不會破壞 AI OS 的 Agent/Skill 真實來源？, evidence: null, status: unknown}
+recommendation_logic:
+  go: 所有 blocker 項目通過，且 POC 無未接受的 Critical/High 風險。
+  conditional_go: blocker 項目只有 partial，已有具名 owner、期限與可驗證補救措施。
+  no_go: 任一安全 blocker 失敗，或系統必須讓 Worker Agent 直接修改 Production 程式碼/Flow。

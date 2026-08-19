@@ -6,6 +6,7 @@ export {
   ingestChatSummary,
   recall,
   recallHits,
+  recallHitsStrict,
   reindexAgent,
   listWikiFiles,
   readWikiFile,
@@ -16,3 +17,4 @@ export {
 export { summarizeRun, summarizeChat } from './summary.js';
 export { getEmbeddingProvider, type EmbeddingProvider } from './embedding.js';
 export { redactSecrets } from './redactor.js';
+export { deepRedactSecrets } from './deepredact.js';

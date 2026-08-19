@@ -1,0 +1,4 @@
+49e80cf432a9f6663b06b9e6eb40f177afe0ddaebf272f704f28ff507864fa3d  aurion-aios-builder-plugin.zip
+39827642f5db1735da95d96f85ca5c8944ff44b984149a72785d9b99336ef18e  build-aios-agent.skill.zip
+63d8129b79b7813c4882b70bcdd39a507dfc00b2de521ed131e80fe7ce209458  use-aios-agent.skill.zip
+b6156b89a877752856422d211307317ff84dbaed0db125d78f83a19065f853c4  aurion-aios-one-click-install.zip

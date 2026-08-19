@@ -11,17 +11,12 @@ import { ok, errors, sendError } from '../lib/http.js';
 import { requireAuth, requireTrainer } from '../lib/guard.js';
 import { audit } from '../lib/audit.js';
 import { understandSkill } from '../skills/understand.js';
+import { buildSkillFromRequirement } from '../skills/build.js';
+import { assertInsideRoot } from '../lib/safepath.js';
+import { slugify } from '../lib/slug.js';
+import { parseSkillManifest } from '../lib/skillmanifest.js';
 
 // ── Helpers: slugs & frontmatter ────────────────────────────────────────────
-
-function slugify(name: string): string {
-  const s = name
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  return s || 'skill';
-}
 
 async function uniqueSlug(base: string): Promise<string> {
   let slug = base;
@@ -47,7 +42,8 @@ function parseFrontmatter(md: string): { meta: Record<string, unknown>; body: st
 }
 
 async function writeSkillFile(slug: string, relPath: string, data: Buffer | string): Promise<void> {
-  const dest = path.join(paths.skills, slug, relPath);
+  const skillRoot = path.join(paths.skills, slug);
+  const dest = assertInsideRoot(skillRoot, path.join(skillRoot, relPath));
   await mkdir(path.dirname(dest), { recursive: true });
   await writeFile(dest, data);
 }
@@ -91,6 +87,16 @@ function readZip(buf: Buffer): ZipEntry[] {
     const commentLen = buf.readUInt16LE(offset + 32);
     const localHeaderOffset = buf.readUInt32LE(offset + 42);
     const name = buf.toString('utf8', offset + 46, offset + 46 + nameLen);
+
+    // Zip Slip: reject traversal, absolute paths, Windows drive prefixes, backslashes.
+    if (
+      name.includes('\\') ||
+      name.startsWith('/') ||
+      /^[a-zA-Z]:/.test(name) ||
+      name.split('/').some((seg) => seg === '..')
+    ) {
+      throw new Error(`不安全的 zip 項目: ${name}`);
+    }
 
     if (buf.readUInt32LE(localHeaderOffset) !== LFH_SIG) throw new Error(`Bad local file header for zip entry "${name}"`);
     const lfhNameLen = buf.readUInt16LE(localHeaderOffset + 26);
@@ -336,15 +342,14 @@ export async function skillRoutes(app: FastifyInstance) {
     }
   });
 
+  // FDE-only. Applies CODEX gate for RECORDED / COMPUTER_CONTROL when pre-linked.
   app.post('/api/skills/:id/confirm', { preHandler: requireTrainer }, async (req, reply) => {
     try {
       const { id } = idParamSchema.parse(req.params);
-      const skill = await prisma.skill.findUnique({ where: { id } });
-      if (!skill || skill.deletedAt) throw errors.notFound('Skill not found');
-      const updated = await prisma.skill.update({
-        where: { id },
-        data: { reviewStatus: 'CONFIRMED', confirmedBy: req.user!.sub, confirmedAt: new Date() },
-      });
+      const { confirmAwaitingSkill } = await import('../lib/skillgate.js');
+      // Direct confirm: skill must be AWAITING_USER_CONFIRM; CODEX gate on all links.
+      // (Pre-linked RECORDED drafts activate on confirm without a separate attach.)
+      const updated = await confirmAwaitingSkill(id, req.user!.sub);
       await audit(req.user!.sub, 'skill.confirm', 'Skill', id);
       return ok(updated);
     } catch (e) {
@@ -368,71 +373,72 @@ export async function skillRoutes(app: FastifyInstance) {
   app.post('/api/skills/build', { preHandler: requireTrainer }, async (req, reply) => {
     try {
       const body = buildSchema.parse(req.body);
-      const firstLine = (body.requirement.split(/\r?\n/)[0] ?? '').slice(0, 40).trim() || 'Generated skill';
       const { executionEnv } = resolveExecutionEnv('PROMPT_MANUAL', body.executionEnv);
-      const id = ulid();
-      const slug = await uniqueSlug(slugify(firstLine));
-
-      // Create the skill row immediately so the POST returns fast (drafting +
-      // understanding can take ~1 min combined — far longer than the dev proxy
-      // timeout). The trainer UI polls GET /api/skills/:id until the review
-      // status advances. status 'PENDING_UNDERSTANDING' = still drafting/analysing.
-      await prisma.skill.create({
-        data: {
-          id,
-          slug,
-          name: firstLine,
-          origin: 'CLI_GENERATED',
-          kind: 'PROMPT_MANUAL',
-          contentMd: `（${body.engine} 正在草擬技能中…）\n\n[Requirement]\n${body.requirement}`,
-          generator: body.engine,
-          reviewStatus: 'PENDING_UNDERSTANDING',
-          executionEnv,
-        },
+      const { skillId } = await buildSkillFromRequirement({
+        requirement: body.requirement,
+        engine: body.engine,
+        executionEnv: body.executionEnv,
       });
-      await audit(req.user!.sub, 'skill.build', 'Skill', id, { engine: body.engine, executionEnv });
+      await audit(req.user!.sub, 'skill.build', 'Skill', skillId, { engine: body.engine, executionEnv });
+      return ok(await prisma.skill.findUnique({ where: { id: skillId } }));
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  });
 
-      // Draft with the chosen engine, then run the understand→confirm pipeline —
-      // all in the background; never blocks the HTTP response.
-      void (async () => {
-        const draftPrompt = [
-          'Draft a SKILL.md file for the following requirement. Include a YAML frontmatter block with at least `name` and `description` fields, followed by the skill manual body (what it does, how to use it, any caveats).',
-          'Output ONLY the markdown content of SKILL.md — no commentary, no surrounding code fences.',
-          '',
-          `[Requirement]\n${body.requirement}`,
-        ].join('\n');
-        let drafted: string | null = null;
-        try {
-          if (body.engine === 'CODEX') {
-            const mod: any = await import('../engine/codex.js');
-            drafted = (await mod.runCodex({ prompt: draftPrompt, cwd: paths.cache, sandbox: 'read-only', timeoutMs: 5 * 60_000 }))?.text ?? null;
-          } else if (body.engine === 'GROK') {
-            const mod: any = await import('../engine/grok.js');
-            drafted = (await mod.runGrok({ prompt: draftPrompt, cwd: paths.cache, timeoutMs: 5 * 60_000 }))?.stdout ?? null;
-          } else {
-            const mod: any = await import('../engine/claude.js');
-            drafted = (await mod.runClaude({ prompt: draftPrompt, cwd: paths.cache, timeoutMs: 5 * 60_000 }))?.stdout ?? null;
-          }
-        } catch {
-          drafted = null;
-        }
-        const contentMd =
-          drafted && drafted.trim()
-            ? drafted.trim()
-            : `---\nname: ${firstLine.replace(/[:\n]/g, ' ')}\ndescription: Auto-generated stub — engine unavailable at build time.\n---\n\n# ${firstLine}\n\n${body.requirement}\n`;
-        const { meta } = parseFrontmatter(contentMd);
-        const name = typeof meta.name === 'string' && meta.name.trim() ? meta.name.trim() : firstLine;
-        await writeSkillFile(slug, 'SKILL.md', contentMd);
-        await prisma.skill.update({ where: { id }, data: { contentMd, name } }).catch(() => {});
-        try {
-          await understandSkill(id);
-        } catch (e) {
-          req.log.error({ err: e, skillId: id }, 'understandSkill failed');
-        }
-      })();
+  // Progressive disclosure: read skill L1 metadata (auth).
+  app.get('/api/skills/:id/metadata', { preHandler: requireAuth }, async (req, reply) => {
+    try {
+      const { id } = idParamSchema.parse(req.params);
+      const skill = await prisma.skill.findUnique({ where: { id } });
+      if (!skill || skill.deletedAt) throw errors.notFound('Skill not found');
+      return ok(parseSkillManifest(skill));
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  });
 
-      const fresh = await prisma.skill.findUnique({ where: { id } });
-      return ok(fresh);
+  // Progressive disclosure: FDE merges metadata into Skill.assets.metadata (no confirm side-effects).
+  const metadataPatchSchema = z.object({
+    description: z.string().optional(),
+    whenToUse: z.string().optional(),
+    whenNotToUse: z.string().optional(),
+    requiredTools: z.array(z.string()).optional(),
+    conflictsWith: z.array(z.string()).optional(),
+    sideEffects: z.array(z.string()).optional(),
+    riskTier: z.enum(['low', 'medium', 'high']).optional(),
+    tokenBudget: z.number().int().positive().max(8000).optional(),
+    evalSuiteId: z.string().nullable().optional(),
+  });
+
+  app.patch('/api/skills/:id/metadata', { preHandler: requireTrainer }, async (req, reply) => {
+    try {
+      const { id } = idParamSchema.parse(req.params);
+      const body = metadataPatchSchema.parse(req.body);
+      const skill = await prisma.skill.findUnique({ where: { id } });
+      if (!skill || skill.deletedAt) throw errors.notFound('Skill not found');
+
+      const prevAssets =
+        skill.assets && typeof skill.assets === 'object' && !Array.isArray(skill.assets)
+          ? ({ ...(skill.assets as Record<string, unknown>) } as Record<string, unknown>)
+          : ({} as Record<string, unknown>);
+      const prevMeta =
+        prevAssets.metadata && typeof prevAssets.metadata === 'object' && !Array.isArray(prevAssets.metadata)
+          ? ({ ...(prevAssets.metadata as Record<string, unknown>) } as Record<string, unknown>)
+          : ({} as Record<string, unknown>);
+
+      // Shallow merge only provided fields into assets.metadata — never touch contentMd / reviewStatus.
+      const nextMeta = { ...prevMeta, ...body };
+      const nextAssets = { ...prevAssets, metadata: nextMeta };
+
+      const updated = await prisma.skill.update({
+        where: { id },
+        data: { assets: nextAssets as object },
+      });
+      await audit(req.user!.sub, 'skill.metadata_update', 'Skill', id, {
+        fields: Object.keys(body),
+      });
+      return ok(parseSkillManifest(updated));
     } catch (e) {
       return sendError(reply, e);
     }

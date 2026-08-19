@@ -10,6 +10,12 @@ export interface ToolContext {
   agentDir: string;
   /** From the agent's restrictions (engine/restrictions.ts). */
   cloudWrite: boolean;
+  /** From the agent's restrictions — gate email-sending tools (groundwork; no built-in email tool yet). */
+  sendEmail: boolean;
+  /** Optional run id — used for VIOLATION proposal linkage when a hard block fires. */
+  runId?: string;
+  /** Authenticated actor / run trigger for governed MCP audit attribution. */
+  userId?: string;
 }
 
 export interface ToolModule {
@@ -32,6 +38,14 @@ const uploadToCloud: ToolModule = {
   async run(args, ctx) {
     if (!ctx) throw new Error('upload_to_cloud requires tool context');
     if (!ctx.cloudWrite) {
+      // Hard block unchanged — still throw. Extra: fail-safe VIOLATION signal (ADR 0004).
+      const { recordViolation } = await import('../lib/changeproposal.js');
+      await recordViolation({
+        agentId: ctx.agentId,
+        runId: ctx.runId,
+        kind: 'cloud_write',
+        detail: { tool: 'upload_to_cloud', message: 'cloudWrite restriction blocked upload' },
+      });
       throw new Error('RESTRICTED: 此員工未開啟「寫入雲端檔案」權限，無法上傳。');
     }
     const files = Array.isArray(args.files) ? (args.files as string[]) : [];
@@ -56,8 +70,32 @@ const uploadToCloud: ToolModule = {
   },
 };
 
+/**
+ * parse_document — parse a workspace file (PDF / scan / office) via local
+ * Docling into Markdown. Local read-only; no restriction flag required.
+ * args: { file: string } — path relative to the agent workspace.
+ */
+const parseDocument: ToolModule = {
+  meta: {
+    description: '將工作區內的 PDF／掃描件／文件解析為 Markdown（本地 Docling 服務）',
+    input: { file: '相對於工作目錄的檔案路徑' },
+  },
+  async run(args, ctx) {
+    if (!ctx) throw new Error('parse_document requires tool context');
+    const rel = typeof args.file === 'string' ? args.file : '';
+    if (!rel) throw new Error('parse_document: args.file 為空');
+    if (/\.\./.test(rel) || path.isAbsolute(rel)) throw new Error(`parse_document: 不允許的路徑 ${rel}`);
+    const abs = path.join(ctx.agentDir, rel);
+    if (!existsSync(abs)) throw new Error(`parse_document: 找不到檔案 ${rel}`);
+    const { parseDocumentFile } = await import('../lib/docparse.js');
+    const result = await parseDocumentFile(abs, path.basename(rel));
+    return { markdown: result.markdown, status: result.status };
+  },
+};
+
 const BUILTIN_TOOLS: Record<string, ToolModule> = {
   upload_to_cloud: uploadToCloud,
+  parse_document: parseDocument,
 };
 
 /** Dynamically import agentDir/tools/<name>.{js,ts}, else a built-in tool. */
@@ -82,6 +120,25 @@ export async function loadTool(agentDir: string, toolName: string): Promise<Tool
 
 /** Load and execute a tool by name with resolved args. */
 export async function runTool(agentDir: string, toolName: string, args: Record<string, unknown>, ctx?: ToolContext): Promise<unknown> {
+  const mcp = /^mcp:([A-Za-z0-9._-]+):([A-Za-z0-9._-]+)$/.exec(toolName);
+  if (mcp) {
+    if (!ctx) throw new Error('MCP tool requires governed tool context');
+    const [, serverId, externalTool] = mcp;
+    const writeTools = new Set(['gmail_create_draft', 'gmail_send', 'drive_create_text_file']);
+    const callArgs =
+      writeTools.has(externalTool!) && ctx.runId && args.runId == null
+        ? { ...args, runId: ctx.runId }
+        : args;
+    const { brokerDispatch } = await import('../lib/mcpbroker.js');
+    return brokerDispatch({
+      agentId: ctx.agentId,
+      userId: ctx.userId,
+      runId: ctx.runId,
+      serverId: serverId!,
+      tool: externalTool!,
+      args: callArgs,
+    });
+  }
   const mod = await loadTool(agentDir, toolName);
   return mod.run(args, ctx);
 }

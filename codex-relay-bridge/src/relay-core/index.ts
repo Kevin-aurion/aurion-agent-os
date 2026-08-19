@@ -409,7 +409,7 @@ export class RelayCore {
         const project =
           typeof resumeResult?.thread?.cwd === "string"
             ? resumeResult.thread.cwd
-            : "/Users/kevin/Documents/aurion";
+            : process.cwd();
         fresh = this.registry.registerExisting(thread_id, project, "idle");
       }
 

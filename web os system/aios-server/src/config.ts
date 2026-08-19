@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import os from 'node:os';
 import path from 'node:path';
 
 function req(name: string, fallback?: string): string {
@@ -13,10 +14,15 @@ function opt(name: string, fallback = ''): string {
   return process.env[name] ?? fallback;
 }
 
+/** Default Codex App home (~/.codex). Overridable via CODEX_HOME. */
+const codexHomeDefault = path.join(os.homedir(), '.codex');
+const codexHome = opt('CODEX_HOME', codexHomeDefault) || codexHomeDefault;
+
 export const config = {
   httpPort: Number(opt('AIOS_HTTP_PORT', '8700')),
   webPort: Number(opt('AIOS_WEB_PORT', '3100')),
   webOrigin: opt('AIOS_WEB_ORIGIN', 'http://localhost:3100'),
+  publicOrigin: opt('AIOS_PUBLIC_ORIGIN', 'https://aurion-aios.lazyoffice.app').replace(/\/+$/, ''),
   databaseUrl: req('DATABASE_URL'),
   redisUrl: req('REDIS_URL'),
   dataDir: opt('AIOS_DATA_DIR', path.resolve(process.cwd(), '../../aios-data')),
@@ -59,6 +65,66 @@ export const config = {
     grokPath: opt('GROK_CLI_PATH', 'grok'),
   },
 
+  // Codex App MCP bridges (Computer Use + Record & Replay). Paths verified on
+  // macOS Codex install; override with env when App layout drifts.
+  codex: {
+    home: codexHome,
+    computerUseDir: opt('CODEX_COMPUTER_USE_DIR', path.join(codexHome, 'computer-use')),
+    computerUseBin: opt(
+      'CODEX_COMPUTER_USE_BIN',
+      path.join(
+        codexHome,
+        'computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient',
+      ),
+    ),
+    recordPluginDir: opt(
+      'CODEX_RECORD_PLUGIN_DIR',
+      path.join(codexHome, '.tmp/bundled-marketplaces/openai-bundled/plugins/record-and-replay'),
+    ),
+    recordLauncher: opt(
+      'CODEX_RECORD_LAUNCHER',
+      path.join(
+        codexHome,
+        '.tmp/bundled-marketplaces/openai-bundled/plugins/record-and-replay/bin/computer-use-client-launcher',
+      ),
+    ),
+  },
+
+  // Local Docling document-parse service (docker aios-docparse, loopback only).
+  docparse: {
+    url: opt('DOCPARSE_URL', 'http://127.0.0.1:5001'),
+  },
+
+  // Read-only AI knowledge pilot. The vault remains the source of truth;
+  // Langflow receives only an already-grounded, redacted answer envelope.
+  knowledgePilot: {
+    vaultDir: opt(
+      'AIOS_KNOWLEDGE_VAULT_ROOT',
+      path.resolve(process.cwd(), '..', '..', '..', 'AI知識庫'),
+    ),
+    pythonPath: opt('AIOS_KNOWLEDGE_PYTHON_PATH', '/usr/bin/python3'),
+    flowId: opt(
+      'AIOS_KNOWLEDGE_LANGFLOW_ID',
+      '4ec97062-f088-45b6-a304-a4fe1d1c9f26',
+    ),
+  },
+
+  // OpenAI (Whisper voice transcription for skill-training UI). Optional —
+  // missing key or VOICE_ENABLED=false returns a clear NOT_CONFIGURED error.
+  openaiApiKey: opt('OPENAI_API_KEY'),
+  voice: {
+    enabled: opt('VOICE_ENABLED', 'true').toLowerCase() !== 'false',
+    model: opt('WHISPER_MODEL', 'whisper-1') || 'whisper-1',
+  },
+
+  remoteMcp: {
+    issuer: opt('AIOS_MCP_OAUTH_ISSUER', 'https://aios-mcp.lazyoffice.app').replace(/\/+$/, ''),
+    resourceUrl: opt(
+      'AIOS_MCP_PUBLIC_URL',
+      'https://aios-mcp.lazyoffice.app/mcp',
+    ).replace(/\/+$/, ''),
+  },
+
   // Memory (Phase 1): L1 wiki on disk is source of truth; L3 Qdrant is a
   // rebuildable semantic index. When enabled=false every memory I/O is no-op.
   memory: {
@@ -84,6 +150,9 @@ export const paths = {
   cache: path.join(config.dataDir, 'cache'),
   computerControl: path.join(config.dataDir, 'computer-control'),
   runs: path.join(config.dataDir, 'runs'),
+  // Durable DeviceArtifact binaries (screenshots etc.); never via WebSocket.
+  deviceArtifacts: path.join(config.dataDir, 'device-artifacts'),
+  knowledgePilotRuns: path.join(config.dataDir, 'runs', 'knowledge-pilot'),
   builtinSkills: path.resolve(process.cwd(), 'builtin-skills'),
 };
 

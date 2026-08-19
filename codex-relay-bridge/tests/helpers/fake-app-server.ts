@@ -64,7 +64,7 @@ function fillParams(method: string, params: unknown): unknown {
         callId: "call1",
         approvalId: null,
         command: ["ls"],
-        cwd: "/Users/kevin/Documents/aurion",
+        cwd: process.cwd(),
         reason: null,
         parsedCmd: [],
       };
@@ -214,7 +214,7 @@ async function runAfter(method: string): Promise<void> {
   }
 }
 
-function makeThread(id: string, cwd = "/Users/kevin/Documents/aurion") {
+function makeThread(id: string, cwd = process.cwd()) {
   return {
     id,
     sessionId: `sess_${id}`,
@@ -292,11 +292,11 @@ async function handleRequest(
       const tid = `thr_${randomUUID()}`;
       lastThreadId = tid;
       respond(id, {
-        thread: makeThread(tid, p.cwd ?? "/Users/kevin/Documents/aurion"),
+        thread: makeThread(tid, p.cwd ?? process.cwd()),
         model: "gpt-5",
         modelProvider: "openai",
         serviceTier: null,
-        cwd: p.cwd ?? "/Users/kevin/Documents/aurion",
+        cwd: p.cwd ?? process.cwd(),
         instructionSources: [],
         approvalPolicy: "on-request",
         approvalsReviewer: "user",
@@ -314,7 +314,7 @@ async function handleRequest(
         model: "gpt-5",
         modelProvider: "openai",
         serviceTier: null,
-        cwd: "/Users/kevin/Documents/aurion",
+        cwd: process.cwd(),
         instructionSources: [],
         approvalPolicy: "on-request",
         approvalsReviewer: "user",

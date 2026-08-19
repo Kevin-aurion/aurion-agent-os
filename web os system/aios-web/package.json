@@ -4,9 +4,12 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3100",
+    "prebuild": "npm run sync:agent-builder-downloads",
     "build": "next build",
     "start": "next start -p 3100",
-    "lint": "next lint"
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "sync:agent-builder-downloads": "node scripts/sync-agent-builder-downloads.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.62.0",

@@ -23,19 +23,34 @@ struct MenuBarView: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(app.connected ? Color.green : Color.red)
-                .frame(width: 8, height: 8)
-            Text(app.connected ? "已連線" : "未連線")
-                .font(.subheadline)
-                .fontWeight(.medium)
-            Spacer()
-            if let user = app.user {
-                Text(user.displayName)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(app.connected ? Color.green : Color.red)
+                    .frame(width: 8, height: 8)
+                Text(app.connected ? "使用者 AWP" : "使用者未連線")
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                Spacer()
+                if let user = app.user {
+                    Text(user.displayName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(app.deviceAgent.isOnline ? Color.green : Color.orange)
+                    .frame(width: 8, height: 8)
+                Text(
+                    app.deviceAgent.isEnrolled
+                        ? "裝置 \(app.deviceAgent.connectionState.rawValue)"
+                        : "裝置未註冊"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                Spacer()
             }
         }
         .padding(.horizontal, 12)

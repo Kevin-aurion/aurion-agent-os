@@ -13,7 +13,7 @@ const CODEX_BIN =
   process.env.CODEX_BIN ??
   "/Applications/ChatGPT.app/Contents/Resources/codex";
 const PROJECT =
-  process.env.LIVE_PROJECT ?? "/Users/kevin/Documents/aurion";
+  process.env.LIVE_PROJECT ?? process.cwd();
 
 describe("live-smoke", { skip: !LIVE }, () => {
   it("initialize → thread/start → turn/start → turn/completed with PONG", async () => {

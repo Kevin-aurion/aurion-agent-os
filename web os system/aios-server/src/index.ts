@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import formbody from '@fastify/formbody';
 import multipart from '@fastify/multipart';
 import fs from 'node:fs';
 import { config, paths } from './config.js';
@@ -8,10 +9,83 @@ import { hub } from './ws/hub.js';
 import { sendError } from './lib/http.js';
 import { authRoutes } from './routes/auth.js';
 import { healthRoutes } from './routes/health.js';
+import { mcpOAuthRoutes } from './routes/mcpoauth.js';
+import { agentRoutes } from './routes/agents.js';
+import { skillRoutes } from './routes/skills.js';
+import { evalRoutes } from './routes/evals.js';
+import { runtimeRoutes } from './routes/runtime.js';
+import { workflowRoutes } from './routes/workflows.js';
+import { runRoutes } from './routes/runs.js';
+import { approvalRoutes } from './routes/approvals.js';
+import { proposalRoutes } from './routes/proposals.js';
+import { reflectionRoutes } from './routes/reflections.js';
+import { recordingRoutes } from './routes/recording.js';
+import { conversationRoutes } from './routes/conversations.js';
+import { dashboardRoutes } from './routes/dashboard.js';
+import { memoryRoutes } from './routes/memory.js';
+import { costRoutes } from './routes/cost.js';
+import { identityRoutes } from './routes/identity.js';
+import { docparseRoutes } from './routes/docparse.js';
+import { trainingRoutes } from './routes/training.js';
+import { agentBuilderRoutes } from './routes/agentbuilder.js';
+import { agentRuntimeRoutes } from './routes/agentruntime.js';
+import { voiceRoutes } from './routes/voice.js';
+import { mcpRoutes } from './routes/mcp.js';
+import { googleWorkspaceRoutes } from './routes/googleworkspace.js';
+import { a2aRoutes } from './routes/a2a.js';
+import { devicesRoutes } from './routes/devices.js';
+import { deviceRoutes } from './routes/device.js';
+import { integrationRoutes } from './integrations/routes.js';
+import { channelRoutes } from './channels/routes.js';
+import { modelGatewayRoutes } from './routes/modelgateway.js';
+import { knowledgeGatewayRoutes } from './routes/knowledgegateway.js';
+import { knowledgePilotRoutes } from './routes/knowledgepilot.js';
+import { graphRoutes } from './routes/graph.js';
+
+const featureRoutes = [
+  agentRoutes,
+  skillRoutes,
+  evalRoutes,
+  runtimeRoutes,
+  workflowRoutes,
+  runRoutes,
+  approvalRoutes,
+  proposalRoutes,
+  reflectionRoutes,
+  recordingRoutes,
+  conversationRoutes,
+  dashboardRoutes,
+  memoryRoutes,
+  costRoutes,
+  identityRoutes,
+  docparseRoutes,
+  trainingRoutes,
+  agentBuilderRoutes,
+  agentRuntimeRoutes,
+  voiceRoutes,
+  mcpRoutes,
+  googleWorkspaceRoutes,
+  a2aRoutes,
+  devicesRoutes,
+  deviceRoutes,
+  integrationRoutes,
+  channelRoutes,
+  modelGatewayRoutes,
+  knowledgeGatewayRoutes,
+  knowledgePilotRoutes,
+  graphRoutes,
+] as const;
 
 async function main() {
   // Ensure local data directories exist.
-  for (const p of [paths.agents, paths.skills, paths.cache, paths.computerControl, paths.runs]) {
+  for (const p of [
+    paths.agents,
+    paths.skills,
+    paths.cache,
+    paths.computerControl,
+    paths.runs,
+    paths.deviceArtifacts,
+  ]) {
     fs.mkdirSync(p, { recursive: true });
   }
 
@@ -22,6 +96,7 @@ async function main() {
   });
 
   await app.register(cors, { origin: [config.webOrigin, 'http://localhost:3100'], credentials: true });
+  await app.register(formbody);
   await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024 } });
 
   app.setErrorHandler((err, _req, reply) => sendError(reply, err));
@@ -29,6 +104,7 @@ async function main() {
   // ── Routes ────────────────────────────────────────────────────────────────
   await app.register(healthRoutes);
   await app.register(authRoutes);
+  await app.register(mcpOAuthRoutes);
   // Later phases register here: agents, skills, workflows, runs, conversations,
   // integrations (microsoft/google), channels (line), dashboard, audit.
   await registerFeatureRoutes(app);
@@ -57,28 +133,22 @@ async function main() {
   process.on('SIGTERM', shutdown);
 }
 
-// Feature routes are added incrementally; import failures for not-yet-built
-// modules must not crash Phase 0. Each is optional until its phase lands.
 async function registerFeatureRoutes(app: import('fastify').FastifyInstance) {
-  const optional: Array<[string, string]> = [
-    ['./routes/agents.js', 'agentRoutes'],
-    ['./routes/skills.js', 'skillRoutes'],
-    ['./routes/workflows.js', 'workflowRoutes'],
-    ['./routes/runs.js', 'runRoutes'],
-    ['./routes/conversations.js', 'conversationRoutes'],
-    ['./routes/dashboard.js', 'dashboardRoutes'],
-    ['./routes/memory.js', 'memoryRoutes'],
-    ['./integrations/routes.js', 'integrationRoutes'],
-    ['./channels/routes.js', 'channelRoutes'],
-  ];
-  for (const [mod, exp] of optional) {
-    try {
-      const m: any = await import(mod);
-      if (m[exp]) await app.register(m[exp]);
-    } catch (e: any) {
-      if (e?.code !== 'ERR_MODULE_NOT_FOUND') throw e;
-    }
+  // These routes are part of the production application, so register them
+  // statically. A variable dynamic import works under tsx but is left pointing
+  // at dist/routes/*.js by tsup, which made a healthy production server expose
+  // only the bootstrap routes and silently skip the rest.
+  for (const routes of featureRoutes) {
+    await app.register(routes);
   }
+
+  // Ticket 22: the web client + Next rewrite reach the backend under `/api/*`;
+  // re-register the FDE registry route groups (MCP + A2A) with that prefix so
+  // the dashboard panels resolve. Bare `/mcp/*` and `/a2a/*` stay as the
+  // public Remote-MCP-era contract; both registrations share the exact same
+  // handlers and guard functions.
+  await app.register(mcpRoutes, { prefix: '/api' });
+  await app.register(a2aRoutes, { prefix: '/api' });
 }
 
 async function startSchedulerIfPresent() {

@@ -2,7 +2,7 @@
 // AWP/1 WebSocket client hook. Connects to the backend hub, subscribes to
 // topics, auto-reconnects with backoff, resumes via lastSeq, and answers pings.
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { tokens } from './api';
+import { ensureFreshAccess, tokens } from './api';
 
 export interface AwpFrame {
   v: 1;
@@ -38,13 +38,21 @@ export function useAwp(topics: string[], onEvent?: Listener) {
     let closed = false;
     let reconnectTimer: ReturnType<typeof setTimeout>;
 
-    function connect() {
+    async function connect() {
+      if (!(await ensureFreshAccess())) return;
+      if (closed) return;
       const access = tokens.access;
       if (!access) return;
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-      // Connect directly to the backend WS (Next rewrites don't proxy upgrades).
-      const host = location.hostname;
-      const ws = new WebSocket(`${proto}://${host}:8700/ws?token=${encodeURIComponent(access)}`);
+      // Local development connects directly to the loopback backend because
+      // Next rewrites do not proxy upgrade requests. Deployed hosts use the
+      // same public origin; the edge tunnel routes only /ws to port 8700.
+      const localBackend =
+        location.hostname === '127.0.0.1' || location.hostname === 'localhost';
+      const wsOrigin = localBackend
+        ? `${proto}://${location.hostname}:8700`
+        : `${proto}://${location.host}`;
+      const ws = new WebSocket(`${wsOrigin}/ws?token=${encodeURIComponent(access)}`);
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -61,13 +69,13 @@ export function useAwp(topics: string[], onEvent?: Listener) {
       ws.onclose = () => {
         setConnected(false);
         if (closed) return;
-        reconnectTimer = setTimeout(connect, backoffRef.current);
+        reconnectTimer = setTimeout(() => void connect(), backoffRef.current);
         backoffRef.current = Math.min(backoffRef.current * 2, 10000);
       };
       ws.onerror = () => ws.close();
     }
 
-    connect();
+    void connect();
     return () => {
       closed = true;
       clearTimeout(reconnectTimer);

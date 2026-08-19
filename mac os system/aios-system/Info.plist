@@ -7,5 +7,9 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>AIOS 裝置代理需要螢幕錄製權限，才能在 Computer Use / 檢查點流程中擷取目標 App 視窗截圖（不會在無法安全限縮範圍時擷取全螢幕密文）。</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>AIOS 透過固定的 LINE Desktop MCP 使用 Apple Events 與本機 LINE 互動（需您本機核准）。</string>
 </dict>
 </plist>

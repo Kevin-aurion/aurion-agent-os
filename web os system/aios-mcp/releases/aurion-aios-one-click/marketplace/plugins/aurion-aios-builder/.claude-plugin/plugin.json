@@ -1,0 +1,9 @@
+{
+  "name": "aurion-aios-builder",
+  "description": "Build AIOS employees naturally, invoke approved employees, and request governed schedules through the hosted Aurion AIOS Remote MCP.",
+  "version": "1.4.0",
+  "author": {
+    "name": "Aurion"
+  },
+  "homepage": "https://aurion-aios.lazyoffice.app/agent-builds"
+}

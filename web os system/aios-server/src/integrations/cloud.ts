@@ -33,6 +33,19 @@ export interface CloudMessage {
   snippet: string;
 }
 
+export interface CloudMessageDetail extends CloudMessage {
+  to: string;
+  cc: string;
+  bodyText: string;
+  labels: string[];
+  attachmentNames: string[];
+}
+
+export interface DriveTextResult extends CloudEntry {
+  text: string;
+  truncated: boolean;
+}
+
 export interface CreatedFile {
   externalId: string;
   name: string;
@@ -46,6 +59,98 @@ async function loadAccount(accountId: string): Promise<ConnectedAccount> {
   const account = await prisma.connectedAccount.findUnique({ where: { id: accountId } });
   if (!account) throw errors.notFound(`ConnectedAccount ${accountId} not found`);
   return account;
+}
+
+function requireGoogle(account: ConnectedAccount): void {
+  if (account.provider !== 'GOOGLE') {
+    throw errors.badRequest('This Google Workspace tool requires a Google account');
+  }
+}
+
+function escapeDriveQuery(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function decodeBase64Url(value: string): string {
+  if (!value) return '';
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  return Buffer.from(normalized, 'base64').toString('utf8');
+}
+
+type GmailPart = {
+  mimeType?: string | null;
+  filename?: string | null;
+  body?: { data?: string | null } | null;
+  parts?: GmailPart[] | null;
+};
+
+function collectGmailContent(part: GmailPart | null | undefined): {
+  plain: string[];
+  html: string[];
+  attachments: string[];
+} {
+  const out = { plain: [] as string[], html: [] as string[], attachments: [] as string[] };
+  const visit = (node: GmailPart | null | undefined) => {
+    if (!node) return;
+    if (node.filename) out.attachments.push(node.filename);
+    const data = node.body?.data;
+    if (data) {
+      const decoded = decodeBase64Url(data);
+      if (node.mimeType === 'text/plain') out.plain.push(decoded);
+      if (node.mimeType === 'text/html') out.html.push(decoded);
+    }
+    for (const child of node.parts ?? []) visit(child);
+  };
+  visit(part);
+  return out;
+}
+
+function htmlToPlainText(html: string): string {
+  return html
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function assertMailHeader(value: string, field: string): string {
+  const cleaned = value.trim();
+  if (!cleaned || /[\r\n]/.test(cleaned)) {
+    throw errors.badRequest(`${field} is invalid`);
+  }
+  return cleaned;
+}
+
+function encodeMailSubject(subject: string): string {
+  return `=?UTF-8?B?${Buffer.from(subject, 'utf8').toString('base64')}?=`;
+}
+
+function buildRawMail(input: { to: string; subject: string; body: string; cc?: string }): string {
+  const to = assertMailHeader(input.to, 'to');
+  const subject = assertMailHeader(input.subject, 'subject');
+  const cc = input.cc?.trim() ? assertMailHeader(input.cc, 'cc') : '';
+  const headers = [
+    `To: ${to}`,
+    cc ? `Cc: ${cc}` : '',
+    `Subject: ${encodeMailSubject(subject)}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset="UTF-8"',
+    'Content-Transfer-Encoding: 8bit',
+  ].filter(Boolean);
+  return Buffer.from(`${headers.join('\r\n')}\r\n\r\n${input.body}`, 'utf8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
 }
 
 // ── Drive / Files ─────────────────────────────────────────────────────────────
@@ -114,6 +219,147 @@ export async function getFileMeta(accountId: string, fileId: string): Promise<Cl
 
   await audit(account.userId, 'cloud.getFileMeta', 'ConnectedAccount', accountId, { fileId });
   return entry;
+}
+
+/** Google Drive full-text/name search for MCP read tools. Read-only and capped. */
+export async function searchGoogleDrive(
+  accountId: string,
+  query: string,
+  limit = 20,
+): Promise<CloudEntry[]> {
+  const account = await loadAccount(accountId);
+  requireGoogle(account);
+  const token = await getValidAccessToken(accountId);
+  const drive = driveClientFor(token);
+  const needle = query.trim();
+  const q = needle
+    ? `trashed = false and (name contains '${escapeDriveQuery(needle)}' or fullText contains '${escapeDriveQuery(needle)}')`
+    : 'trashed = false';
+  const pageSize = Math.max(1, Math.min(50, Math.floor(limit)));
+  const res = await drive.files.list({
+    q,
+    pageSize,
+    orderBy: 'modifiedTime desc',
+    fields: 'files(id,name,mimeType,webViewLink,parents,modifiedTime)',
+  });
+  const entries = (res.data.files ?? []).map((f) => ({
+    id: f.id!,
+    name: f.name ?? '',
+    kind: f.mimeType === 'application/vnd.google-apps.folder' ? ('FOLDER' as const) : ('FILE' as const),
+    mimeType: f.mimeType ?? undefined,
+    path: f.name ?? '',
+    webUrl: f.webViewLink ?? undefined,
+  }));
+  await audit(account.userId, 'cloud.searchGoogleDrive', 'ConnectedAccount', accountId, {
+    query: needle,
+    count: entries.length,
+  });
+  return entries;
+}
+
+/** Read text from a Google Drive text/native file. Binary Office/PDF files remain on the Docling sync path. */
+export async function readGoogleDriveText(
+  accountId: string,
+  fileId: string,
+  maxChars = 20_000,
+): Promise<DriveTextResult> {
+  const account = await loadAccount(accountId);
+  requireGoogle(account);
+  const token = await getValidAccessToken(accountId);
+  const drive = driveClientFor(token);
+  const metaRes = await drive.files.get({
+    fileId,
+    fields: 'id,name,mimeType,webViewLink',
+  });
+  const meta = metaRes.data;
+  const mime = meta.mimeType ?? 'application/octet-stream';
+  if (mime === 'application/vnd.google-apps.folder') {
+    throw errors.badRequest('Drive folders cannot be read as text');
+  }
+
+  let bytes: Buffer;
+  if (mime === 'application/vnd.google-apps.document') {
+    const res = await drive.files.export(
+      { fileId, mimeType: 'text/plain' },
+      { responseType: 'arraybuffer' },
+    );
+    bytes = Buffer.from(res.data as unknown as ArrayBuffer);
+  } else if (mime === 'application/vnd.google-apps.spreadsheet') {
+    const res = await drive.files.export(
+      { fileId, mimeType: 'text/csv' },
+      { responseType: 'arraybuffer' },
+    );
+    bytes = Buffer.from(res.data as unknown as ArrayBuffer);
+  } else if (
+    mime.startsWith('text/') ||
+    mime === 'application/json' ||
+    mime === 'application/xml' ||
+    mime === 'application/javascript'
+  ) {
+    const res = await drive.files.get({ fileId, alt: 'media' }, { responseType: 'arraybuffer' });
+    bytes = Buffer.from(res.data as unknown as ArrayBuffer);
+  } else {
+    throw errors.badRequest(
+      'This file type needs the AIOS document-sync/Docling path before an Agent can read it',
+    );
+  }
+
+  const cap = Math.max(1_000, Math.min(100_000, Math.floor(maxChars)));
+  const fullText = bytes.toString('utf8');
+  const truncated = fullText.length > cap;
+  const result: DriveTextResult = {
+    id: meta.id!,
+    name: meta.name ?? '',
+    kind: 'FILE',
+    mimeType: mime,
+    path: meta.name ?? '',
+    webUrl: meta.webViewLink ?? undefined,
+    text: truncated ? `${fullText.slice(0, cap)}\n…（內容過長已截斷）` : fullText,
+    truncated,
+  };
+  await audit(account.userId, 'cloud.readGoogleDriveText', 'ConnectedAccount', accountId, {
+    fileId,
+    mimeType: mime,
+    truncated,
+  });
+  return result;
+}
+
+/** Create one UTF-8 text/markdown file in Google Drive. Callers must pass governance gates first. */
+export async function createGoogleDriveTextFile(
+  accountId: string,
+  input: { name: string; content: string; folderId?: string; mimeType?: 'text/plain' | 'text/markdown' },
+): Promise<CreatedFile> {
+  const account = await loadAccount(accountId);
+  requireGoogle(account);
+  const token = await getValidAccessToken(accountId);
+  const drive = driveClientFor(token);
+  const name = input.name.trim();
+  if (!name || /[\r\n]/.test(name)) throw errors.badRequest('name is invalid');
+  const mimeType = input.mimeType ?? 'text/plain';
+  const res = await drive.files.create({
+    requestBody: {
+      name: name.slice(0, 240),
+      mimeType,
+      parents: input.folderId ? [input.folderId] : undefined,
+    },
+    media: { mimeType, body: Readable.from(Buffer.from(input.content, 'utf8')) },
+    fields: 'id,name,mimeType,webViewLink',
+  });
+  const created: CreatedFile = {
+    externalId: res.data.id!,
+    name: res.data.name ?? name,
+    path: res.data.name ?? name,
+    mimeType: res.data.mimeType ?? mimeType,
+    kind: 'FILE',
+    webUrl: res.data.webViewLink ?? undefined,
+  };
+  await audit(account.userId, 'cloud.createGoogleDriveTextFile', 'ConnectedAccount', accountId, {
+    name: created.name,
+    folderId: input.folderId,
+    externalId: created.externalId,
+  });
+  return created;
 }
 
 /** Builds an .xlsx workbook (in-memory) modelling 應收應付帳款, with a header row
@@ -387,6 +633,65 @@ export async function listMessages(accountId: string, query?: string): Promise<C
   return messages;
 }
 
+/** Read one Gmail message body + safe metadata for MCP. */
+export async function getGoogleMessage(
+  accountId: string,
+  messageId: string,
+  maxChars = 20_000,
+): Promise<CloudMessageDetail> {
+  const account = await loadAccount(accountId);
+  requireGoogle(account);
+  const token = await getValidAccessToken(accountId);
+  const gmailApi = gmailClientFor(token);
+  const msg = await gmailApi.users.messages.get({ userId: 'me', id: messageId, format: 'full' });
+  const headers = msg.data.payload?.headers ?? [];
+  const get = (name: string) =>
+    headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ?? '';
+  const collected = collectGmailContent(msg.data.payload as GmailPart | undefined);
+  const fullBody = collected.plain.join('\n\n').trim() || htmlToPlainText(collected.html.join('\n\n'));
+  const cap = Math.max(1_000, Math.min(100_000, Math.floor(maxChars)));
+  const result: CloudMessageDetail = {
+    id: msg.data.id ?? messageId,
+    subject: get('Subject'),
+    from: get('From'),
+    to: get('To'),
+    cc: get('Cc'),
+    receivedAt: get('Date'),
+    snippet: msg.data.snippet ?? '',
+    bodyText: fullBody.length > cap ? `${fullBody.slice(0, cap)}\n…（內容過長已截斷）` : fullBody,
+    labels: msg.data.labelIds ?? [],
+    attachmentNames: [...new Set(collected.attachments)],
+  };
+  await audit(account.userId, 'cloud.getGoogleMessage', 'ConnectedAccount', accountId, {
+    messageId,
+    attachmentCount: result.attachmentNames.length,
+    truncated: fullBody.length > cap,
+  });
+  return result;
+}
+
+/** Create, but never send, a Gmail draft. Callers must pass cloud-write governance first. */
+export async function createGoogleMailDraft(
+  accountId: string,
+  input: { to: string; subject: string; body: string; cc?: string },
+): Promise<{ id?: string; messageId?: string }> {
+  const account = await loadAccount(accountId);
+  requireGoogle(account);
+  const token = await getValidAccessToken(accountId);
+  const gmailApi = gmailClientFor(token);
+  const res = await gmailApi.users.drafts.create({
+    userId: 'me',
+    requestBody: { message: { raw: buildRawMail(input) } },
+  });
+  const result = { id: res.data.id ?? undefined, messageId: res.data.message?.id ?? undefined };
+  await audit(account.userId, 'cloud.createGoogleMailDraft', 'ConnectedAccount', accountId, {
+    to: input.to,
+    subject: input.subject,
+    draftId: result.id,
+  });
+  return result;
+}
+
 export async function sendMail(
   accountId: string,
   input: { to: string; subject: string; body: string },
@@ -409,13 +714,7 @@ export async function sendMail(
     });
   } else {
     const gmailApi = gmailClientFor(token);
-    const raw = Buffer.from(
-      `To: ${input.to}\r\nSubject: ${input.subject}\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\n${input.body}`,
-    )
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
+    const raw = buildRawMail(input);
     const res = await gmailApi.users.messages.send({ userId: 'me', requestBody: { raw } });
     result = { id: res.data.id ?? undefined };
   }

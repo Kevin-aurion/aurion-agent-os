@@ -10,7 +10,7 @@ import { RelayCore, type RelayCoreOptions } from "../../src/relay-core/index.js"
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 export const FAKE_APP_SERVER = path.resolve(here, "fake-app-server.ts");
-export const AURION_PROJECT = "/Users/kevin/Documents/aurion";
+export const AURION_PROJECT = path.resolve(here, "../..");
 
 export function fakeCodexBin(): string {
   // Use node + tsx to run the fake as if it were the codex binary.
