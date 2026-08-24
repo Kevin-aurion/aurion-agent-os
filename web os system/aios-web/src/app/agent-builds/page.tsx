@@ -23,6 +23,7 @@ import {
   Send,
   ShieldCheck,
   Sparkles,
+  Trash2,
   Workflow,
   Wrench,
 } from 'lucide-react';
@@ -314,6 +315,43 @@ function MarkdownDetails({ title, content }: { title: string; content: string })
   );
 }
 
+function canAbandonSession(status: string): boolean {
+  return status === 'DISCOVERY' || status === 'PLAN_READY';
+}
+
+function AbandonDraftButton({ session }: { session: BuilderSession }) {
+  const queryClient = useQueryClient();
+  const abandonBuild = useMutation({
+    mutationFn: () => API.post(`/api/agent-builder/sessions/${session.id}/abandon`, { confirmSessionId: session.id }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['agent-builder-evolutions'] });
+    },
+  });
+  if (!canAbandonSession(session.status)) return null;
+
+  return (
+    <div className="flex flex-col items-end gap-2">
+      <button
+        type="button"
+        className="btn-ghost px-3 py-1.5 text-xs text-rose-400"
+        disabled={abandonBuild.isPending}
+        onClick={() => {
+          if (!window.confirm('捨棄這個建置草稿？紀錄會保留（軟刪），但不再出現在清單，也不會被 AI 續接。已送審或已產生員工/技能的建置無法捨棄。')) return;
+          abandonBuild.mutate();
+        }}
+      >
+        {abandonBuild.isPending ? <Spinner /> : <Trash2 className="h-3.5 w-3.5" />}
+        捨棄
+      </button>
+      {abandonBuild.error && (
+        <p className="max-w-sm rounded-lg bg-rose-500/10 px-3 py-2 text-xs text-rose-400">
+          {abandonBuild.error instanceof Error ? abandonBuild.error.message : '操作失敗，請重試。'}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function BuildActions({
   session,
   harness,
@@ -392,6 +430,7 @@ function BuildActions({
               匯出 Agent ZIP
             </button>
           )}
+          <AbandonDraftButton session={session} />
         </div>
       </div>
 
@@ -408,10 +447,10 @@ function BuildActions({
         <div className="rounded-lg border border-brand/20 bg-background/40 p-3">
           <div className="flex items-center gap-2 text-xs font-medium text-brand">
             <MessageSquareText className="h-3.5 w-3.5" />
-            在 Claude 裡直接試教
+            在 Claude 或 Codex 裡直接試用（免 FDE）
           </div>
           <p className="mt-1.5 text-xs leading-relaxed text-muted">
-            讓 Claude 呼叫 <span className="font-mono text-foreground">chat_with_agent_build</span>，把一筆真實工作交給 Shadow Agent。回覆、你的糾正與下一版 Skill 規則都會回到同一段對話。
+            先呼叫 <span className="font-mono text-foreground">list_testable_agents</span> 選擇員工，再用 <span className="font-mono text-foreground">chat_with_test_agent</span> 直接對話。測試模式不需 FDE，但不會使用工具、網路、電腦操作、排程或外部寫入；回覆與你的修正仍會成為下一版 Skill 的訓練依據。
           </p>
         </div>
         <div className="rounded-lg border border-border/70 bg-background/40 p-3">
@@ -484,6 +523,12 @@ function BuildCard({ session, open, onToggle, isFde }: { session: BuilderSession
           </div>
         )}
       </button>
+
+      {canAbandonSession(session.status) && !open && (
+        <div className="flex justify-end border-t border-border/70 px-5 py-2">
+          <AbandonDraftButton session={session} />
+        </div>
+      )}
 
       {open && (
         <div className="space-y-6 border-t border-border px-5 py-5">
