@@ -1122,6 +1122,7 @@ enum AgentBuildSessionStatus {
   PASSED
   FAILED
   ACTIVE
+  ABANDONED
 }
 
 /// A non-effective, reviewable Harness evolution produced while the user is
@@ -1141,6 +1142,12 @@ model AgentBuildSession {
   id                   String                  @id
   /// Session owner (creator). Only owner + FDE may read; foreign users get 404.
   userId               String
+  /// 外部 client 綁定：來源 + 對話 id 構成穩定身分（建置初期用）。
+  externalSource            String?
+  externalConversationId    String?
+  externalConversationTitle String?
+  /// 第二階段鍵：本段建置所綁定的員工。綁定後同一 agent 的後續訓練一律續接此 session。
+  agentId                   String?
   status               AgentBuildSessionStatus @default(DISCOVERY)
   /// Redacted chat transcript [{ role, content, at }].
   transcript           Json                    @default("[]")
@@ -1172,9 +1179,12 @@ model AgentBuildSession {
   draftState           Json?
   createdAt            DateTime                @default(now())
   updatedAt            DateTime                @updatedAt
+  /// 使用者主動捨棄未送審草稿的時間；軟刪，紀錄保留。
+  abandonedAt          DateTime?
 
   iterations AgentBuildIteration[]
 
+  @@unique([userId, externalSource, externalConversationId], map: "AgentBuildSession_external_binding_key")
   @@index([userId, createdAt])
   @@index([status, createdAt])
 }

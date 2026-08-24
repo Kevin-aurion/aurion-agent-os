@@ -131,6 +131,13 @@ export interface ScheduleProposalResponse {
   note: string;
 }
 
+export interface AgentArchiveProposalResponse {
+  proposalId: string;
+  status: 'PENDING';
+  deduplicated: boolean;
+  note: string;
+}
+
 /** Shape of GET /api/agents/:agentId/workflows items (serializeWorkflowSummary). */
 export interface WorkflowSummary {
   id: string;
@@ -293,12 +300,15 @@ export interface AgentBuildSession {
     | 'TESTING'
     | 'PASSED'
     | 'FAILED'
-    | 'ACTIVE';
+    | 'ACTIVE'
+    | 'ABANDONED';
   brief: Record<string, unknown> | null;
   plan: Record<string, unknown> | null;
   strategy: string | null;
   targetAgentId: string | null;
   builtAgentId: string | null;
+  /** Phase-2 binding. Pass this to start_agent_build to resume the same employee conversation. */
+  agentId?: string | null;
   draftSkillIds: string[];
   hasTestData: boolean;
   testResult: Record<string, unknown> | null;
@@ -314,4 +324,5 @@ export interface AgentBuildSession {
   latestIteration: AgentBuildIteration | null;
   createdAt: string;
   updatedAt: string;
+  abandonedAt?: string | null;
 }

@@ -180,6 +180,8 @@ export type SessionDto = {
   strategy: string | null;
   targetAgentId: string | null;
   builtAgentId: string | null;
+  /** Phase-2 binding: once set, later training of this employee resumes this session. */
+  agentId: string | null;
   draftSkillIds: string[];
   hasTestData: boolean;
   testInputStatus: BuilderTestInputStatus;
@@ -195,6 +197,8 @@ export type SessionDto = {
   ownedByCurrentUser?: boolean;
   createdAt: string;
   updatedAt: string;
+  /** Set when the owner soft-deletes an unsubmitted draft. */
+  abandonedAt: string | null;
 };
 
 export type BuilderMessageResult = {
@@ -1353,6 +1357,7 @@ export function toSessionDto(
     strategy: row.strategy,
     targetAgentId: row.targetAgentId,
     builtAgentId: row.builtAgentId,
+    agentId: row.agentId,
     draftSkillIds: row.draftSkillIds ?? [],
     hasTestData: row.testData != null,
     testInputStatus,
@@ -1370,6 +1375,7 @@ export function toSessionDto(
     latestIteration: iterations.at(-1) ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    abandonedAt: row.abandonedAt ? row.abandonedAt.toISOString() : null,
   };
 }
 
@@ -1727,7 +1733,7 @@ export async function getLatestBuilderSession(opts: {
   const row = await prisma.agentBuildSession.findFirst({
     where: {
       userId: opts.userId,
-      status: { not: 'ACTIVE' },
+      status: { notIn: ['ACTIVE', 'ABANDONED'] },
     },
     orderBy: { updatedAt: 'desc' },
     include: { iterations: { orderBy: { sequence: 'desc' }, take: 10 } },
@@ -1735,16 +1741,85 @@ export async function getLatestBuilderSession(opts: {
   return row ? toSessionDto(row) : null;
 }
 
+/**
+ * Fail-closed: one non-ABANDONED builder session per (userId, agentId).
+ * Callers that would bind a second active session must resume the existing id.
+ */
+export async function assertBuilderAgentBindingAvailable(
+  opts: { userId: string; agentId: string; exceptSessionId?: string },
+  db: { agentBuildSession: { findFirst: typeof prisma.agentBuildSession.findFirst } } = prisma,
+): Promise<void> {
+  const existing = await db.agentBuildSession.findFirst({
+    where: {
+      userId: opts.userId,
+      agentId: opts.agentId,
+      status: { not: 'ABANDONED' },
+      ...(opts.exceptSessionId ? { id: { not: opts.exceptSessionId } } : {}),
+    },
+    select: { id: true },
+  });
+  if (existing) {
+    throw errors.badRequest(
+      `此員工已有進行中的建置對話（${existing.id}），請續接該筆而非新建`,
+    );
+  }
+}
+
 /** List the owner's recent Builder flows, including ACTIVE employees that may
  * be taught new information tomorrow without mutating their live version. */
 export async function listBuilderSessions(opts: { userId: string }): Promise<SessionDto[]> {
   const rows = await prisma.agentBuildSession.findMany({
-    where: { userId: opts.userId },
+    where: { userId: opts.userId, status: { not: 'ABANDONED' } },
     orderBy: { updatedAt: 'desc' },
     take: 50,
     include: { iterations: { orderBy: { sequence: 'desc' }, take: 10 } },
   });
   return hydrateSessionDtos(rows, () => true);
+}
+
+const ABANDONABLE_STATUSES: AgentBuildSessionStatus[] = ['DISCOVERY', 'PLAN_READY'];
+
+/**
+ * Soft-delete an unsubmitted owner draft. Governed sessions (AWAITING_FDE+)
+ * cannot be abandoned here — they stay on the FDE path. Never hard-deletes.
+ */
+export async function abandonBuilderSession(opts: {
+  sessionId: string;
+  userId: string;
+  confirmSessionId?: string;
+}): Promise<SessionDto> {
+  const row = await prisma.agentBuildSession.findUnique({
+    where: { id: opts.sessionId },
+    include: { iterations: { orderBy: { sequence: 'asc' } } },
+  });
+  if (!row || row.userId !== opts.userId) {
+    throw errors.notFound('Session not found');
+  }
+  if (opts.confirmSessionId !== undefined && opts.confirmSessionId !== opts.sessionId) {
+    throw errors.badRequest('confirmSessionId 必須與 sessionId 相同');
+  }
+  if (row.status === 'ABANDONED') {
+    return toSessionDto(row);
+  }
+  if (!ABANDONABLE_STATUSES.includes(row.status)) {
+    throw errors.forbidden('已進入審核流程的建置不可自行捨棄；請走 FDE 流程');
+  }
+  if (row.builtAgentId || row.draftSkillIds.length > 0) {
+    throw errors.forbidden('此建置已產生員工或技能草稿，不可直接捨棄');
+  }
+
+  const updated = await prisma.agentBuildSession.update({
+    where: { id: row.id },
+    data: {
+      status: 'ABANDONED',
+      abandonedAt: new Date(),
+    },
+    include: { iterations: { orderBy: { sequence: 'asc' } } },
+  });
+  await audit(opts.userId, 'agentbuild.abandoned', 'AgentBuildSession', row.id, {
+    previousStatus: row.status,
+  });
+  return toSessionDto(updated);
 }
 
 /** Load the redacted unsent fields for a new flow or an owned existing flow. */
@@ -1986,6 +2061,7 @@ export async function listBuilderEvolutionSessions(opts: {
       // Keep completed ACTIVE Agents visible so they can still be exported.
       OR: [{ iterations: { some: {} } }, { status: 'ACTIVE' }],
       userId: opts.userId,
+      status: { not: 'ABANDONED' },
     },
     orderBy: { updatedAt: 'desc' },
     take: 100,
@@ -2007,6 +2083,7 @@ export async function listAllBuilderEvolutionSessions(opts: {
   const rows = await prisma.agentBuildSession.findMany({
     where: {
       OR: [{ iterations: { some: {} } }, { status: 'ACTIVE' }],
+      status: { not: 'ABANDONED' },
     },
     orderBy: { updatedAt: 'desc' },
     take: 100,
@@ -2113,12 +2190,20 @@ export async function authorizeBuilderSession(opts: {
       'assistant',
       assistantMessage,
     );
+    if (requestedTarget) {
+      await assertBuilderAgentBindingAvailable({
+        userId: row.userId,
+        agentId: requestedTarget,
+        exceptSessionId: row.id,
+      });
+    }
     const updated = await prisma.agentBuildSession.update({
       where: { id: row.id },
       data: {
         status: 'AWAITING_FDE',
         strategy: opts.strategy,
         targetAgentId: requestedTarget,
+        agentId: requestedTarget ?? row.agentId,
         transcript,
         lastAssistantMessage: deepRedactSecrets(assistantMessage),
       },
@@ -2327,6 +2412,15 @@ export async function authorizeBuilderSession(opts: {
 
   const transcript = pushTranscript(asTranscript(row.transcript), 'assistant', assistantMessage);
 
+  const bindId = builtAgentId ?? targetAgentId;
+  if (bindId) {
+    await assertBuilderAgentBindingAvailable({
+      userId: row.userId,
+      agentId: bindId,
+      exceptSessionId: row.id,
+    });
+  }
+
   const updated = await prisma.agentBuildSession.update({
     where: { id: row.id },
     data: {
@@ -2334,6 +2428,7 @@ export async function authorizeBuilderSession(opts: {
       strategy: opts.strategy,
       targetAgentId,
       builtAgentId,
+      agentId: bindId,
       draftSkillIds,
       transcript,
       lastAssistantMessage: deepRedactSecrets(assistantMessage),

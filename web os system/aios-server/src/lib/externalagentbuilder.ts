@@ -6,7 +6,7 @@
 // activate an Agent/Skill/Workflow through these functions.
 import path from 'node:path';
 import { ulid } from 'ulid';
-import { Prisma, type AgentBuildIteration, type AgentBuildSessionStatus, type UserRole } from '@prisma/client';
+import { Prisma, PrismaClient, type AgentBuildIteration, type AgentBuildSession, type AgentBuildSessionStatus, type UserRole } from '@prisma/client';
 import { prisma } from './db.js';
 import { errors } from './http.js';
 import { audit } from './audit.js';
@@ -14,6 +14,7 @@ import { sha256 } from './crypto.js';
 import { deepRedactSecrets } from '../memory/deepredact.js';
 import { hub } from '../ws/hub.js';
 import {
+  assertBuilderAgentBindingAvailable,
   buildCapabilityPlan,
   buildProgress,
   getBuilderSession,
@@ -127,13 +128,44 @@ const MAX_TRANSCRIPT_ENTRIES = 1_000;
 const MAX_MEMORY_DOCUMENTS = 24;
 const MAX_WORKFLOWS = 12;
 
-const AGENT_BUILD_ACTION_RE = /(?:建立|新增|打造|設計|規劃|訓練|教會|更新|調整|改造|優化|做(?:一位|一個)?|想要|需要|build|create|train|teach|update|design|want|need)/i;
-const AGENT_BUILD_OBJECT_RE = /(?:AI\s*(?:員工|助理|代理)|agent|bot|機器人|技能|skill)/i;
+/** Execution / schedule instructions must never open a new Agent Builder session. */
+const AGENT_BUILD_EXECUTION_RE =
+  /(?:^|\n)\s*(?:執行|跑一次|立即執行)|凌晨\s*\d|每日|每週|排程|cron|【步驟\s*\d】|```bash/;
+const AGENT_BUILD_ACTION_RE = /建立|新增|打造|訓練|教會|建置|create|build|train|teach|design/i;
+const AGENT_BUILD_OBJECT_RE = /AI(?:OS)?\s*(?:員工|助理|代理)|agent|bot|機器人|技能|skill/i;
+
+function sentenceHasBuildIntent(sentence: string): boolean {
+  return AGENT_BUILD_ACTION_RE.test(sentence) && AGENT_BUILD_OBJECT_RE.test(sentence);
+}
+
+function nearbyBuildIntent(text: string, maxGap = 24): boolean {
+  const actions = [...text.matchAll(new RegExp(AGENT_BUILD_ACTION_RE.source, 'gi'))];
+  const objects = [...text.matchAll(new RegExp(AGENT_BUILD_OBJECT_RE.source, 'gi'))];
+  for (const action of actions) {
+    const actionStart = action.index ?? 0;
+    const actionEnd = actionStart + action[0].length;
+    for (const object of objects) {
+      const objectStart = object.index ?? 0;
+      const objectEnd = objectStart + object[0].length;
+      const gap = actionEnd <= objectStart
+        ? objectStart - actionEnd
+        : objectEnd <= actionStart
+          ? actionStart - objectEnd
+          : 0;
+      if (gap <= maxGap) return true;
+    }
+  }
+  return false;
+}
 
 /** Conservative hook activation: unrelated Claude Code chats must remain no-op. */
 export function isExplicitAgentBuildPrompt(prompt: string): boolean {
   const normalized = cleanString(prompt, 12_000);
-  return AGENT_BUILD_ACTION_RE.test(normalized) && AGENT_BUILD_OBJECT_RE.test(normalized);
+  if (!normalized) return false;
+  if (AGENT_BUILD_EXECUTION_RE.test(normalized)) return false;
+  const sentences = normalized.split(/[。！？!?\n]+/).filter((sentence) => sentence.trim());
+  if (sentences.some(sentenceHasBuildIntent)) return true;
+  return nearbyBuildIntent(normalized);
 }
 
 function isFde(role: UserRole | string): boolean {
@@ -419,6 +451,57 @@ function mergeInferredBrief(current: Brief, userText: string): Brief {
   }) as Brief;
 }
 
+type BuilderDb = PrismaClient | Prisma.TransactionClient;
+type ResolvedBuilderSession = AgentBuildSession & { iterations: AgentBuildIteration[] };
+
+const BUILDER_SESSION_INCLUDE = {
+  iterations: { orderBy: { sequence: 'desc' as const }, take: 100 },
+};
+
+/**
+ * Two-phase builder session key:
+ * 1. Once bound to an employee, (userId, agentId) always wins.
+ * 2. Before that, (userId, externalSource, externalConversationId) is the identity.
+ */
+export async function resolveBuilderSession(
+  opts: {
+    userId: string;
+    agentId?: string;
+    externalSource?: string;
+    externalConversationId?: string;
+  },
+  db: BuilderDb = prisma,
+): Promise<ResolvedBuilderSession | null> {
+  if (opts.agentId) {
+    const byAgent = await db.agentBuildSession.findFirst({
+      where: {
+        userId: opts.userId,
+        agentId: opts.agentId,
+        status: { not: 'ABANDONED' },
+      },
+      orderBy: { updatedAt: 'desc' },
+      include: BUILDER_SESSION_INCLUDE,
+    });
+    if (byAgent) return byAgent;
+  }
+  const conversationId = opts.externalConversationId?.trim();
+  if (conversationId) {
+    const source = opts.externalSource?.trim();
+    const byExternal = await db.agentBuildSession.findFirst({
+      where: {
+        userId: opts.userId,
+        externalConversationId: conversationId,
+        status: { not: 'ABANDONED' },
+        ...(source ? { externalSource: source } : {}),
+      },
+      orderBy: { updatedAt: 'desc' },
+      include: BUILDER_SESSION_INCLUDE,
+    });
+    if (byExternal) return byExternal;
+  }
+  return null;
+}
+
 async function hydratedSession(sessionId: string, includeDraft = true): Promise<SessionDto> {
   const row = await prisma.agentBuildSession.findUnique({
     where: { id: sessionId },
@@ -428,17 +511,16 @@ async function hydratedSession(sessionId: string, includeDraft = true): Promise<
   return toSessionDto(row, { includeDraft });
 }
 
-async function findExternalSession(userId: string, conversationId: string) {
-  const recent = await prisma.agentBuildSession.findMany({
-    where: { userId },
-    orderBy: { updatedAt: 'desc' },
-    take: 200,
-    include: { iterations: { orderBy: { sequence: 'desc' }, take: 100 } },
+async function findExternalSession(
+  userId: string,
+  conversationId: string,
+  source?: ExternalBuilderSource,
+) {
+  return resolveBuilderSession({
+    userId,
+    externalSource: source,
+    externalConversationId: conversationId,
   });
-  return recent.find((candidate) => {
-    const brief = asBrief(candidate.brief);
-    return brief.externalConversationId === conversationId;
-  }) ?? null;
 }
 
 function hookContext(sessionId: string, status: AgentBuildSessionStatus): string {
@@ -461,7 +543,7 @@ export async function prepareExternalBuilderPrompt(opts: {
   const prompt = cleanString(opts.prompt, 12_000);
   if (!conversationId || !prompt) return { matched: false };
 
-  let row = await findExternalSession(opts.userId, conversationId);
+  let row = await findExternalSession(opts.userId, conversationId, opts.source);
   if (!row) {
     if (!isExplicitAgentBuildPrompt(prompt)) return { matched: false };
     const created = await createExternalBuilderSession({
@@ -539,7 +621,7 @@ export async function prepareExternalBuilderPrompt(opts: {
     externalEventId: userEventId,
     iterationId: iteration?.id ?? null,
   });
-  row = await findExternalSession(opts.userId, conversationId);
+  row = await findExternalSession(opts.userId, conversationId, opts.source);
   const status = row?.status ?? 'DISCOVERY';
   return {
     matched: true,
@@ -571,7 +653,7 @@ export async function guardExternalBuilderStop(opts: {
   const conversationId = cleanString(opts.externalConversationId, 160);
   if (!conversationId) return { matched: false };
 
-  let row = await findExternalSession(opts.userId, conversationId);
+  let row = await findExternalSession(opts.userId, conversationId, opts.source);
   let created = false;
   const userMessage = cleanString(opts.lastUserMessage, 24_000);
   if (!row && userMessage && isExplicitAgentBuildPrompt(userMessage)) {
@@ -581,7 +663,7 @@ export async function guardExternalBuilderStop(opts: {
       initialRequest: userMessage,
       externalConversationId: conversationId,
     });
-    row = await findExternalSession(opts.userId, conversationId);
+    row = await findExternalSession(opts.userId, conversationId, opts.source);
     created = !result.deduplicated;
   }
   if (!row) return { matched: false };
@@ -738,16 +820,22 @@ export async function createExternalBuilderSession(opts: {
   externalConversationTitle?: string;
   requestedAgentName?: string;
   targetAgentId?: string;
+  agentId?: string;
 }): Promise<{ session: SessionDto; deduplicated: boolean }> {
   const initialRequest = cleanString(opts.initialRequest, 12_000);
   if (!initialRequest) throw errors.badRequest('initialRequest is required');
-  const conversationId = cleanString(opts.externalConversationId ?? ulid(), 160);
+  if (opts.agentId && opts.targetAgentId && opts.agentId !== opts.targetAgentId) {
+    throw errors.badRequest('agentId and targetAgentId must refer to the same employee');
+  }
+  const providedConversationId = cleanString(opts.externalConversationId ?? '', 160);
+  const conversationId = providedConversationId || ulid();
+  const requestedAgentId = cleanString(opts.agentId ?? opts.targetAgentId ?? '', 160) || undefined;
 
   let target: { id: string; name: string } | null = null;
-  if (opts.targetAgentId) {
+  if (requestedAgentId) {
     target = await prisma.agent.findFirst({
       where: {
-        id: opts.targetAgentId,
+        id: requestedAgentId,
         createdBy: opts.userId,
         deletedAt: null,
         systemManaged: false,
@@ -757,13 +845,14 @@ export async function createExternalBuilderSession(opts: {
     if (!target) throw errors.notFound('Target agent not found');
   }
   const inference = inferFromPrompt(initialRequest);
+  const conversationTitle = cleanString(opts.externalConversationTitle, 240) || undefined;
   const brief = deepRedactSecrets({
     ...inference.brief,
     requestedAgentName: cleanString(opts.requestedAgentName, 120) || target?.name || inference.brief.requestedAgentName,
     requestedStrategy: target ? 'reuse' : 'create',
     externalSource: opts.source,
     externalConversationId: conversationId,
-    externalConversationTitle: cleanString(opts.externalConversationTitle, 240) || undefined,
+    externalConversationTitle: conversationTitle,
   }) as Brief;
   const eventId = `start:${conversationId}`;
   const transcript: TranscriptEntry[] = [{
@@ -777,6 +866,17 @@ export async function createExternalBuilderSession(opts: {
   // Concurrent Claude lifecycle hooks can race; hold an advisory lock and
   // re-check so the same owner+conversation never creates two sessions.
   const persisted = await prisma.$transaction(async (tx) => {
+    if (target) {
+      await tx.$queryRaw<Array<{ locked: number }>>`
+        WITH agent_lock AS (
+          SELECT pg_advisory_xact_lock(
+            hashtext(${opts.userId}),
+            hashtext(${`agent:${target.id}`})
+          )
+        )
+        SELECT 1::int AS "locked" FROM agent_lock
+      `;
+    }
     await tx.$queryRaw<Array<{ locked: number }>>`
       WITH conversation_lock AS (
         SELECT pg_advisory_xact_lock(
@@ -786,21 +886,20 @@ export async function createExternalBuilderSession(opts: {
       )
       SELECT 1::int AS "locked" FROM conversation_lock
     `;
-    const existingIds = await tx.$queryRaw<Array<{ id: string }>>`
-      SELECT "id"
-      FROM "AgentBuildSession"
-      WHERE "userId" = ${opts.userId}
-        AND "brief"->>'externalSource' = ${opts.source}
-        AND "brief"->>'externalConversationId' = ${conversationId}
-      ORDER BY "createdAt" DESC
-      LIMIT 1
-    `;
-    if (existingIds[0]) {
-      const existing = await tx.agentBuildSession.findUniqueOrThrow({
-        where: { id: existingIds[0].id },
-        include: { iterations: { orderBy: { sequence: 'asc' }, take: 100 } },
-      });
+    const existing = await resolveBuilderSession({
+      userId: opts.userId,
+      agentId: target?.id,
+      externalSource: opts.source,
+      externalConversationId: providedConversationId || conversationId,
+    }, tx);
+    if (existing) {
       return { row: existing, created: false as const };
+    }
+    if (target) {
+      await assertBuilderAgentBindingAvailable({
+        userId: opts.userId,
+        agentId: target.id,
+      }, tx);
     }
     const row = await tx.agentBuildSession.create({
       data: {
@@ -811,7 +910,11 @@ export async function createExternalBuilderSession(opts: {
         brief: brief as Prisma.InputJsonValue,
         progress: buildProgress(inference.answered, null) as Prisma.InputJsonValue,
         targetAgentId: target?.id ?? null,
+        agentId: target?.id ?? null,
         strategy: target ? 'reuse' : 'create',
+        externalSource: opts.source,
+        externalConversationId: conversationId,
+        externalConversationTitle: conversationTitle ?? null,
       },
       include: { iterations: { orderBy: { sequence: 'asc' }, take: 100 } },
     });
@@ -1131,7 +1234,7 @@ export async function submitExternalBuilderForReview(opts: {
 
   let targetAgentId: string | null = null;
   if (opts.strategy === 'reuse') {
-    targetAgentId = opts.targetAgentId ?? row.builtAgentId ?? row.targetAgentId;
+    targetAgentId = opts.targetAgentId ?? row.builtAgentId ?? row.targetAgentId ?? row.agentId;
     if (!targetAgentId) throw errors.badRequest('targetAgentId is required for reuse strategy');
     const target = await prisma.agent.findFirst({
       where: { id: targetAgentId, deletedAt: null, systemManaged: false },
@@ -1145,6 +1248,11 @@ export async function submitExternalBuilderForReview(opts: {
         reason: '外部 Builder 明確要求在此員工建立新版本草稿。',
       });
     }
+    await assertBuilderAgentBindingAvailable({
+      userId: row.userId,
+      agentId: targetAgentId,
+      exceptSessionId: row.id,
+    });
   }
 
   const assistantMessage = '最新訓練草稿已送交 FDE；核准前不會建立、修改或啟用任何正式 Agent、Skill 或 Workflow。';
@@ -1167,6 +1275,7 @@ export async function submitExternalBuilderForReview(opts: {
       plan: deepRedactSecrets(plan) as Prisma.InputJsonValue,
       strategy: opts.strategy,
       targetAgentId,
+      agentId: targetAgentId ?? row.agentId,
       transcript: deepRedactSecrets(transcript) as Prisma.InputJsonValue,
       lastAssistantMessage: assistantMessage,
     },

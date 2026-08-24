@@ -1,6 +1,6 @@
 // External Agent Builder tools for Claude, ChatGPT, Codex and Cursor.
-// These tools can only synchronize inert drafts and submit them to FDE. They do
-// not expose approve-build, skill confirmation or final activation.
+// These tools synchronize inert drafts, offer isolated no-tools Shadow Chat,
+// and submit to FDE. They never approve, confirm Skills or activate production.
 import { open, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -156,6 +156,12 @@ const DRAFT_WRITE_ANNOTATIONS = {
   openWorldHint: false,
 } as const;
 
+const DESTRUCTIVE_DRAFT = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  openWorldHint: false,
+} as const;
+
 function noteFor(session: AgentBuildSession): string {
   if (session.status === 'AWAITING_FDE') {
     return 'The draft is waiting for an explicit FDE decision. Do not claim it is built or active.';
@@ -170,6 +176,35 @@ function noteFor(session: AgentBuildSession): string {
     return 'The latest approved version is active. Further training must create a new draft and review cycle.';
   }
   return 'Continue the adaptive interview and synchronize each turn. Import a full artifact whenever the draft meaningfully changes.';
+}
+
+function testAgentName(session: AgentBuildSession): string {
+  const harness = session.latestIteration?.harness;
+  const identity = harness && typeof harness === 'object' && !Array.isArray(harness)
+    ? (harness as Record<string, unknown>).identity
+    : null;
+  if (identity && typeof identity === 'object' && !Array.isArray(identity)) {
+    const name = (identity as Record<string, unknown>).name;
+    if (typeof name === 'string' && name.trim()) return name.trim();
+  }
+  const planName = session.plan?.proposedAgentName;
+  if (typeof planName === 'string' && planName.trim()) return planName.trim();
+  const objective = session.brief?.objective;
+  if (typeof objective === 'string' && objective.trim()) return objective.trim().slice(0, 120);
+  return `AIOS 測試員工 ${session.id.slice(-6)}`;
+}
+
+function testableAgent(session: AgentBuildSession) {
+  return {
+    sessionId: session.id,
+    name: testAgentName(session),
+    status: session.status,
+    iterationId: session.latestIteration?.id ?? null,
+    iterationSequence: session.latestIteration?.sequence ?? null,
+    updatedAt: session.updatedAt,
+    mode: 'SAFE_SHADOW_CHAT' as const,
+    restrictions: ['no_tools', 'no_network', 'no_shell', 'no_computer_use', 'no_external_writes'],
+  };
 }
 
 export function registerAgentBuilderTools(server: McpServer, client: HttpClient): void {
@@ -232,9 +267,11 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
         externalConversationId: z.string().min(1).max(160).optional().describe('Stable id for this desktop conversation; reuse it after retries.'),
         externalConversationTitle: z.string().max(240).optional(),
         requestedAgentName: z.string().max(120).optional(),
+        agentId: z.string().min(1).optional()
+          .describe('若要繼續訓練既有員工，帶入該員工的 agentId：系統會自動續接該員工唯一的建置對話，不會新建。'),
       },
     },
-    async ({ initialRequest, source, externalConversationId, externalConversationTitle, requestedAgentName }) =>
+    async ({ initialRequest, source, externalConversationId, externalConversationTitle, requestedAgentName, agentId }) =>
       runTool(async () => {
         const result = await client.post<{ session: AgentBuildSession; deduplicated: boolean }>(
           '/api/agent-builder/external/sessions',
@@ -245,6 +282,7 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
               externalConversationId: externalConversationId ?? process.env.CLAUDE_CODE_SESSION_ID,
               externalConversationTitle,
               requestedAgentName,
+              agentId,
             },
           },
         );
@@ -488,14 +526,90 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
   );
 
   server.registerTool(
+    'list_testable_agents',
+    {
+      title: 'List AIOS employees available for immediate test chat',
+      annotations: READ_ONLY_ANNOTATIONS,
+      description:
+        'List the signed-in account\'s READY Shadow Agents that can be talked to immediately without FDE approval. These are isolated conversational previews only: no tools, network, Shell, Computer Use, schedules or external writes. Use this when the user wants to try, use or talk to an employee before formal release.',
+      inputSchema: {},
+    },
+    async () => runTool(async () => {
+      const sessions = await client.get<AgentBuildSession[]>('/api/agent-builder/sessions');
+      return sessions
+        .filter((session) =>
+          ['DISCOVERY', 'PLAN_READY', 'ACTIVE'].includes(session.status)
+          && session.latestIteration?.status === 'READY'
+          && session.latestIteration.harness,
+        )
+        .map(testableAgent);
+    }),
+  );
+
+  server.registerTool(
+    'chat_with_test_agent',
+    {
+      title: 'Talk to an AIOS test employee without FDE approval',
+      annotations: DRAFT_WRITE_ANNOTATIONS,
+      description:
+        'Talk directly to one READY Shadow Agent before FDE approval. Returns the isolated Agent reply in this Claude/ChatGPT/Codex conversation and records redacted feedback for the next Shadow revision. This is not a production run and cannot call tools, browse, use Computer Use, send messages, write external systems or create schedules.',
+      inputSchema: {
+        sessionId: z.string().min(1).describe('The sessionId returned by list_testable_agents.'),
+        message: z.string().min(1).max(24_000)
+          .describe('The exact realistic End User request to send to the test Agent.'),
+      },
+    },
+    async ({ sessionId, message }) => runTool(async () => {
+      const result = await client.post<{
+        sessionId: string;
+        iterationId: string;
+        reply: string;
+        reflectionQueued: boolean;
+      }>(`/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/shadow-chat`, {
+        body: { message },
+      });
+      return {
+        ...result,
+        mode: 'SAFE_SHADOW_CHAT',
+        productionApproved: false,
+        note: 'Present this as the test Agent\'s real isolated reply. It needed no FDE approval, but it did not perform external actions.',
+      };
+    }),
+  );
+
+  server.registerTool(
     'list_agent_builds',
     {
       title: 'List AIOS agent builds',
       annotations: READ_ONLY_ANNOTATIONS,
-      description: 'List the signed-in user’s recent AIOS Agent Builder sessions for resume or status checks.',
+      description:
+        'List the signed-in user’s recent AIOS Agent Builder sessions for resume or status checks. Each item includes agentId when the build is bound to an employee; pass that agentId to start_agent_build to resume the same conversation instead of opening a new one.',
       inputSchema: {},
     },
     async () => runTool(() => client.get<AgentBuildSession[]>('/api/agent-builder/sessions')),
+  );
+
+  server.registerTool(
+    'abandon_agent_build',
+    {
+      title: 'Abandon an unsubmitted AIOS build draft',
+      annotations: DESTRUCTIVE_DRAFT,
+      description:
+        '捨棄一個尚未送審的建置草稿（DISCOVERY/PLAN_READY）。呼叫前先用 list_agent_builds 確認並向使用者取得明確同意。這是軟刪：紀錄保留、不再出現在清單。已送審的建置無法用此工具捨棄。',
+      inputSchema: {
+        sessionId: z.string().min(1).describe('The sessionId returned by list_agent_builds.'),
+        confirmSessionId: z.string().min(1).describe(
+          'Must equal sessionId. Required confirmation so a stale or guessed id cannot be abandoned by accident.',
+        ),
+      },
+    },
+    async ({ sessionId, confirmSessionId }) =>
+      runTool(() =>
+        client.post<AgentBuildSession>(
+          `/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/abandon`,
+          { body: { confirmSessionId } },
+        ),
+      ),
   );
 
   server.registerTool(

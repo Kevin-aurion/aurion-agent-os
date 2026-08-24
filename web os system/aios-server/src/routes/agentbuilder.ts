@@ -25,6 +25,7 @@ import {
   listBuilderEvolutionSessions,
   listAllBuilderEvolutionSessions,
   listBuilderSessions,
+  abandonBuilderSession,
   getBuilderDraft,
   saveBuilderDraft,
 } from '../lib/agentbuilder.js';
@@ -57,6 +58,10 @@ const testDataSchema = z.object({
   }),
 });
 
+const abandonBodySchema = z.object({
+  confirmSessionId: z.string().min(1).optional(),
+}).strict();
+
 const draftQuerySchema = z.object({ sessionId: z.string().min(1).optional() });
 const draftBodySchema = z.object({
   sessionId: z.string().min(1).optional(),
@@ -72,6 +77,7 @@ const externalSessionSchema = z.object({
   externalConversationId: z.string().min(1).max(160).optional(),
   externalConversationTitle: z.string().max(240).optional(),
   requestedAgentName: z.string().max(120).optional(),
+  agentId: z.string().min(1).optional(),
 }).strict();
 const externalTurnsSchema = z.object({
   source: externalSourceSchema,
@@ -469,6 +475,21 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
         role: req.user!.role,
       });
       return ok(session);
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  });
+
+  /** Owner soft-deletes an unsubmitted DISCOVERY/PLAN_READY draft. */
+  app.post('/api/agent-builder/sessions/:id/abandon', { preHandler: requireAuth }, async (req, reply) => {
+    try {
+      const { id } = req.params as { id: string };
+      const body = abandonBodySchema.parse(req.body ?? {});
+      return ok(await abandonBuilderSession({
+        sessionId: id,
+        userId: req.user!.sub,
+        confirmSessionId: body.confirmSessionId,
+      }));
     } catch (e) {
       return sendError(reply, e);
     }
