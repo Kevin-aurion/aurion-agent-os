@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, CheckCircle2, ChevronDown, ChevronRight, FileText, GitBranch, RotateCcw, UserPlus } from 'lucide-react';
+import { Check, CheckCircle2, ChevronDown, ChevronRight, FileText, GitBranch, RotateCcw, Rocket, UserPlus } from 'lucide-react';
 import { API } from '@/lib/api';
 import { useAuth, isFdeRole } from '@/lib/auth';
 import { AppShell } from '@/components/AppShell';
@@ -14,10 +14,21 @@ import {
   draftGeneratedBy,
   generatedByBadgeClass,
   generatedByLabel,
+  type ApproveAndActivateResult,
+  type ApproveAndActivateStage,
   type BuilderHarnessSnapshot,
   type BuilderMessageResult,
   type BuilderSession,
 } from '@/components/workbench/types';
+
+const ACTIVATE_PROGRESS_STEPS = ['核准', '試跑', '啟用'] as const;
+
+const ACTIVATE_STAGE_LABEL: Record<ApproveAndActivateStage, string> = {
+  approve: '核准',
+  test: '試跑',
+  evidence: '證據',
+  finalize: '啟用',
+};
 
 function timeAgo(iso: string) {
   const d = new Date(iso).getTime();
@@ -150,6 +161,24 @@ export default function ProposalsPage() {
   const [flash, setFlash] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [progressStep, setProgressStep] = useState(0);
+  const [oneClickFailure, setOneClickFailure] = useState<{
+    id: string;
+    stage: ApproveAndActivateStage;
+    reason: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!busyId) {
+      setProgressStep(0);
+      return;
+    }
+    setProgressStep(0);
+    const timer = window.setInterval(() => {
+      setProgressStep((current) => Math.min(current + 1, ACTIVATE_PROGRESS_STEPS.length - 1));
+    }, 1_200);
+    return () => window.clearInterval(timer);
+  }, [busyId]);
 
   const builderReviews = useQuery({
     queryKey: ['agent-builder-reviews'],
@@ -185,6 +214,26 @@ export default function ProposalsPage() {
       setActionError(null);
     },
     onError: (e: Error) => setActionError(e.message || '最終確認失敗'),
+  });
+
+  const approveAndActivateMut = useMutation({
+    mutationFn: (id: string) =>
+      API.post<ApproveAndActivateResult>(`/api/agent-builder/sessions/${id}/approve-and-activate`),
+    onSuccess: (data, id) => {
+      void qc.invalidateQueries({ queryKey: ['agent-builder-reviews'] });
+      if (!data.ok) {
+        const stage = data.stage ?? 'finalize';
+        const reason = data.reason || '核准並上線失敗';
+        setOneClickFailure({ id, stage, reason });
+        setActionError(`核准並上線失敗（${ACTIVATE_STAGE_LABEL[stage]}）：${reason}`);
+        setFlash(null);
+        return;
+      }
+      setOneClickFailure(null);
+      setFlash('已核准並上線');
+      setActionError(null);
+    },
+    onError: (e: Error) => setActionError(e.message || '核准並上線失敗'),
   });
 
   return (
@@ -397,38 +446,87 @@ export default function ProposalsPage() {
                     </div>
                   )}
 
-                  <div className="flex justify-end">
-                    {buildApproval && (
-                      <button
-                        type="button"
-                        className="btn-primary text-sm"
-                        disabled={busy}
-                        onClick={async () => {
-                          setBusyId(review.id);
-                          try { await approveBuilderMut.mutateAsync(review.id); }
-                          finally { setBusyId(null); }
-                        }}
-                      >
-                        {busy ? <Spinner className="h-3.5 w-3.5" /> : <Check className="h-4 w-4" />}
-                        核准建立草稿
-                      </button>
-                    )}
-                    {finalApproval && (
-                      <button
-                        type="button"
-                        className="btn-primary text-sm"
-                        disabled={busy || !review.testResult?.ok}
-                        onClick={async () => {
-                          setBusyId(review.id);
-                          try { await finalizeBuilderMut.mutateAsync(review.id); }
-                          finally { setBusyId(null); }
-                        }}
-                      >
-                        {busy ? <Spinner className="h-3.5 w-3.5" /> : <CheckCircle2 className="h-4 w-4" />}
-                        確認技能並啟用
-                      </button>
-                    )}
-                  </div>
+                  {oneClickFailure?.id === review.id && (
+                    <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-400">
+                      <div className="font-medium">
+                        核准並上線停在「{ACTIVATE_STAGE_LABEL[oneClickFailure.stage]}」
+                      </div>
+                      <div className="mt-1">{oneClickFailure.reason}</div>
+                    </div>
+                  )}
+
+                  {(buildApproval || finalApproval) && (
+                    <div className="space-y-3">
+                      {busy && (
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          {ACTIVATE_PROGRESS_STEPS.map((label, index) => (
+                            <span key={label} className="flex items-center gap-2">
+                              <span className={cn(
+                                'badge',
+                                index < progressStep
+                                  ? 'bg-emerald-500/15 text-emerald-500'
+                                  : index === progressStep
+                                    ? 'bg-brand/15 text-brand'
+                                    : 'bg-black/5 text-muted dark:bg-white/5',
+                              )}>
+                                {label}
+                              </span>
+                              {index < ACTIVATE_PROGRESS_STEPS.length - 1 && (
+                                <span className="text-muted">→</span>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          className="btn-primary text-sm"
+                          disabled={busy}
+                          onClick={async () => {
+                            setBusyId(review.id);
+                            setOneClickFailure(null);
+                            try { await approveAndActivateMut.mutateAsync(review.id); }
+                            finally { setBusyId(null); }
+                          }}
+                        >
+                          {busy ? <Spinner className="h-3.5 w-3.5" /> : <Rocket className="h-4 w-4" />}
+                          {busy ? `${ACTIVATE_PROGRESS_STEPS[progressStep]}中…` : '核准並上線'}
+                        </button>
+                      </div>
+                      <details className="rounded-lg border border-border/70 px-3 py-2">
+                        <summary className="cursor-pointer text-xs text-muted">分步操作（進階／失敗時後備）</summary>
+                        <div className="mt-3 flex flex-wrap justify-end gap-2">
+                          <button
+                            type="button"
+                            className="btn-ghost text-sm"
+                            disabled={busy || !buildApproval}
+                            onClick={async () => {
+                              setBusyId(review.id);
+                              try { await approveBuilderMut.mutateAsync(review.id); }
+                              finally { setBusyId(null); }
+                            }}
+                          >
+                            {busy && buildApproval ? <Spinner className="h-3.5 w-3.5" /> : <Check className="h-4 w-4" />}
+                            核准建立草稿
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-ghost text-sm"
+                            disabled={busy || !finalApproval || !review.testResult?.ok}
+                            onClick={async () => {
+                              setBusyId(review.id);
+                              try { await finalizeBuilderMut.mutateAsync(review.id); }
+                              finally { setBusyId(null); }
+                            }}
+                          >
+                            {busy && finalApproval ? <Spinner className="h-3.5 w-3.5" /> : <CheckCircle2 className="h-4 w-4" />}
+                            確認技能並啟用
+                          </button>
+                        </div>
+                      </details>
+                    </div>
+                  )}
                 </article>
               );
             })}

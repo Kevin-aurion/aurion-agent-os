@@ -19,6 +19,7 @@ import {
   submitBuilderTestData,
   runBuilderTest,
   finalizeBuilderSession,
+  approveAndActivate,
   attachBuilderSourceFile,
   attachBuilderTestFixture,
   listBuilderReviewQueue,
@@ -60,6 +61,10 @@ const testDataSchema = z.object({
 
 const abandonBodySchema = z.object({
   confirmSessionId: z.string().min(1).optional(),
+}).strict();
+
+const approveAndActivateSchema = z.object({
+  autoAdoptSuggestedTest: z.boolean().optional(),
 }).strict();
 
 const draftQuerySchema = z.object({ sessionId: z.string().min(1).optional() });
@@ -723,6 +728,32 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
           role: req.user!.role,
         });
         return ok(result);
+      } catch (e) {
+        return sendError(reply, e);
+      }
+    },
+  );
+
+  /**
+   * FDE one-click: approve-build → test (if data ready) → evidence gate →
+   * confirm skills → activate. Stepwise endpoints remain available.
+   */
+  app.post(
+    '/api/agent-builder/sessions/:id/approve-and-activate',
+    { preHandler: requireTrainer },
+    async (req, reply) => {
+      try {
+        const { id } = req.params as { id: string };
+        const parsed = approveAndActivateSchema.safeParse(req.body ?? {});
+        if (!parsed.success) throw errors.badRequest('autoAdoptSuggestedTest must be a boolean if provided');
+        return ok(
+          await approveAndActivate({
+            sessionId: id,
+            userId: req.user!.sub,
+            role: req.user!.role,
+            autoAdoptSuggestedTest: parsed.data.autoAdoptSuggestedTest === true,
+          }),
+        );
       } catch (e) {
         return sendError(reply, e);
       }

@@ -3049,17 +3049,11 @@ function productionBlockersFromPlan(plan: PlanDto | null): string[] {
   return (plan.gaps ?? []).map((g) => g.label);
 }
 
-export async function finalizeBuilderSession(opts: {
-  sessionId: string;
-  userId: string;
-  role: UserRole | string;
-}): Promise<BuilderMessageResult> {
-  if (!isFde(opts.role)) {
-    throw errors.forbidden('Only FDE (OWNER/TRAINER) may finalize');
-  }
-
-  const row = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
-
+/**
+ * Shared fail-closed evidence gate for finalize and approve-and-activate.
+ * Do not weaken: skipVerify / empty verdict / mismatched draft ids all reject.
+ */
+async function assertBuilderFinalizeEvidence(row: AgentBuildSession): Promise<void> {
   // Fail-closed: must be PASSED with a real test result.
   if (row.status !== 'PASSED') {
     throw errors.conflict(`Finalize requires PASSED (status=${row.status})`);
@@ -3123,7 +3117,90 @@ export async function finalizeBuilderSession(opts: {
   ) {
     throw errors.conflict('Finalize requires persisted cross-model verification evidence');
   }
+}
 
+function looksLikeMissingVerifierEvidence(result: TestResultDto | null): boolean {
+  const text = `${result?.summary ?? ''}\n${result?.detail ?? ''}`;
+  return /skipVerify|不進行跨模型驗證|跨模型驗證證據/i.test(text);
+}
+
+async function readSuggestedTestIdea(sessionId: string): Promise<{
+  name: string;
+  input: string;
+  expected: string;
+} | null> {
+  const iteration = await prisma.agentBuildIteration.findFirst({
+    where: { sessionId },
+    orderBy: { sequence: 'desc' },
+    select: { artifactSnapshot: true },
+  });
+  const harness = iteration?.artifactSnapshot as HarnessSnapshot | null;
+  const idea = harness?.testIdeas?.[0];
+  if (!idea) return null;
+  const input = String(idea.input ?? '').trim();
+  const expected = String(idea.expected ?? '').trim();
+  if (!input || !expected) return null;
+  return { name: idea.name, input, expected };
+}
+
+async function sessionHasRunnableTestData(row: AgentBuildSession): Promise<boolean> {
+  if (row.testData == null || row.testExpected == null || row.testExpected === '') return false;
+  const contract = await testInputContractForSession(row.id);
+  return getTestInputStatus(contract.requirements, parseBuilderTestData(row.testData)).complete;
+}
+
+function pipelineErrorReason(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return String(error);
+}
+
+export type ApproveAndActivateStage = 'approve' | 'test' | 'evidence' | 'finalize';
+
+export type ApproveAndActivateResult = {
+  ok: boolean;
+  stage?: ApproveAndActivateStage;
+  reason?: string;
+  session: SessionDto;
+  assistantMessage: string;
+  status: AgentBuildSessionStatus;
+  progress: Progress | null;
+};
+
+async function snapshotBuilderSession(sessionId: string): Promise<{
+  row: AgentBuildSession;
+  result: Omit<ApproveAndActivateResult, 'ok' | 'stage' | 'reason'>;
+}> {
+  const row = await prisma.agentBuildSession.findUnique({
+    where: { id: sessionId },
+    include: { iterations: { orderBy: { sequence: 'asc' } } },
+  });
+  if (!row) throw errors.notFound('Session not found');
+  const dto = toSessionDto(row);
+  return {
+    row,
+    result: {
+      session: dto,
+      assistantMessage: dto.lastAssistantMessage ?? '',
+      status: dto.status,
+      progress: dto.progress,
+    },
+  };
+}
+
+export async function finalizeBuilderSession(opts: {
+  sessionId: string;
+  userId: string;
+  role: UserRole | string;
+}): Promise<BuilderMessageResult> {
+  if (!isFde(opts.role)) {
+    throw errors.forbidden('Only FDE (OWNER/TRAINER) may finalize');
+  }
+
+  const row = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
+
+  await assertBuilderFinalizeEvidence(row);
+
+  const expectedAgentId = row.builtAgentId ?? row.targetAgentId;
   const draftIds = row.draftSkillIds ?? [];
   if (!draftIds.length) {
     throw errors.badRequest('No builder-owned draft skills to confirm');
@@ -3245,4 +3322,153 @@ export async function finalizeBuilderSession(opts: {
     status: updated.status,
     progress: asProgress(updated.progress),
   };
+}
+
+/**
+ * FDE one-click: approve-build → (test data ready or auto-adopt) run test →
+ * evidence machine gate → confirm skills → activate. Fail-closed: a failed
+ * stage never advances past that stage's existing status.
+ */
+export async function approveAndActivate(opts: {
+  sessionId: string;
+  userId: string;
+  role: UserRole | string;
+  /** Must be explicitly true to adopt latestIteration.harness.testIdeas[0]. */
+  autoAdoptSuggestedTest?: boolean;
+  runAgentFn?: RunAgentFn;
+  timeoutMs?: number;
+}): Promise<ApproveAndActivateResult> {
+  if (!isFde(opts.role)) {
+    throw errors.forbidden('Only FDE (OWNER/TRAINER) may approve and activate');
+  }
+
+  const initial = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
+  const fail = async (
+    stage: ApproveAndActivateStage,
+    reason: string,
+  ): Promise<ApproveAndActivateResult> => {
+    const snap = await snapshotBuilderSession(opts.sessionId);
+    return { ok: false, stage, reason, ...snap.result };
+  };
+
+  if (initial.status === 'ACTIVE') {
+    const snap = await snapshotBuilderSession(opts.sessionId);
+    return { ok: true, ...snap.result };
+  }
+  if (initial.status === 'TESTING' || initial.status === 'BUILDING') {
+    return fail('approve', `Cannot approve-and-activate from status=${initial.status}`);
+  }
+  if (
+    initial.status !== 'AWAITING_FDE' &&
+    initial.status !== 'AWAITING_TEST_DATA' &&
+    initial.status !== 'FAILED' &&
+    initial.status !== 'PASSED'
+  ) {
+    return fail('approve', `Cannot approve-and-activate from status=${initial.status}`);
+  }
+
+  const suggested = await readSuggestedTestIdea(opts.sessionId);
+  const hasData = await sessionHasRunnableTestData(initial);
+  const canAdopt = opts.autoAdoptSuggestedTest === true && suggested != null;
+  if (initial.status === 'AWAITING_FDE' && !hasData && !canAdopt) {
+    return fail(
+      'test',
+      opts.autoAdoptSuggestedTest === true
+        ? '缺少測試資料，且沒有可採用的建議測試。請補件後再試。'
+        : '缺少測試資料；請補件，或明確傳 autoAdoptSuggestedTest:true 以採用建議測試。',
+    );
+  }
+
+  if (initial.status === 'AWAITING_FDE') {
+    try {
+      const strategy = initial.strategy === 'reuse' ? 'reuse' : 'create';
+      await authorizeBuilderSession({
+        sessionId: opts.sessionId,
+        userId: opts.userId,
+        role: opts.role,
+        strategy,
+        targetAgentId: initial.targetAgentId ?? undefined,
+      });
+    } catch (error) {
+      return fail('approve', pipelineErrorReason(error));
+    }
+  }
+
+  let row = (await snapshotBuilderSession(opts.sessionId)).row;
+
+  if (row.status !== 'PASSED') {
+    let runnable = await sessionHasRunnableTestData(row);
+    if (!runnable && opts.autoAdoptSuggestedTest === true) {
+      const idea = suggested ?? (await readSuggestedTestIdea(opts.sessionId));
+      if (!idea) {
+        return fail('test', '缺少測試資料，且沒有可採用的建議測試。請補件後再試。');
+      }
+      try {
+        await submitBuilderTestData({
+          sessionId: opts.sessionId,
+          userId: opts.userId,
+          role: opts.role,
+          data: idea.input,
+          expected: idea.expected,
+        });
+        runnable = true;
+      } catch (error) {
+        return fail('test', pipelineErrorReason(error));
+      }
+    }
+    if (!runnable) {
+      return fail(
+        'test',
+        '缺少測試資料；請補件，或明確傳 autoAdoptSuggestedTest:true 以採用建議測試。',
+      );
+    }
+
+    let testResult: BuilderMessageResult;
+    try {
+      testResult = await runBuilderTest({
+        sessionId: opts.sessionId,
+        userId: opts.userId,
+        role: opts.role,
+        runAgentFn: opts.runAgentFn,
+        timeoutMs: opts.timeoutMs,
+        background: false,
+      });
+    } catch (error) {
+      return fail('test', pipelineErrorReason(error));
+    }
+
+    if (testResult.status !== 'PASSED') {
+      const evidenceLike = looksLikeMissingVerifierEvidence(testResult.session.testResult);
+      return fail(
+        evidenceLike ? 'evidence' : 'test',
+        testResult.session.testResult?.summary
+          ?? testResult.assistantMessage
+          ?? `試跑未通過（status=${testResult.status}）`,
+      );
+    }
+    row = (await snapshotBuilderSession(opts.sessionId)).row;
+  }
+
+  try {
+    await assertBuilderFinalizeEvidence(row);
+  } catch (error) {
+    return fail('evidence', pipelineErrorReason(error));
+  }
+
+  try {
+    const finalized = await finalizeBuilderSession({
+      sessionId: opts.sessionId,
+      userId: opts.userId,
+      role: opts.role,
+    });
+    return {
+      ok: true,
+      session: finalized.session,
+      assistantMessage: finalized.assistantMessage,
+      status: finalized.status,
+      progress: finalized.progress,
+    };
+  } catch (error) {
+    return fail('finalize', pipelineErrorReason(error));
+  }
 }

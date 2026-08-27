@@ -491,6 +491,18 @@ export type BuilderMessageResult = {
   progress: BuilderProgress | null;
 };
 
+export type ApproveAndActivateStage = 'approve' | 'test' | 'evidence' | 'finalize';
+
+export type ApproveAndActivateResult = {
+  ok: boolean;
+  stage?: ApproveAndActivateStage;
+  reason?: string;
+  session: BuilderSession;
+  assistantMessage: string;
+  status: string;
+  progress: BuilderProgress | null;
+};
+
 /** Business-language labels for discovery checklist (right rail / progress). */
 export const BUILDER_FIELD_LABELS: Record<string, string> = {
   objective: '痛點與希望改變的結果',
