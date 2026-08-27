@@ -24,12 +24,15 @@ function run(command, args, cwd) {
 
 await mkdir(releases, { recursive: true });
 
-// Keep the distributable plugin Skills byte-for-byte aligned with the canonical Skills.
+// skills/ is the unique Skill content source. Plugin and release copies are
+// always regenerated here so SKILL.md / agents/openai.yaml cannot drift.
 for (const skillName of skillNames) {
+  const canonical = path.join(packageRoot, 'skills', skillName);
   const pluginSkill = path.join(pluginSource, 'skills', skillName);
   await rm(pluginSkill, { recursive: true, force: true });
   await mkdir(path.dirname(pluginSkill), { recursive: true });
-  await cp(path.join(packageRoot, 'skills', skillName), pluginSkill, { recursive: true });
+  await cp(canonical, pluginSkill, { recursive: true });
+  console.log(`Copied skills/${skillName} → plugins/aurion-aios-builder/skills/${skillName}`);
 }
 
 await rm(staging, { recursive: true, force: true });
@@ -42,6 +45,7 @@ await cp(path.join(installers, 'Install-Aurion-AIOS.ps1'), path.join(staging, 'I
 await cp(path.join(installers, '安裝說明.txt'), path.join(staging, '安裝說明.txt'));
 for (const skillName of skillNames) {
   await cp(path.join(packageRoot, 'skills', skillName), path.join(staging, skillName), { recursive: true });
+  console.log(`Copied skills/${skillName} → releases/aurion-aios-one-click/${skillName}`);
 }
 await chmod(path.join(staging, 'Install Aurion AIOS.command'), 0o755);
 

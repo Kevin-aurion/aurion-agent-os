@@ -1,6 +1,6 @@
 {
   "name": "aios-mcp",
-  "version": "0.3.0",
+  "version": "1.6.1",
   "private": true,
   "type": "module",
   "description": "MCP server (stdio + optional streamable-HTTP) exposing the local AIOS aios-server REST API as tools/resources",
@@ -18,7 +18,7 @@
     "provision:local-user": "cd ../aios-server && tsx src/scripts/provision-agent-builder-mcp.ts",
     "install:local-clients": "node scripts/install-local-clients.mjs",
     "install:remote-host": "node scripts/install-remote-host.mjs",
-    "package:client": "node scripts/package-client-release.mjs"
+    "package:client": "node scripts/sync-version.mjs && node scripts/package-client-release.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
