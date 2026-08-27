@@ -11,7 +11,11 @@ import { prisma } from '../lib/db.js';
 
 const customerEmailDomain = process.env.AIOS_CUSTOMER_EMAIL_DOMAIN?.trim() || 'aurion-group.com';
 const ownerEmail = process.env.AIOS_OWNER_EMAIL?.trim() || 'fde@aios.test';
-const accounts = ['Vincent', 'Lauren', 'Kate'].map((displayName) => ({
+const requestedNames = process.env.AIOS_CUSTOMER_NAMES
+  ?.split(',')
+  .map((name) => name.trim())
+  .filter(Boolean);
+const accounts = (requestedNames?.length ? requestedNames : ['Vincent', 'Lauren', 'Kate']).map((displayName) => ({
   email: `${displayName.toLowerCase()}@${customerEmailDomain}`,
   displayName,
 }));

@@ -118,10 +118,10 @@ export const config = {
   },
 
   remoteMcp: {
-    issuer: opt('AIOS_MCP_OAUTH_ISSUER', 'https://aios-mcp.lazyoffice.app').replace(/\/+$/, ''),
+    issuer: opt('AIOS_MCP_OAUTH_ISSUER', 'https://aurion-aios-mcp.lazyoffice.app').replace(/\/+$/, ''),
     resourceUrl: opt(
       'AIOS_MCP_PUBLIC_URL',
-      'https://aios-mcp.lazyoffice.app/mcp',
+      'https://aurion-aios-mcp.lazyoffice.app/mcp',
     ).replace(/\/+$/, ''),
   },
 

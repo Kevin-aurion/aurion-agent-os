@@ -144,7 +144,19 @@ export async function workflowRoutes(app: FastifyInstance) {
   app.get('/api/agents/:agentId/workflows', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { agentId } = z.object({ agentId: z.string() }).parse(req.params);
-      await requireVisibleAgent(agentId, req.user!);
+      const { scope } = z.object({ scope: z.enum(['mine', 'all']).default('mine') }).parse(req.query);
+      if (scope === 'all') {
+        if (req.user!.scope || !['OWNER', 'TRAINER'].includes(req.user!.role)) {
+          throw errors.forbidden('Only an unscoped FDE session may list workflows across accounts');
+        }
+        const agent = await prisma.agent.findFirst({
+          where: { id: agentId, deletedAt: null, systemManaged: false },
+          select: { id: true },
+        });
+        if (!agent) throw errors.notFound('Agent not found');
+      } else {
+        await requireVisibleAgent(agentId, req.user!);
+      }
       const workflows = await prisma.workflow.findMany({
         where: { agentId, deletedAt: null },
         include: { _count: { select: { steps: true } }, schedules: true },

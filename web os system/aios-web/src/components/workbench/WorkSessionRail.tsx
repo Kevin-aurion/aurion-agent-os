@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { CheckCircle2, Loader2, Shield, XCircle } from 'lucide-react';
+import { CheckCircle2, Loader2, Shield, Square, XCircle } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import type { RunDetailView, WorkSessionState } from '@/lib/worksession';
 
@@ -60,11 +60,15 @@ export function WorkSessionRail({
   runDetail,
   isFde,
   sourceLabel,
+  onStop,
+  stopping = false,
 }: {
   session: WorkSessionState;
   runDetail: RunDetailView | null;
   isFde: boolean;
   sourceLabel?: string | null;
+  onStop?: () => void;
+  stopping?: boolean;
 }) {
   const toolSteps = session.steps.filter((s) => s.isTool);
   const artifacts = runDetail?.artifacts ?? [];
@@ -99,6 +103,17 @@ export function WorkSessionRail({
             {statusText}
           </span>
         </div>
+        {statusTone === 'running' && onStop && (
+          <button
+            type="button"
+            className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-rose-500/40 px-3 py-1.5 text-xs font-medium text-rose-300 hover:bg-rose-500/10 disabled:opacity-50"
+            onClick={onStop}
+            disabled={stopping}
+          >
+            {stopping ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
+            停止這次執行
+          </button>
+        )}
       </div>
 
       {/* 1. Task progress */}

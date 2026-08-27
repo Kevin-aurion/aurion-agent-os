@@ -75,7 +75,7 @@ try {
   authorizeUrl.searchParams.set('code_challenge_method', 'S256');
   authorizeUrl.searchParams.set('scope', 'aios:agent-builder');
   authorizeUrl.searchParams.set('state', 'state-e2e');
-  authorizeUrl.searchParams.set('resource', 'https://aios-mcp.lazyoffice.app/mcp');
+  authorizeUrl.searchParams.set('resource', 'https://aurion-aios-mcp.lazyoffice.app/mcp');
   const authorize = await fetch(authorizeUrl);
   check(authorize.status === 200, 'authorize page failed');
   const html = await authorize.text();
@@ -132,7 +132,7 @@ try {
       code,
       redirect_uri: 'http://127.0.0.1:43123/callback',
       code_verifier: verifier,
-      resource: 'https://aios-mcp.lazyoffice.app/mcp',
+      resource: 'https://aurion-aios-mcp.lazyoffice.app/mcp',
     }),
   });
   check(token.response.status === 200, 'authorization code exchange failed');
@@ -141,7 +141,7 @@ try {
   check(access && refresh, 'token response incomplete');
   const verified = await verifyAccess(access);
   check(
-    verified.audience === 'https://aios-mcp.lazyoffice.app/mcp',
+    verified.audience === 'https://aurion-aios-mcp.lazyoffice.app/mcp',
     'access token is not audience-bound to the Remote MCP resource',
   );
 
@@ -252,7 +252,7 @@ try {
       grant_type: 'refresh_token',
       client_id: clientId,
       refresh_token: refresh,
-      resource: 'https://aios-mcp.lazyoffice.app/mcp',
+      resource: 'https://aurion-aios-mcp.lazyoffice.app/mcp',
     }),
   });
   check(rotated.response.status === 200 && (rotated.body as any).refresh_token !== refresh, 'refresh rotation failed');

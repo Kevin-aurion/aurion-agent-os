@@ -46,7 +46,15 @@ try {
     'get_agent_run',
     'list_agent_schedules',
     'request_agent_schedule',
+    'request_agent_archive',
   ]) assert(names.has(required), `missing MCP tool: ${required}`);
+  const archiveTool = tools.tools.find((tool) => tool.name === 'request_agent_archive');
+  assert.equal(archiveTool?.annotations?.destructiveHint, true, 'archive proposal must carry destructiveHint');
+  assert.equal(archiveTool?.annotations?.readOnlyHint, false, 'archive proposal must not claim read-only behavior');
+  assert(
+    archiveTool?.inputSchema?.required?.includes('confirmAgentName'),
+    'archive proposal must require exact Agent name confirmation',
+  );
 
   const prompts = await client.listPrompts();
   assert(prompts.prompts.some((prompt) => prompt.name === 'build-aios-agent'));

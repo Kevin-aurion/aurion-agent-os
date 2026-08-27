@@ -56,6 +56,7 @@ import {
   type ChatMessage,
   type Conversation,
   type RecordingStatus,
+  type RunListItem,
   type RunStep,
   type SkillDetail,
   type TeachChatMsg,
@@ -205,11 +206,12 @@ function WorkbenchInner() {
     enabled: !!selectedAgentId,
   });
 
-  const agentRunsQ = useQuery({
+  const agentRunsQ = useQuery<RunListItem[]>({
     queryKey: ['agent-runs', selectedAgentId],
     queryFn: () =>
-      API.get(`/api/runs?agentId=${selectedAgentId}&limit=50`),
+      API.get<RunListItem[]>(`/api/runs?agentId=${selectedAgentId}&limit=50`),
     enabled: !!selectedAgentId,
+    refetchInterval: 2000,
   });
 
   const conversationsQ = useQuery({
@@ -282,8 +284,28 @@ function WorkbenchInner() {
     queryKey: ['run', workSession.runId],
     queryFn: () => API.get(`/api/runs/${workSession.runId}`),
     enabled: !!workSession.runId,
+    refetchInterval: 2000,
   });
   const runDetail = projectRunDetail(runDetailQ.data);
+
+  const cancelRunMutation = useMutation({
+    mutationFn: (runId: string) => API.post(`/api/runs/${runId}/cancel`),
+    onSuccess: (_data, runId) => {
+      setRunSteps((prev) => ({
+        ...prev,
+        [runId]: (prev[runId] ?? []).map((step) => ({ ...step, phase: 'cancelled' })),
+      }));
+      setWorkSession((prev) =>
+        prev.runId === runId
+          ? { ...prev, status: 'failed', finishedStatus: 'CANCELLED', approvalPending: false }
+          : prev,
+      );
+      void qc.invalidateQueries({ queryKey: ['run', runId] });
+      void qc.invalidateQueries({ queryKey: ['agent-runs', selectedAgentId] });
+      if (activeConvId) void qc.invalidateQueries({ queryKey: ['messages', activeConvId] });
+    },
+    onError: (e) => setSendError(e instanceof Error ? e.message : String(e)),
+  });
 
   const recStatusQ = useQuery({
     queryKey: ['recording-status'],
@@ -863,6 +885,10 @@ function WorkbenchInner() {
   const agentDetail = agentDetailQ.data;
   const conversations = conversationsQ.data ?? [];
   const messages = messagesQ.data ?? [];
+  const runsById = useMemo(
+    () => new Map((agentRunsQ.data ?? []).map((run) => [run.id, run])),
+    [agentRunsQ.data],
+  );
   const busyWork = sendMutation.isPending || createConvMutation.isPending;
   const activeConvTitle =
     conversations.find((c) => c.id === activeConvId)?.title ?? null;
@@ -1041,6 +1067,12 @@ function WorkbenchInner() {
               runDetail={runDetail}
               isFde={isFde}
               sourceLabel={activeConvTitle}
+              onStop={
+                runDetail?.status === 'RUNNING' && workSession.runId
+                  ? () => cancelRunMutation.mutate(workSession.runId!)
+                  : undefined
+              }
+              stopping={cancelRunMutation.isPending}
             />
             {isFde && selectedAgentId && (
               <div className="border-t border-border p-4">
@@ -1264,6 +1296,7 @@ function WorkbenchInner() {
                   const role = (m.role ?? m.sender ?? 'user').toString().toUpperCase();
                   const isUser = role.includes('USER');
                   const runId = m.runId ?? sentRunIds[m.id];
+                  const runStatus = runId ? runsById.get(runId)?.status : undefined;
                   return (
                     <div
                       key={m.id}
@@ -1277,7 +1310,18 @@ function WorkbenchInner() {
                       >
                         {m.content}
                       </div>
-                      {isUser && runId && <ChatRunTimeline steps={runSteps[runId] ?? []} />}
+                      {isUser && runId && (
+                        <ChatRunTimeline
+                          steps={runSteps[runId] ?? []}
+                          status={runStatus}
+                          onStop={
+                            runStatus === 'RUNNING'
+                              ? () => cancelRunMutation.mutate(runId)
+                              : undefined
+                          }
+                          stopping={cancelRunMutation.isPending && cancelRunMutation.variables === runId}
+                        />
+                      )}
                     </div>
                   );
                 })}

@@ -4,7 +4,6 @@ import type { LucideIcon } from 'lucide-react';
 import {
   ArrowRight,
   Bot,
-  CheckCircle2,
   ChevronRight,
   CircleUserRound,
   Cloud,
@@ -32,7 +31,7 @@ export const metadata: Metadata = {
 };
 
 const DOWNLOAD_ROOT = '/downloads/agent-builder';
-const REMOTE_MCP = 'https://aios-mcp.lazyoffice.app/mcp';
+const REMOTE_MCP = 'https://aurion-aios-mcp.lazyoffice.app/mcp';
 
 type DownloadItem = {
   title: string;
@@ -217,8 +216,8 @@ export default function AgentBuilderInstallPage() {
           {[
             { icon: MessageSquareText, title: '自然對話', text: '動態理解需求，不走固定問卷' },
             { icon: RefreshCw, title: '背景迭代', text: '每輪持續更新完整草稿' },
-            { icon: ShieldCheck, title: 'FDE 治理', text: '核准前不會正式生效' },
-            { icon: Workflow, title: '真實測試', text: '測試資料、跨模型驗證與紀錄' },
+            { icon: ShieldCheck, title: '安全試用', text: '免 FDE 對話，外部動作仍隔離' },
+            { icon: Workflow, title: '正式治理', text: '上線前保留跨模型驗證與紀錄' },
           ].map(({ icon: Icon, title, text }, index) => (
             <div key={title} className={`p-6 ${index > 0 ? 'border-t border-white/10 md:border-l md:border-t-0' : ''}`}>
               <Icon className="h-5 w-5 text-indigo-300" />
@@ -312,18 +311,18 @@ export default function AgentBuilderInstallPage() {
         <div className="mx-auto grid max-w-7xl gap-10 px-5 sm:px-8 lg:grid-cols-[0.8fr_1.2fr]">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-300">Security boundary</div>
-            <h2 className="mt-3 text-3xl font-semibold tracking-tight text-white">安裝完成，不代表 Agent 已生效</h2>
+            <h2 className="mt-3 text-3xl font-semibold tracking-tight text-white">可以立即試聊，正式執行仍有安全邊界</h2>
             <p className="mt-5 text-sm leading-7 text-slate-400">
-              外部 AI 只能建立 shadow draft。OAuth 連線固定使用 Agent Builder 的 MEMBER 權限，無法自行確認 Skill、核准權限或啟用正式 Agent。
+              READY Shadow Agent 不需 FDE 就能在 Claude、ChatGPT 或 Codex 裡直接對話；測試模式沒有工具、網路、電腦控制、排程或外部寫入。OAuth 連線仍無法自行確認 Skill、核准權限或啟用正式 Agent。
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             {[
               { icon: LockKeyhole, text: 'Skill 永遠停在待 FDE 確認' },
+              { icon: MessageSquareText, text: 'READY Agent 可免 FDE 安全試聊' },
               { icon: CircleUserRound, text: '每位使用者只看到自己的建置資料' },
               { icon: KeyRound, text: 'OAuth 不把帳號密碼放進安裝包' },
               { icon: ShieldCheck, text: '寄信、寫入與不可逆操作需人工核准' },
-              { icon: CheckCircle2, text: '測試通過後仍需 FDE 最終啟用' },
               { icon: Cloud, text: '客戶端只連公開 HTTPS Remote MCP' },
             ].map(({ icon: Icon, text }) => (
               <div key={text} className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.035] p-4 text-sm text-slate-300">
@@ -351,7 +350,7 @@ export default function AgentBuilderInstallPage() {
 
       <footer className="border-t border-white/10 py-8">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 px-5 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-8">
-          <div className="flex items-center gap-2"><span className="grid h-6 w-6 place-items-center rounded-md bg-brand text-[10px] font-bold text-white">L</span> Aurion AIOS Agent Builder</div>
+          <div className="flex items-center gap-2"><span className="grid h-6 w-6 place-items-center rounded-md bg-brand text-[10px] font-bold text-white">A</span> Aurion AIOS Agent Builder</div>
           <div>Remote MCP · OAuth 2.1 · FDE governed</div>
         </div>
       </footer>

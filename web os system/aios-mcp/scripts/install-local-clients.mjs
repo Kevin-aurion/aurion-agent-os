@@ -28,6 +28,8 @@ const claudeCodeAiosToolRules = [
   'mcp__aios__guard_agent_build_stop',
   'mcp__aios__get_agent_build',
   'mcp__aios__list_agent_builds',
+  'mcp__aios__list_testable_agents',
+  'mcp__aios__chat_with_test_agent',
   'mcp__aios__submit_agent_build_for_fde_review',
   'mcp__aios__submit_agent_build_test_data',
   'mcp__aios__run_agent_build_test',

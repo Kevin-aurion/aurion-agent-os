@@ -8,6 +8,6 @@ dependencies:
       value: "aios"
       description: "AIOS MCP server for durable Builder synchronization and review state"
       transport: "streamable_http"
-      url: "https://aios-mcp.lazyoffice.app/mcp"
+      url: "https://aurion-aios-mcp.lazyoffice.app/mcp"
 policy:
   allow_implicit_invocation: true

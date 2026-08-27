@@ -2070,6 +2070,14 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
       results.push(r);
       ctx.stepOutputs[step.stepKey] = r.output;
 
+      // A CLI adapter reports an abort as an execution error. Preserve the
+      // user's explicit intent as CANCELLED instead of mislabelling it FAILED.
+      if (ctx.signal?.aborted) {
+        finalStatus = 'CANCELLED';
+        stoppedAt = step.stepKey;
+        break;
+      }
+
       if (r.ok) {
         upsertApproved(ctx, step.stepKey, r.output);
         delete ctx.reworkFeedback[step.stepKey];
@@ -2134,8 +2142,9 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
       break;
     }
   } catch (e) {
-    finalStatus = 'FAILED';
-    stoppedAt = stoppedAt ?? 'runner';
+    const isCancelled = opts.signal?.aborted === true;
+    finalStatus = isCancelled ? 'CANCELLED' : 'FAILED';
+    stoppedAt = stoppedAt ?? (isCancelled ? 'cancelled' : 'runner');
     const isBudget = e instanceof BudgetExceededError;
     const msg = e instanceof Error ? e.message : String(e);
     if (isBudget) {
@@ -2154,7 +2163,11 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
       output: msg,
       rounds: 0,
       approved: false,
-      reason: isBudget ? `預算超限，已 fail-closed 阻斷: ${msg}` : 'RUNNER_ERROR',
+      reason: isCancelled
+        ? 'CANCELLED_BY_USER'
+        : isBudget
+          ? `預算超限，已 fail-closed 阻斷: ${msg}`
+          : 'RUNNER_ERROR',
       records: [],
     });
   }

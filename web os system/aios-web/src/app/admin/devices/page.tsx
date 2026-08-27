@@ -140,7 +140,7 @@ export default function AdminDevicesPage() {
 
   const agentsQ = useQuery({
     queryKey: ['agents', 'device-page'],
-    queryFn: () => API.get<AgentOption[]>('/api/agents'),
+    queryFn: () => API.get<AgentOption[]>('/api/agents?scope=all'),
     enabled: isFde,
     staleTime: 60_000,
   });

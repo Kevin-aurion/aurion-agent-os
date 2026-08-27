@@ -3,7 +3,8 @@
 //
 // Hard rules:
 // - Discovery is deterministic (no CLI wait); works offline.
-// - MEMBER never mutates Agent/Skill/Workflow/MCP — only AWAITING_FDE.
+// - MEMBER may create its own least-privilege working Agent container; Skill,
+//   Workflow, MCP and elevated capability changes remain governed/inert.
 // - New skills stay AWAITING_USER_CONFIRM until FDE finalize after PASSED test.
 // - Every string leaf is deep-redacted before DB write.
 // - Session ownership: foreign users get 404 (no existence leak); FDE may inspect.
@@ -44,6 +45,8 @@ import {
   deriveBuilderTestProgress,
   type BuilderTestProgressDto,
 } from './buildertestprogress.js';
+import { createBuilderWorkingAgent } from './builderworkingagent.js';
+import { hub } from '../ws/hub.js';
 
 // ── Types (business-language DTOs — no engines/manifests/MCP protocol) ───────
 
@@ -1533,7 +1536,7 @@ export async function createBuilderSession(opts: {
   const fallbackFocus = nextUnanswered(answered) ?? 'objective';
   const turn = await planAdaptiveInterviewTurn({ key: fallbackFocus, brief });
   const progress = buildProgress(answered, turn);
-  const status: AgentBuildSessionStatus = 'DISCOVERY';
+  const status: AgentBuildSessionStatus = 'ACTIVE';
   const assistantMessage = formatInterviewTurn(turn);
 
   const transcript = pushTranscript(
@@ -1543,16 +1546,30 @@ export async function createBuilderSession(opts: {
   );
 
   const id = ulid();
-  const row = await prisma.agentBuildSession.create({
-    data: {
-      id,
+  const { row, workingAgent } = await prisma.$transaction(async (tx) => {
+    const workingAgent = await createBuilderWorkingAgent(tx, {
       userId: opts.userId,
-      status,
-      transcript,
-      brief: brief as object,
-      progress: progress as object,
-      lastAssistantMessage: deepRedactSecrets(assistantMessage),
-    },
+      name: brief.requestedAgentName,
+      objective: brief.objective,
+      process: brief.process,
+      tags: brief.tags,
+    });
+    const row = await tx.agentBuildSession.create({
+      data: {
+        id,
+        userId: opts.userId,
+        status,
+        transcript,
+        brief: brief as object,
+        progress: progress as object,
+        strategy: 'create',
+        agentId: workingAgent.id,
+        targetAgentId: workingAgent.id,
+        builtAgentId: workingAgent.id,
+        lastAssistantMessage: deepRedactSecrets(assistantMessage),
+      },
+    });
+    return { row, workingAgent };
   });
 
   // Draft cleanup is auxiliary: never fail a successfully created session.
@@ -1560,7 +1577,14 @@ export async function createBuilderSession(opts: {
 
   await audit(opts.userId, 'agent_builder.session_created', 'AgentBuildSession', id, {
     status,
+    agentId: workingAgent.id,
   });
+  await audit(opts.userId, 'agent_builder.working_agent_created', 'Agent', workingAgent.id, {
+    sessionId: id,
+    status: 'ACTIVE',
+    leastPrivilege: true,
+  });
+  hub.publish('agent.status', { id: workingAgent.id, status: 'ACTIVE', event: 'created' });
 
   const iteration = await createBuilderEvolutionIteration({
     sessionId: id,
@@ -1618,13 +1642,13 @@ export async function postBuilderMessage(opts: {
   const answered = [...new Set([...progress.answeredKeys, current])];
   let nextProgress: Progress;
 
-  let status: AgentBuildSessionStatus = 'DISCOVERY';
+  let status: AgentBuildSessionStatus = continuingActiveAgent ? 'ACTIVE' : 'DISCOVERY';
   let plan: PlanDto | null = null;
   let assistantMessage: string;
 
   const legacyDeterministicComplete =
     process.env.AIOS_BUILDER_ADAPTIVE_MODEL === 'off' && nextUnanswered(answered) == null;
-  if ((explicitlyRequestsBuild(message) && Boolean(brief.objective)) || legacyDeterministicComplete) {
+  if (!continuingActiveAgent && ((explicitlyRequestsBuild(message) && Boolean(brief.objective)) || legacyDeterministicComplete)) {
     plan = deepRedactSecrets(await buildCapabilityPlan(brief, row.userId));
     status = 'PLAN_READY';
     nextProgress = { ...buildProgress(answered), currentKey: null, turn: null, mode: 'grill' };
@@ -2345,7 +2369,9 @@ export async function authorizeBuilderSession(opts: {
           restrictions: { ...BUILDER_LEAST_PRIVILEGE },
           riskTier: 'medium',
           status: 'PAUSED',
-          createdBy: opts.userId,
+          // The FDE approves the build, but the resulting employee belongs to
+          // the session owner rather than the approving operator.
+          createdBy: row.userId,
         },
       });
       createdAgentId = agentId;

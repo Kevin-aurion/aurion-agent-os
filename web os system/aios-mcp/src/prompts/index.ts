@@ -35,8 +35,8 @@ export function registerAllPrompts(server: McpServer): void {
   server.registerPrompt(
     'use-aios-agent',
     {
-      title: 'Use an approved AIOS employee',
-      description: 'Select and invoke an ACTIVE AIOS employee, or submit an FDE-governed schedule proposal.',
+      title: 'Use or safely try an AIOS employee',
+      description: 'Select, invoke, schedule or request archival of an ACTIVE AIOS employee, or talk to a READY test employee without FDE approval.',
       argsSchema: {
         request: z.string().min(1).describe('The work or recurring cadence the user wants an existing employee to perform.'),
       },
@@ -47,13 +47,16 @@ export function registerAllPrompts(server: McpServer): void {
         content: {
           type: 'text',
           text: [
-            `請使用我已通過 FDE 的 AIOS 員工處理：${request}`,
+            `請使用我的 AIOS 員工處理：${request}`,
             '',
-            '先呼叫 list_available_agents；若無法唯一判定員工，列出候選並詢問，不要猜測。',
-            '選定後呼叫 get_agent_capabilities，依輸入規格補齊必要資料，再用穩定 idempotencyKey 呼叫 invoke_agent。',
+            '先呼叫 list_available_agents；如果使用者明說要測試未核准員工，或沒有合適的 ACTIVE 員工，再呼叫 list_testable_agents。',
+            '若無法唯一判定員工，列出少量候選並詢問，不要猜測。',
+            '選到測試員工時，以 chat_with_test_agent 直接對話；這不需 FDE，但無法調用工具、網路、電腦操作、外部寫入或排程。測試分支不要呼叫 get_agent_capabilities 或 invoke_agent。',
+            '只有選到 ACTIVE 員工時，才呼叫 get_agent_capabilities，依輸入規格補齊必要資料，再用穩定 idempotencyKey 呼叫 invoke_agent。',
             '使用 get_agent_run 追蹤到終態；QUEUED/RUNNING 不代表完成，AWAITING_REVIEW 代表等待 FDE。',
             '若需求是定期執行，先呼叫 list_agent_schedules，再以 request_agent_schedule 送出提案。',
             '排程提案在 FDE 核准前不生效，不得聲稱已經排程完成。',
+            '若使用者要刪除、移除、退休或封存員工，重新呼叫 list_available_agents，確認唯一員工並要求使用者確認完整名稱，再呼叫 request_agent_archive。這只會送出 FDE 待審封存提案；核准前員工仍可用。',
           ].join('\n'),
         },
       }],

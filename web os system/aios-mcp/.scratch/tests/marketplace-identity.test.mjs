@@ -70,7 +70,7 @@ test('plugin uses a product-specific MCP server id so stale generic aios connect
   const serverNames = Object.keys(mcp.mcpServers ?? {});
 
   assert.deepEqual(serverNames, ['aurion_aios']);
-  assert.equal(mcp.mcpServers.aurion_aios.url, 'https://aios-mcp.lazyoffice.app/mcp');
+  assert.equal(mcp.mcpServers.aurion_aios.url, 'https://aurion-aios-mcp.lazyoffice.app/mcp');
   assert.equal(mcp.mcpServers.aios, undefined);
 });
 

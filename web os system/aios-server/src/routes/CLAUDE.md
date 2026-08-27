@@ -11,13 +11,13 @@ Fastify 路由，全部掛在 `/api/*`。多數以 `requireAuth` preHandler 保�
 - `voice.ts` — 語音轉錄 **requireAuth**（草稿輔助；redact 後回傳）。
 - `recording.ts` — 錄製 start/status/stop/to-skill 皆 **requireAuth**（草稿）；host-global 錄製 session 由後端按 user + 開始時選定的 Agent 持有，to-skill 只接受 opaque sessionId、不接受前端指定本機產物路徑；永不 auto-confirm。
 - `conversations.ts` — 對話。**擁有者隔離**：list 只回 `userId=req.user.sub`；GET/POST messages 與 WS `chat.send` 皆驗證 `conversation.userId`。
-- `proposals.ts` — 提案。MEMBER 可建；FDE approve 支援 `action=confirm_skill`（見 `lib/changeproposal`）。
+- `proposals.ts` — 提案。MEMBER 可建；FDE approve 支援 `action=confirm_skill` 與 `action=archive_agent`（封存時同步停用 Workflow／Schedule，保留 Agent 資料；見 `lib/changeproposal`）。
 - `reflections.ts` — **FDE only** 反思中心：列出整理時段／遮罩後回饋／優化建議，支援手動排程、送交提案、忽略；不能直接套用變更。
 - `runs.ts` — 執行紀錄查詢。
 - `dashboard.ts` — 總覽統計。
 - `auth.ts` — 登入 / token。
 - `mcpoauth.ts` — 公開 Agent Builder Remote MCP 的 OAuth 2.1 邊界：discovery、DCR、Claude／ChatGPT hosted callback、登入／同意、authorization code + PKCE S256、RFC 8707 resource audience、refresh rotation、revoke。OAuth 回應依協議直接回 JSON／HTML，不包 `ok()`；scope 固定 `aios:agent-builder`，不可取得 FDE 生效能力。
-- `agentruntime.ts` — 公開 Remote MCP 的帳號隔離 Runtime：只列/讀/呼叫登入者自己的 ACTIVE Agent；Run 以 idempotency key 去重；高風險沿用 HITL。排程只能建立 `SCHEDULE` ChangeProposal，FDE 核准前不得生效。
+- `agentruntime.ts` — 公開 Remote MCP 的帳號隔離 Runtime：只列/讀/呼叫登入者自己的 ACTIVE Agent；Run 以 idempotency key 去重；高風險沿用 HITL。排程與封存只能建立 ChangeProposal，FDE 核准前不得生效；封存要求完整名稱確認且 foreign id 一律 404。
 - `health.ts` — 健康檢查。
 
 ## 注意

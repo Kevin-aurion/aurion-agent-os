@@ -35,7 +35,7 @@ for (const [name, source] of files) {
 }
 
 const mcpConfig = await readFile(path.join(destinationRoot, 'aios-remote-mcp.json'), 'utf8');
-if (!mcpConfig.includes('https://aios-mcp.lazyoffice.app/mcp') || mcpConfig.includes('127.0.0.1')) {
+if (!mcpConfig.includes('https://aurion-aios-mcp.lazyoffice.app/mcp') || mcpConfig.includes('127.0.0.1')) {
   throw new Error('Refusing to publish an Agent Builder MCP config that is not the hosted Remote MCP.');
 }
 

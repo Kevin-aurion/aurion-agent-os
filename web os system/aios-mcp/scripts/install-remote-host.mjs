@@ -37,7 +37,7 @@ const content = `<?xml version="1.0" encoding="UTF-8"?>
     <key>AIOS_MCP_TRANSPORT</key><string>http</string>
     <key>AIOS_MCP_HTTP_AUTH</key><string>oauth</string>
     <key>AIOS_MCP_HTTP_PORT</key><string>8701</string>
-    <key>AIOS_MCP_PUBLIC_URL</key><string>https://aios-mcp.lazyoffice.app/mcp</string>
+    <key>AIOS_MCP_PUBLIC_URL</key><string>https://aurion-aios-mcp.lazyoffice.app/mcp</string>
     <key>AIOS_MCP_PROFILE</key><string>builder</string>
     <key>AIOS_MCP_BASE_URL</key><string>http://127.0.0.1:8700</string>
   </dict>

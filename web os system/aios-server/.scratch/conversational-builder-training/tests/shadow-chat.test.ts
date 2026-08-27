@@ -7,14 +7,17 @@ process.env.AIOS_BUILDER_ADAPTIVE_MODEL = 'off';
 
 const { prisma } = await import('../../../src/lib/db.js');
 const { createExternalBuilderSession } = await import('../../../src/lib/externalagentbuilder.js');
+const { postBuilderMessage } = await import('../../../src/lib/agentbuilder.js');
 const { processBuilderEvolution } = await import('../../../src/lib/agentbuilderevolution.js');
-const { chatWithBuilderShadow } = await import('../../../src/lib/builderconversation.js');
+const { chatWithBuilderShadow, BUILDER_SHADOW_DISALLOWED_TOOLS } = await import('../../../src/lib/builderconversation.js');
 
 const userId = ulid();
 const foreignId = ulid();
 const sessionIds: string[] = [];
+const agentIds: string[] = [];
 
 try {
+  assert.equal(BUILDER_SHADOW_DISALLOWED_TOOLS.includes('Computer' as never), false);
   await prisma.user.createMany({
     data: [
       { id: userId, email: `${userId}@shadow.test`, displayName: 'Owner', passwordHash: 'unused', role: 'MEMBER' },
@@ -28,9 +31,19 @@ try {
     initialRequest: '建立一位報價助理，報價單必須有客戶名稱、有效期限與未稅總額。',
   });
   sessionIds.push(created.session.id);
+  assert.equal(created.session.status, 'ACTIVE');
+  assert.ok(created.session.builtAgentId);
+  agentIds.push(created.session.builtAgentId!);
+  const continued = await postBuilderMessage({
+    sessionId: created.session.id,
+    userId,
+    role: 'MEMBER',
+    message: '補充：所有金額都要保留幣別，缺資料時先詢問。',
+  });
+  assert.equal(continued.session.status, 'ACTIVE');
   const initial = await prisma.agentBuildIteration.findFirstOrThrow({
     where: { sessionId: created.session.id },
-    orderBy: { sequence: 'asc' },
+    orderBy: { sequence: 'desc' },
   });
   await processBuilderEvolution(initial.id);
 
@@ -73,6 +86,7 @@ try {
   console.log(JSON.stringify({ passed: true, sessionId: created.session.id }));
 } finally {
   await prisma.agentBuildSession.deleteMany({ where: { id: { in: sessionIds } } }).catch(() => {});
+  await prisma.agent.deleteMany({ where: { id: { in: agentIds } } }).catch(() => {});
   await prisma.user.deleteMany({ where: { id: { in: [userId, foreignId] } } }).catch(() => {});
   await prisma.$disconnect();
 }

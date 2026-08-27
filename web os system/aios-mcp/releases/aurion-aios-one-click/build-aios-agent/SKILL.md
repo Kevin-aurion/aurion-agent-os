@@ -7,13 +7,13 @@ description: Build, train, revise, continue, or test an Aurion AIOS employee thr
 
 Build the employee in the current conversation. Treat AIOS as the durable system of record and the FDE approval boundary.
 
-Use the hosted HTTPS Remote MCP at `https://aios-mcp.lazyoffice.app/mcp`. Never ask the customer to install or run an AIOS backend, database, tunnel, Node service, or local MCP server.
+Use the hosted HTTPS Remote MCP at `https://aurion-aios-mcp.lazyoffice.app/mcp`. Never ask the customer to install or run an AIOS backend, database, tunnel, Node service, or local MCP server.
 
 ## Enforce the governance boundary
 
 - Treat a successful MCP response as the only proof that AIOS received a turn, file, draft, test, or review request.
 - Keep synchronized content as an inert shadow draft. Never say the Agent or Skill is active unless `get_agent_build` returns `status: ACTIVE`.
-- Never bypass FDE review. Even an owner-authenticated connection must stop at `AWAITING_FDE`.
+- Do not bypass FDE for formal release, connected tools, schedules or side-effecting execution. A READY Shadow Agent may be tried immediately through isolated `chat_with_test_agent` without FDE approval.
 - Never claim a tool or account is connected merely because the user requested it. Record it as `NEEDS_FDE` until AIOS confirms otherwise.
 - Do not intentionally send passwords, API keys, OAuth tokens, full payment data, or unnecessary personal data. AIOS redacts again before persistence.
 - Require approval for external writes, messages, Computer Use, Shell, deletion, payments, and other irreversible actions.
@@ -102,7 +102,7 @@ When the user wants to try the employee:
 
 1. Call `get_agent_build` and make sure a latest READY Shadow draft exists.
 2. Ask for or infer one realistic End User work message. Upload attached source files first when needed.
-3. Call `chat_with_agent_build` with the exact work message.
+3. Call `chat_with_test_agent` with the exact work message and this build's session id. `chat_with_agent_build` is a compatibility alias for older clients.
 4. Present the returned Shadow Agent reply clearly, then ask for one concrete correction, missing rule or acceptance decision.
 5. Synchronize that feedback normally. At the end of the turn the Stop reflection will update only the Shadow Agent/Skill version and record a reviewable Diff.
 6. Repeat one scenario at a time. Prefer rerunning the failed scenario before introducing another one.

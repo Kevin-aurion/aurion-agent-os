@@ -278,7 +278,7 @@ export default function EmployeeDetailPage() {
 
   const { data: agent, isLoading } = useQuery({
     queryKey: ['agent', agentId],
-    queryFn: () => API.get<AgentDetail>(`/api/agents/${agentId}`),
+    queryFn: () => API.get<AgentDetail>(`/api/agents/${agentId}?scope=all`),
     enabled: !!agentId,
   });
 
@@ -1557,7 +1557,7 @@ function WorkflowsTab({ agent }: { agent: AgentDetail }) {
 
   const { data: workflows, isLoading } = useQuery({
     queryKey: ['agent-workflows', agent.id],
-    queryFn: () => API.get<WorkflowListItem[]>(`/api/agents/${agent.id}/workflows`),
+    queryFn: () => API.get<WorkflowListItem[]>(`/api/agents/${agent.id}/workflows?scope=all`),
   });
 
   /** Applies a GET /api/runs/:id snapshot into the live-timeline state, and

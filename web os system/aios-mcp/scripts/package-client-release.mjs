@@ -45,7 +45,7 @@ for (const skillName of skillNames) {
 }
 await chmod(path.join(staging, 'Install Aurion AIOS.command'), 0o755);
 
-const expectedUrl = 'https://aios-mcp.lazyoffice.app/mcp';
+const expectedUrl = 'https://aurion-aios-mcp.lazyoffice.app/mcp';
 const packagedMcp = await readFile(path.join(marketplace, 'plugins', 'aurion-aios-builder', '.mcp.json'), 'utf8');
 if (!packagedMcp.includes(expectedUrl) || packagedMcp.includes('127.0.0.1')) {
   throw new Error('Refusing to package a client that does not exclusively reference the hosted Remote MCP.');

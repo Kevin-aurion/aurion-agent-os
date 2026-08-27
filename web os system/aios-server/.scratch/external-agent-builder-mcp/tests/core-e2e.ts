@@ -25,7 +25,8 @@ assert.equal(user.role, 'MEMBER');
 let sessionId: string | null = null;
 let autoSessionId: string | null = null;
 try {
-  assert.equal(isExplicitAgentBuildPrompt('我想要一個財務管理 agent'), true);
+  assert.equal(isExplicitAgentBuildPrompt('幫我建立一個財務管理 agent'), true);
+  assert.equal(isExplicitAgentBuildPrompt('我想要一個財務管理 agent'), false);
   assert.equal(isExplicitAgentBuildPrompt('請解釋 agent 這個英文單字'), false);
   const unrelated = await prepareExternalBuilderPrompt({
     userId: user.id,

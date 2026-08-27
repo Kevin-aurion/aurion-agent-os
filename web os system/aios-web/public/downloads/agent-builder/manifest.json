@@ -1,45 +1,45 @@
 {
-  "generatedAt": "2026-08-12T04:08:03.045Z",
+  "generatedAt": "2026-08-23T16:24:30.850Z",
   "files": [
     {
       "name": "aurion-aios-builder-plugin.zip",
-      "bytes": 22588,
-      "sha256": "49e80cf432a9f6663b06b9e6eb40f177afe0ddaebf272f704f28ff507864fa3d"
+      "bytes": 23967,
+      "sha256": "f6590ff6ce92f00880a578f9a581d7b10815b62a5043afad49afcd5e28adbe87"
     },
     {
       "name": "build-aios-agent.skill.zip",
-      "bytes": 8482,
-      "sha256": "39827642f5db1735da95d96f85ca5c8944ff44b984149a72785d9b99336ef18e"
+      "bytes": 8550,
+      "sha256": "e4b9705a434aef73d2a9ad5c0bcb6cc689651547d0760faebefe97cf67fe35ef"
     },
     {
       "name": "use-aios-agent.skill.zip",
-      "bytes": 2721,
-      "sha256": "63d8129b79b7813c4882b70bcdd39a507dfc00b2de521ed131e80fe7ce209458"
+      "bytes": 3664,
+      "sha256": "011cb2dd95d846c3436c79cc3da707827ceda0493a216519053e474d993b69be"
     },
     {
       "name": "aurion-aios-one-click-install.zip",
-      "bytes": 40689,
-      "sha256": "b6156b89a877752856422d211307317ff84dbaed0db125d78f83a19065f853c4"
+      "bytes": 43093,
+      "sha256": "8d01d95f13d5e7eda4f46c89b87a2668036e2bcd12048c5268146f8dbbb364dd"
     },
     {
       "name": "SHA256SUMS.txt",
       "bytes": 381,
-      "sha256": "4f8a694cc51433f232ac00f3e907d10499612a562c4f85369ece86e720ad6850"
+      "sha256": "0a8375ddd70284accc4321fe78393761c23bb10170c4e3396f05f520141359a1"
     },
     {
       "name": "REMOTE-MCP-URL.txt",
-      "bytes": 99,
-      "sha256": "f0d7294ead5b242a3c0f4077f026e727e95df25fbeabf47553e8eb67f8c1e200"
+      "bytes": 106,
+      "sha256": "4aff71c4448e70dba9f08f2574d00723e4ca313cd0e9e500958450fdddb40bd1"
     },
     {
       "name": "aios-remote-mcp.json",
-      "bytes": 126,
-      "sha256": "38ef2867bc079fc9a76e1ba9d6e0bf0c471872e36589a6df788b88fdd40ae875"
+      "bytes": 133,
+      "sha256": "738c525ddaa240a43797593f544df62fba58626b11d31ef6ef5764499c751ae0"
     },
     {
       "name": "AIOS-Agent-Builder-Installation-Guide.zh-TW.md",
-      "bytes": 9770,
-      "sha256": "cbd1f010dfb4e6a23de19007bd23dae3e16c8275b1a0570de5679f51aa440b5d"
+      "bytes": 10071,
+      "sha256": "c24109104e6bf32d23243eff5cd3ee1f2d4ab494635a8090a3b2311717866ce9"
     }
   ]
 }

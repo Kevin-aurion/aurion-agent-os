@@ -24,7 +24,7 @@ Write-Host ""
 Write-Host "Aurion AIOS Agent Builder 已安裝完成。" -ForegroundColor Green
 Write-Host "Plugin Marketplace：https://github.com/$MarketplaceRepository（Private）"
 Write-Host "客戶端沒有安裝任何 AIOS 服務；Claude 只會連線到："
-Write-Host "https://aios-mcp.lazyoffice.app/mcp"
+Write-Host "https://aurion-aios-mcp.lazyoffice.app/mcp"
 Write-Host ""
 Write-Host "請重新啟動 Claude。第一次使用時，Claude 會要求登入並授權 AIOS。"
 Write-Host "完成對話後可在此查看建置記錄："

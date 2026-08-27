@@ -9,7 +9,7 @@ const pluginName = 'aurion-aios-builder';
 const marketplaceName = 'aurion-aios-plugin-marketplace';
 const marketplaceDisplayName = 'Aurion AIOS';
 const markerName = '.aurion-aios-marketplace';
-const expectedMcpUrl = 'https://aios-mcp.lazyoffice.app/mcp';
+const expectedMcpUrl = 'https://aurion-aios-mcp.lazyoffice.app/mcp';
 const marketplaceRepository = process.env.AIOS_MARKETPLACE_REPOSITORY?.trim()
   || 'Kevin-aurion/aurion-aios-plugin-marketplace';
 

@@ -1,9 +1,10 @@
 // External Agent Builder ingress for Claude, ChatGPT, Codex and Cursor.
 //
 // MCP clients can synchronize exact transcript turns, parsed source files and a
-// complete draft artifact. All writes are owner-scoped, deep-redacted and inert:
-// external clients can submit for FDE review, but can never approve, confirm or
-// activate an Agent/Skill/Workflow through these functions.
+// complete draft artifact. All writes are owner-scoped and deep-redacted. A new
+// conversation gets an immediately usable least-privilege Agent container, but
+// external clients can never approve Skills, enable tools, or activate elevated
+// Workflow/MCP capabilities through these functions.
 import path from 'node:path';
 import { ulid } from 'ulid';
 import { Prisma, PrismaClient, type AgentBuildIteration, type AgentBuildSession, type AgentBuildSessionStatus, type UserRole } from '@prisma/client';
@@ -38,6 +39,7 @@ import {
   normalizeTestInputRequirements,
   type BuilderTestInputRequirement,
 } from './buildertestinputs.js';
+import { createBuilderWorkingAgent } from './builderworkingagent.js';
 
 export type ExternalBuilderSource = 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CHATGPT' | 'CURSOR' | 'OTHER';
 
@@ -901,16 +903,24 @@ export async function createExternalBuilderSession(opts: {
         agentId: target.id,
       }, tx);
     }
+    const workingAgent = target ?? await createBuilderWorkingAgent(tx, {
+      userId: opts.userId,
+      name: brief.requestedAgentName || conversationTitle,
+      objective: brief.objective,
+      process: brief.process,
+      tags: brief.tags,
+    });
     const row = await tx.agentBuildSession.create({
       data: {
         id,
         userId: opts.userId,
-        status: 'DISCOVERY',
+        status: 'ACTIVE',
         transcript: transcript as Prisma.InputJsonValue,
         brief: brief as Prisma.InputJsonValue,
         progress: buildProgress(inference.answered, null) as Prisma.InputJsonValue,
-        targetAgentId: target?.id ?? null,
-        agentId: target?.id ?? null,
+        targetAgentId: workingAgent.id,
+        agentId: workingAgent.id,
+        builtAgentId: target ? null : workingAgent.id,
         strategy: target ? 'reuse' : 'create',
         externalSource: opts.source,
         externalConversationId: conversationId,
@@ -927,7 +937,17 @@ export async function createExternalBuilderSession(opts: {
   await audit(opts.userId, 'agent_builder.external_session_created', 'AgentBuildSession', id, {
     source: opts.source,
     externalConversationId: conversationId,
+    agentId: row.agentId,
   });
+  if (row.builtAgentId) {
+    await audit(opts.userId, 'agent_builder.working_agent_created', 'Agent', row.builtAgentId, {
+      sessionId: id,
+      source: opts.source,
+      status: 'ACTIVE',
+      leastPrivilege: true,
+    });
+    hub.publish('agent.status', { id: row.builtAgentId, status: 'ACTIVE', event: 'created' });
+  }
   // Local evolution ledger: first message seeds a background iteration so
   // reflection/training history stays continuous after remote idempotency merge.
   const iteration = await createBuilderEvolutionIteration({

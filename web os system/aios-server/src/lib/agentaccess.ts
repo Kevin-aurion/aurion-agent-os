@@ -3,7 +3,7 @@ import type { AccessClaims } from './auth.js';
 import { prisma } from './db.js';
 import { errors } from './http.js';
 
-/** FDE accounts may administer every customer's Agent; MEMBER access is owner-only. */
+/** Role helper for explicit admin-only surfaces. Ordinary Agent routes remain owner-scoped. */
 export function isFdeClaims(claims: Pick<AccessClaims, 'role'>): boolean {
   return claims.role === 'OWNER' || claims.role === 'TRAINER';
 }
@@ -16,12 +16,10 @@ export function isFdeClaims(claims: Pick<AccessClaims, 'role'>): boolean {
 export function visibleAgentWhere(
   claims: Pick<AccessClaims, 'sub' | 'role'>,
 ): Prisma.AgentWhereInput {
-  return isFdeClaims(claims)
-    ? {}
-    : {
-        createdBy: claims.sub,
-        systemManaged: false,
-      };
+  return {
+    createdBy: claims.sub,
+    systemManaged: false,
+  };
 }
 
 export async function requireVisibleAgent(

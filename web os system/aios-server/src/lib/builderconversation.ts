@@ -25,6 +25,16 @@ type TranscriptEntry = {
 
 export type ShadowExecute = (input: { prompt: string; signal?: AbortSignal }) => Promise<string>;
 
+export const BUILDER_SHADOW_DISALLOWED_TOOLS = [
+  'Bash',
+  'Write',
+  'Edit',
+  'NotebookEdit',
+  'WebSearch',
+  'WebFetch',
+  'Task',
+] as const;
+
 function transcript(value: unknown): TranscriptEntry[] {
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is TranscriptEntry => {
@@ -64,16 +74,7 @@ async function defaultExecute(input: { prompt: string; signal?: AbortSignal }): 
     timeoutMs: 120_000,
     signal: input.signal,
     safeMode: true,
-    disallowedTools: [
-      'Bash',
-      'Write',
-      'Edit',
-      'NotebookEdit',
-      'WebSearch',
-      'WebFetch',
-      'Task',
-      'Computer',
-    ],
+    disallowedTools: [...BUILDER_SHADOW_DISALLOWED_TOOLS],
   });
   return result.stdout;
 }

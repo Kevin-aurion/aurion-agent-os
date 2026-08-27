@@ -1,6 +1,6 @@
 // Runtime tools exposed by the public builder profile. These can invoke only
-// the signed-in account's ACTIVE Agents. Scheduling is proposal-only and does
-// not bypass FDE approval.
+// the signed-in account's ACTIVE Agents. Scheduling and archival are
+// proposal-only and do not bypass FDE approval.
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { HttpClient } from '../http/client.js';
@@ -9,6 +9,7 @@ import type {
   AgentRuntimeRun,
   AgentRuntimeSummary,
   AgentRuntimeWorkflow,
+  AgentArchiveProposalResponse,
   ScheduleProposalResponse,
 } from '../types.js';
 import { runTool } from './util.js';
@@ -28,6 +29,12 @@ const INVOKE = {
 const PROPOSAL_ONLY = {
   readOnlyHint: false,
   destructiveHint: false,
+  openWorldHint: false,
+} as const;
+
+const DESTRUCTIVE_PROPOSAL = {
+  readOnlyHint: false,
+  destructiveHint: true,
   openWorldHint: false,
 } as const;
 
@@ -138,6 +145,32 @@ export function registerAgentRuntimeTools(server: McpServer, client: HttpClient)
         client.post<ScheduleProposalResponse>(
           `/api/agent-runtime/agents/${encodeURIComponent(agentId)}/schedule-proposals`,
           { body: { workflowId, action, cron, timezone, input, requestKey } },
+        ),
+      ),
+  );
+
+  server.registerTool(
+    'request_agent_archive',
+    {
+      title: 'Request AIOS employee archival',
+      annotations: DESTRUCTIVE_PROPOSAL,
+      description:
+        'Create a PENDING FDE proposal to archive one Agent owned by the signed-in account. Before calling, use list_available_agents, show the exact Agent name, and obtain explicit user confirmation. This tool never archives immediately. After FDE approval the Agent, its workflows and schedules are disabled and it can no longer be listed or invoked.',
+      inputSchema: {
+        agentId: z.string().min(1),
+        confirmAgentName: z.string().min(1).max(240).describe(
+          'The exact Agent name returned by list_available_agents. The request is rejected if it does not match.',
+        ),
+        requestKey: z.string().min(8).max(160).describe(
+          'Stable unique key for this archive request. Reuse it on retries to avoid duplicate proposals.',
+        ),
+      },
+    },
+    async ({ agentId, confirmAgentName, requestKey }) =>
+      runTool(() =>
+        client.post<AgentArchiveProposalResponse>(
+          `/api/agent-runtime/agents/${encodeURIComponent(agentId)}/archive-proposals`,
+          { body: { confirmAgentName, requestKey } },
         ),
       ),
   );

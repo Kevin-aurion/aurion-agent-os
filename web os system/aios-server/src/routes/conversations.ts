@@ -11,6 +11,9 @@ import { ok, errors, sendError } from '../lib/http.js';
 import { prisma } from '../lib/db.js';
 import { hub } from '../ws/hub.js';
 import { audit } from '../lib/audit.js';
+import { requireVisibleAgent } from '../lib/agentaccess.js';
+import { redactSecrets } from '../memory/redactor.js';
+import { registerActiveRun, releaseActiveRun } from '../lib/runcontrol.js';
 
 interface SendMessageResult {
   messageId: string;
@@ -40,11 +43,41 @@ async function persistAndPublishReply(
     return;
   }
 
-  const outcome = outcomeOrError as { runId: string; results: Array<{ output?: string; ok?: boolean }> };
+  const outcome = outcomeOrError as {
+    runId: string;
+    status?: string;
+    results: Array<{ output?: string; ok?: boolean; reason?: string }>;
+  };
+  if (outcome.status === 'CANCELLED') {
+    const agentMessage = await prisma.message.create({
+      data: {
+        id: ulid(),
+        conversationId,
+        role: 'SYSTEM',
+        content: '這次執行已由使用者停止。',
+        runId: outcome.runId,
+      },
+    });
+    hub.publishToUser(userId, 'chat.message', {
+      conversationId,
+      messageId: agentMessage.id,
+      role: 'SYSTEM',
+      content: agentMessage.content,
+      runId: outcome.runId,
+      createdAt: agentMessage.createdAt,
+    });
+    return;
+  }
   // The agent's answer is the text output of the last step (not the RunOutcome
   // wrapper). Prefer the last successful step's output, else the last one.
   const lastOk = [...(outcome.results ?? [])].reverse().find((r) => r.ok && typeof r.output === 'string');
-  const replyText = (lastOk?.output ?? outcome.results?.at(-1)?.output ?? '(no output)').trim();
+  const lastResult = outcome.results?.at(-1);
+  const rawReply = lastOk?.output ?? lastResult?.output ?? '';
+  const replyText = rawReply.trim()
+    ? rawReply.trim()
+    : outcome.status === 'FAILED'
+      ? `執行未完成：${redactSecrets(lastResult?.reason ?? '執行引擎未產生結果')}`
+      : '(no output)';
 
   const agentMessage = await prisma.message.create({
     data: { id: ulid(), conversationId, role: 'AGENT', content: replyText, runId: outcome.runId },
@@ -87,8 +120,11 @@ async function sendMessage(
     .reverse()
     .map((m) => ({ role: m.role, content: m.content }));
 
+  // Generate and persist the run id on the user turn. This makes run state
+  // recoverable after refresh instead of relying on ephemeral browser state.
+  const runId = ulid();
   const userMessage = await prisma.message.create({
-    data: { id: ulid(), conversationId, role: 'USER', content },
+    data: { id: ulid(), conversationId, role: 'USER', content, runId },
   });
 
   hub.publishToUser(userId, 'chat.message', {
@@ -102,7 +138,7 @@ async function sendMessage(
   // Pre-generate the run id so the client can subscribe/poll immediately while
   // the run executes asynchronously. Guard against the engine import/execution
   // failing — never blocks the response, never throws out of this function.
-  const runId = ulid();
+  const signal = registerActiveRun(runId);
   (async () => {
     // If this agent has a keyword-triggered workflow matching the message,
     // let that workflow run drive the reply instead of the ad-hoc chat step
@@ -113,7 +149,13 @@ async function sendMessage(
     const firstMatch = matches[0];
     if (firstMatch) {
       const { runWorkflow } = await import('../workflow/runner.js');
-      return runWorkflow(firstMatch.id, { message: content, conversationId }, `chat:${conversationId}`, runId);
+      return runWorkflow(
+        firstMatch.id,
+        { message: content, conversationId },
+        `chat:${conversationId}`,
+        runId,
+        signal,
+      );
     }
 
     // Cloud file targets are synced into the agent workspace by the engine
@@ -125,10 +167,12 @@ async function sendMessage(
       agentId: conversation.agentId,
       input: { message: content, conversationId, history },
       triggeredBy: `chat:${conversationId}`,
+      signal,
     });
   })()
     .then((outcome) => persistAndPublishReply(conversationId, userId, outcome, false))
-    .catch((e) => persistAndPublishReply(conversationId, userId, e, true));
+    .catch((e) => persistAndPublishReply(conversationId, userId, e, true))
+    .finally(() => releaseActiveRun(runId));
 
   return { messageId: userMessage.id, runId };
 }
@@ -139,6 +183,7 @@ export async function conversationRoutes(app: FastifyInstance) {
       const { agentId } = req.params as { agentId: string };
       const userId = req.user?.sub;
       if (!userId) throw errors.unauthorized();
+      await requireVisibleAgent(agentId, req.user!);
 
       // Only the caller's own threads for this agent.
       const conversations = await prisma.conversation.findMany({
@@ -155,12 +200,9 @@ export async function conversationRoutes(app: FastifyInstance) {
     try {
       const { agentId } = req.params as { agentId: string };
       const body = (req.body ?? {}) as { title?: string };
-
-      const agent = await prisma.agent.findUnique({ where: { id: agentId } });
-      if (!agent) throw errors.notFound('Agent not found');
-
       const userId = req.user?.sub;
       if (!userId) throw errors.unauthorized();
+      await requireVisibleAgent(agentId, req.user!);
 
       const conversation = await prisma.conversation.create({
         data: { id: ulid(), agentId, userId, title: body.title },

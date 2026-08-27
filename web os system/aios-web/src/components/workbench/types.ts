@@ -67,6 +67,14 @@ export interface RunStep {
   verdict?: string;
 }
 
+export interface RunListItem {
+  id: string;
+  agentId: string;
+  status: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+}
+
 /** Terminal run.step phases (stop spinner). */
 export const TERMINAL_RUN_PHASES = new Set([
   'approved',
@@ -424,6 +432,7 @@ export type BuilderSession = {
   brief?: BuilderBrief | null;
   plan: BuilderPlan | null;
   strategy: string | null;
+  agentId: string | null;
   targetAgentId: string | null;
   builtAgentId: string | null;
   draftSkillIds: string[];
@@ -465,7 +474,7 @@ export const BUILDER_FIELD_LABELS: Record<string, string> = {
 };
 
 export const BUILDER_STATUS_LABEL: Record<string, string> = {
-  DISCOVERY: '需求訪談中',
+  DISCOVERY: '持續學習中',
   PLAN_READY: '計畫已就緒',
   AWAITING_FDE: '等待訓練師核准',
   BUILDING: '建立草稿中',

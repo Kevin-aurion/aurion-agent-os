@@ -28,9 +28,11 @@ async function main(): Promise<void> {
           'Interview adaptively with one high-value question at a time; do not use a fixed questionnaire.',
           'For ChatGPT or other clients without lifecycle hooks, start_agent_build immediately, then call upsert_agent_build_snapshot before each assistant reply that changes the draft.',
           'All synchronized content is an inert shadow draft. Never claim an Agent or Skill is active unless get_agent_build returns ACTIVE.',
-          'Never bypass FDE review, Skill confirmation, real testing or final activation gates.',
+          'READY Shadow Agents may be tried immediately without FDE approval: call list_testable_agents, then chat_with_test_agent. This safe preview has no tools, network, shell, Computer Use, schedules or external writes.',
+          'Never bypass FDE review, Skill confirmation, verified release or final activation gates for production use.',
           'For using an existing employee, call list_available_agents, then get_agent_capabilities, invoke_agent with a stable idempotency key, and poll get_agent_run.',
           'request_agent_schedule creates only a pending proposal; never claim the schedule is active until an FDE approves it and list_agent_schedules shows it enabled.',
+          'For delete, remove, retire or archive requests, list the account-owned Agents, confirm the exact name, then use request_agent_archive. It creates only a pending proposal; the Agent remains callable until FDE approval.',
         ].join(' '),
       },
     );

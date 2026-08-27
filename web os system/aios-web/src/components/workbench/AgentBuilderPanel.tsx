@@ -1452,31 +1452,26 @@ export function AgentBuilderRail({ session }: { session: BuilderSession | null }
   const answered = new Set(progress?.answeredKeys ?? []);
   const current = progress?.currentKey;
   const latestIteration = session?.latestIteration ?? null;
+  const hasWorkingAgent = Boolean(session?.agentId || session?.builtAgentId || session?.targetAgentId);
 
   const steps: Array<{ key: string; label: string; done: boolean; active: boolean }> = [
     {
-      key: 'discovery',
-      label: '需求訪談',
-      done: !!status && status !== 'DISCOVERY',
-      active: !status || status === 'DISCOVERY',
+      key: 'created',
+      label: 'Agent 已建立',
+      done: hasWorkingAgent,
+      active: !hasWorkingAgent,
     },
     {
-      key: 'plan',
-      label: '計畫與授權',
-      done: !!status && !['DISCOVERY', 'PLAN_READY', 'AWAITING_FDE', 'BUILDING'].includes(status),
-      active: status === 'PLAN_READY' || status === 'AWAITING_FDE' || status === 'BUILDING',
+      key: 'learning',
+      label: '持續學習與改善',
+      done: status === 'PASSED',
+      active: status === 'ACTIVE' || status === 'DISCOVERY' || status === 'PLAN_READY' || status === 'BUILDING',
     },
     {
       key: 'test',
-      label: '測試資料與試跑',
-      done: status === 'PASSED' || status === 'ACTIVE',
+      label: '測試與改善',
+      done: status === 'PASSED',
       active: status === 'AWAITING_TEST_DATA' || status === 'TESTING' || status === 'FAILED',
-    },
-    {
-      key: 'activate',
-      label: '確認並啟用',
-      done: status === 'ACTIVE',
-      active: status === 'PASSED',
     },
   ];
 

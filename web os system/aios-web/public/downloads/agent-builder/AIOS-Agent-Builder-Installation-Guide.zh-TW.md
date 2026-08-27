@@ -9,7 +9,7 @@
 若使用 ChatGPT 網頁的個人 Developer mode：
 
 1. 進入 Settings → Security and login，開啟 Developer mode。
-2. 在 ChatGPT Plugins 新增 Remote MCP：`https://aios-mcp.lazyoffice.app/mcp`。
+2. 在 ChatGPT Plugins 新增 Remote MCP：`https://aurion-aios-mcp.lazyoffice.app/mcp`。
 3. 瀏覽器開啟 AIOS 授權頁後，用自己的 AIOS 帳號登入。
 4. 啟用 `build-aios-agent` Skill，然後直接描述要建立的 AI 員工。
 
@@ -27,7 +27,7 @@ ChatGPT 網頁沒有 Claude Code 的 Stop Hook，因此 Skill 會在每一個會
 Plugin 固定連線至：
 
 ```text
-https://aios-mcp.lazyoffice.app/mcp
+https://aurion-aios-mcp.lazyoffice.app/mcp
 ```
 
 第一次使用時，客戶端會開瀏覽器顯示 AIOS OAuth 頁。使用者必須用自己的 AIOS 帳號登入並授權；安裝包內沒有共用帳號、密碼或靜態 Token。對話完成後，建置記錄會出現在 `https://aurion-aios.lazyoffice.app/agent-builds`。
@@ -50,7 +50,7 @@ npm run install:local-clients
 這會：
 
 1. 建立或輪替 `claude-builder@local.aios` 的專用 `MEMBER` 帳號。
-2. 把隨機密碼只寫入 gitignore 的 `.env`，權限為 `0600`，不輸出到終端；並設定 `AIOS_MCP_PROFILE=builder`，只暴露十九個建置／Hook／Runtime 工具（13 builder + 6 runtime）。
+2. 把隨機密碼只寫入 gitignore 的 `.env`，權限為 `0600`，不輸出到終端；並設定 `AIOS_MCP_PROFILE=builder`，只暴露 22 個建置／Hook／Runtime 工具（15 builder + 7 runtime）。
 3. 在既有 Claude Desktop、Claude Code 與 Cursor JSON 設定中加入 `mcpServers.aios`，寫入前各保留一份 `.aios-backup`。
 4. 把 Skill 安裝到 `~/.claude/skills/build-aios-agent` 與 `~/.claude/skills/use-aios-agent`（Claude／Claude Code 本機使用）。
 5. 中央主機的本機 stdio 開發安裝與客戶端 GitHub Plugin 是不同路徑；客戶端 Plugin 使用內建的 `SessionStart`、`UserPromptSubmit`、`PostToolUse`、`Stop` command hooks，不會修改全域 hooks 或保存 OAuth credential。
@@ -76,8 +76,8 @@ npm run install:local-clients
 3. Claude Code 由 Hook 自動保存每輪對話；ChatGPT／Codex／Claude Chat／Cursor 由 Skill 呼叫 MCP 保存。
 4. AIOS 直接依對話在背景建立新版本，不會卡住 Claude 回答，也不覆蓋歷史。
 5. 收到檔案時傳遞實際文字或 bytes，不傳主機路徑。
-6. 使用者明確確認後才送 FDE 審核。
-7. FDE 初審後，要求測試資料、實跑，再由 FDE 最終啟用。
+6. READY 測試員工可直接用 `list_testable_agents` + `chat_with_test_agent` 試聊，不需 FDE；此模式沒有工具、網路、電腦控制、排程或外部寫入。
+7. 使用者明確確認後才送 FDE 正式審核；FDE 初審後要求驗證資料、實跑，再由 FDE 最終啟用正式版本。
 
 登入 `https://aurion-aios.lazyoffice.app/agent-builds` 可在獨立入口看到外部對話、每次迭代、Agent／Skill、記憶、流程與測試；**所有角色（含 FDE）都只看該登入帳號自己的建置**。FDE 跨帳號審核走管理頁／admin evolution-queue。
 
@@ -87,7 +87,7 @@ npm run install:local-clients
 
 - 建置工具寫入的內容全部是 shadow draft；外部客戶端沒有核准、確認 Skill 或啟用 Agent 的工具。
 - Remote MCP OAuth token 只能呼叫 Agent Builder 與帳號隔離的 Agent Runtime API；它不能開一般 WebSocket、整合授權或其他 AIOS API，且一律以 MEMBER 權限執行，不繼承 OWNER／TRAINER 的生效權限。
-- Runtime 只能看到登入者自己的 ACTIVE Agent；執行沿用限制、預算、跨模型驗證與高風險核准。排程只會建立待審提案，FDE 核准前不生效。
+- 測試模式只能看到登入者自己的 READY Shadow Agent，可免 FDE 安全試聊；Production Runtime 只能看到登入者自己的 ACTIVE Agent，執行沿用限制、預算、跨模型驗證與高風險核准。排程只會建立待審提案，FDE 核准前不生效。
 - 使用者或任何外部模型宣稱工具已授權時，AIOS 仍會把它降為 `NEEDS_FDE`，由本機真實狀態驗證。
 - 寄信、雲端寫入、電腦操作、Shell、付款、刪除等不可逆動作一定需要人工核准。
 - 對話、檔案與 Artifact 在落地前都會再經 secrets／個資遮罩；客戶端仍應先避免傳送不必要的秘密。

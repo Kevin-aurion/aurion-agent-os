@@ -62,16 +62,28 @@ const fileTargetsSchema = z.object({
   ),
 });
 
+const listQuerySchema = z.object({
+  scope: z.enum(['mine', 'all']).default('mine'),
+});
+
 export async function agentRoutes(app: FastifyInstance) {
   // List non-deleted agents with counts.
   app.get('/api/agents', { preHandler: requireAuth }, async (req, reply) => {
     try {
+      const query = listQuerySchema.parse(req.query);
+      if (
+        query.scope === 'all' &&
+        (req.user!.scope || !['OWNER', 'TRAINER'].includes(req.user!.role))
+      ) {
+        throw errors.forbidden('Only an unscoped FDE session may list all Agents');
+      }
       const agents = await prisma.agent.findMany({
         where: {
           deletedAt: null,
           // Infrastructure agents are operated only by their dedicated admin
           // surfaces and must never appear as selectable workbench employees.
           systemManaged: false,
+          ...(query.scope === 'mine' ? { createdBy: req.user!.sub } : {}),
         },
         orderBy: { createdAt: 'desc' },
         include: {
@@ -148,11 +160,19 @@ export async function agentRoutes(app: FastifyInstance) {
   app.get('/api/agents/:id', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { id } = req.params as { id: string };
+      const query = listQuerySchema.parse(req.query);
+      if (
+        query.scope === 'all' &&
+        (req.user!.scope || !['OWNER', 'TRAINER'].includes(req.user!.role))
+      ) {
+        throw errors.forbidden('Only an unscoped FDE session may read Agents across accounts');
+      }
       const agent = await prisma.agent.findFirst({
         where: {
           id,
           deletedAt: null,
-          ...(req.user!.role === 'MEMBER' ? { systemManaged: false } : {}),
+          systemManaged: false,
+          ...(query.scope === 'mine' ? { createdBy: req.user!.sub } : {}),
         },
         include: {
           skills: { include: { skill: true } },

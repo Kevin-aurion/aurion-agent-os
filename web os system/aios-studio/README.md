@@ -5,7 +5,7 @@ Agent, model, Tool/MCP, Knowledge, Skill and Deployment workspaces while reusing
 the existing governed AIOS API.
 
 - Local: `http://127.0.0.1:3300`
-- Public: `https://aios-studio.lazyoffice.app`
+- Public: `https://aurion-aios-studio.aurion-group.com`
 - Backend: same-origin rewrite to `http://127.0.0.1:8700`
 - Rollback: stop `app.aurion.aios-studio`; the existing AIOS web client is
   independent and remains available.

@@ -4,7 +4,7 @@ Aurion AIOS Agent Builder／Runtime 一鍵安裝
 這個安裝包不會在客戶電腦安裝 AIOS server、資料庫、Tunnel 或本機 MCP 服務。
 它只會安裝 Claude Plugin，並連線至 Aurion 的公開 OAuth Remote MCP：
 
-https://aios-mcp.lazyoffice.app/mcp
+https://aurion-aios-mcp.lazyoffice.app/mcp
 
 macOS：雙擊「Install Aurion AIOS.command」
 Windows：右鍵「Install-Aurion-AIOS.ps1」，選擇使用 PowerShell 執行

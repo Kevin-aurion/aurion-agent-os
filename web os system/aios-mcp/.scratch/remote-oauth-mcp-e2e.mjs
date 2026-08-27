@@ -2,8 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-const MCP_URL = process.env.TEST_MCP_URL || 'https://aios-mcp.lazyoffice.app/mcp';
-const OAUTH_ORIGIN = process.env.TEST_OAUTH_ORIGIN || 'https://aios-mcp.lazyoffice.app';
+const MCP_URL = process.env.TEST_MCP_URL || 'https://aurion-aios-mcp.lazyoffice.app/mcp';
+const OAUTH_ORIGIN = process.env.TEST_OAUTH_ORIGIN || 'https://aurion-aios-mcp.lazyoffice.app';
 const email = process.env.AIOS_MCP_EMAIL;
 const password = process.env.AIOS_MCP_PASSWORD;
 if (!email || !password) throw new Error('AIOS_MCP_EMAIL/AIOS_MCP_PASSWORD are required');

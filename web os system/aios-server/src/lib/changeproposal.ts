@@ -10,6 +10,7 @@ import { parseIdentityCard } from './identitycard.js';
 import { confirmAwaitingSkill } from './skillgate.js';
 import { redactSecrets } from '../memory/redactor.js';
 import { applyApprovedScheduleProposal } from './scheduleproposal.js';
+import { hub } from '../ws/hub.js';
 
 export type CreateProposalArgs = {
   agentId: string;
@@ -338,8 +339,92 @@ export async function approveProposal(
       throw errors.badRequest('AGENT proposal targetId must match agentId');
     }
     const change = parseSkillChange(existing.proposedChange);
+    if (change.action === 'archive_agent') {
+      const result = await prisma.$transaction(async (tx) => {
+        const claimed = await tx.changeProposal.updateMany({
+          where: { id, status: 'PENDING' },
+          data: {
+            status: 'APPROVED',
+            decidedBy,
+            decidedAt: new Date(),
+            resultingVersionId: null,
+          },
+        });
+        if (claimed.count !== 1) throw errors.conflict('Proposal already decided');
+
+        const agent = await tx.agent.findFirst({
+          where: { id: existing.agentId, deletedAt: null, systemManaged: false },
+          select: { id: true, status: true },
+        });
+        if (!agent) throw errors.notFound('Archivable Agent not found');
+        if (agent.status === 'ARCHIVED') throw errors.conflict('Agent is already archived');
+
+        const workflows = await tx.workflow.findMany({
+          where: { agentId: agent.id, deletedAt: null },
+          select: { id: true },
+        });
+        const workflowIds = workflows.map((workflow) => workflow.id);
+        const enabledSchedules = workflowIds.length
+          ? await tx.schedule.findMany({
+              where: { workflowId: { in: workflowIds }, enabled: true },
+              select: { id: true },
+            })
+          : [];
+        const disabledSchedules = enabledSchedules.length
+          ? await tx.schedule.updateMany({
+              where: { id: { in: enabledSchedules.map((schedule) => schedule.id) } },
+              data: { enabled: false, nextFireAt: null },
+            })
+          : { count: 0 };
+        const disabledWorkflows = await tx.workflow.updateMany({
+          where: { agentId: agent.id, deletedAt: null, enabled: true },
+          data: { enabled: false },
+        });
+        await tx.agent.update({
+          where: { id: agent.id },
+          data: { status: 'ARCHIVED' },
+        });
+        const proposal = await tx.changeProposal.findUniqueOrThrow({ where: { id } });
+        return {
+          proposal,
+          disabledScheduleIds: enabledSchedules.map((schedule) => schedule.id),
+          disabledWorkflowCount: disabledWorkflows.count,
+          disabledScheduleCount: disabledSchedules.count,
+        };
+      });
+
+      // BullMQ is an attached delivery mechanism. The DB change above is the
+      // authority; removing existing scheduler jobs is best-effort because the
+      // disabled Workflow remains a second fail-closed execution gate.
+      const scheduler = await import('../scheduler/index.js').catch(() => null);
+      for (const scheduleId of result.disabledScheduleIds) {
+        await scheduler?.removeSchedule?.(scheduleId).catch(() => {});
+      }
+
+      await audit(decidedBy, 'agent.archived', 'Agent', existing.agentId, {
+        proposalId: id,
+        disabledWorkflowCount: result.disabledWorkflowCount,
+        disabledScheduleCount: result.disabledScheduleCount,
+      });
+      await audit(decidedBy, 'proposal.approved', 'ChangeProposal', id, {
+        agentId: existing.agentId,
+        targetType: existing.targetType,
+        targetId: existing.targetId,
+        resultingVersionId: null,
+        source: existing.source,
+        action: 'archive_agent',
+      });
+      hub.publish('agent.status', {
+        id: existing.agentId,
+        status: 'ARCHIVED',
+        event: 'archived',
+      });
+      return { proposal: result.proposal };
+    }
     if (change.action !== 'append_role_guidance') {
-      throw errors.badRequest('AGENT proposal requires proposedChange.action=append_role_guidance');
+      throw errors.badRequest(
+        'AGENT proposal requires proposedChange.action=append_role_guidance or archive_agent',
+      );
     }
     const guidance = approvedGuidance(change.guidance);
     const result = await prisma.$transaction(async (tx) => {

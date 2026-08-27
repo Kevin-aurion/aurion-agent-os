@@ -32,6 +32,7 @@ export async function runWorkflow(
   input: Record<string, unknown>,
   triggeredBy: string,
   runId?: string,
+  signal?: AbortSignal,
 ): Promise<RunOutcome> {
   const workflow = await prisma.workflow.findUnique({
     where: { id: workflowId },
@@ -90,6 +91,7 @@ export async function runWorkflow(
       workflowId: workflow.id,
       input,
       triggeredBy,
+      signal,
     });
   }
 

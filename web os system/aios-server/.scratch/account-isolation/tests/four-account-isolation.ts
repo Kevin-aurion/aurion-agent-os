@@ -129,8 +129,8 @@ async function main() {
       assert(me.data.role === 'MEMBER', `plugin privilege was not downgraded for ${identity.email}`);
     }
 
-    // Create four non-effective external build records through the same API
-    // boundary used by the Claude/GPT plugin.
+    // Create four least-privilege working Agents through the same API boundary
+    // used by the Claude/GPT plugin.
     for (const identity of identities) {
       const created = await request('/api/agent-builder/external/sessions', {
         method: 'POST',
@@ -145,6 +145,9 @@ async function main() {
       const sessionId = created?.data?.session?.id;
       assert(sessionId, `builder session missing for ${identity.email}`);
       builderSessionIds.push(sessionId);
+      const workingAgentId = created?.data?.session?.builtAgentId;
+      assert(workingAgentId, `working Agent missing for ${identity.email}`);
+      agentIds.push(workingAgentId);
     }
 
     for (let i = 0; i < identities.length; i += 1) {

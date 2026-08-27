@@ -10,6 +10,10 @@ import { requireAuth } from '../lib/guard.js';
 import { audit } from '../lib/audit.js';
 import { errors, ok, sendError } from '../lib/http.js';
 import { createScheduleProposal } from '../lib/scheduleproposal.js';
+import {
+  AgentArchiveProposalSchema,
+  createAgentArchiveProposal,
+} from '../lib/agentarchive.js';
 import { runWorkflow } from '../workflow/runner.js';
 import { runAgent } from '../engine/index.js';
 
@@ -330,6 +334,32 @@ export async function agentRuntimeRoutes(app: FastifyInstance) {
           status: result.proposal.status,
           deduplicated: result.deduplicated,
           note: 'The schedule is not active until an FDE approves this proposal.',
+        }),
+      );
+    } catch (error) {
+      return sendError(reply, error);
+    }
+  });
+
+  app.post('/api/agent-runtime/agents/:id/archive-proposals', { preHandler: requireAuth }, async (req, reply) => {
+    try {
+      const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
+      const body = AgentArchiveProposalSchema.parse(req.body);
+      const result = await createAgentArchiveProposal({
+        agentId: id,
+        proposedBy: req.user!.sub,
+        input: body,
+      });
+      await audit(req.user!.sub, 'agent.archive.proposal.created', 'ChangeProposal', result.proposal.id, {
+        agentId: id,
+        deduplicated: result.deduplicated,
+      });
+      return reply.code(result.deduplicated ? 200 : 202).send(
+        ok({
+          proposalId: result.proposal.id,
+          status: result.proposal.status,
+          deduplicated: result.deduplicated,
+          note: 'The Agent remains callable until an FDE approves this archive proposal.',
         }),
       );
     } catch (error) {

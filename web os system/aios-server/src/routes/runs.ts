@@ -6,6 +6,7 @@ import { prisma } from '../lib/db.js';
 import { hub } from '../ws/hub.js';
 import { audit } from '../lib/audit.js';
 import { isFdeClaims, requireVisibleRun, visibleAgentWhere } from '../lib/agentaccess.js';
+import { cancelActiveRun } from '../lib/runcontrol.js';
 
 export async function runRoutes(app: FastifyInstance) {
   app.get('/api/runs', { preHandler: requireAuth }, async (req, reply) => {
@@ -61,15 +62,22 @@ export async function runRoutes(app: FastifyInstance) {
         return reply.send(ok({ id: run.id, status: run.status }));
       }
 
+      // Stop the real native CLI process first; the DB update below provides
+      // immediate durable/UI state even while the process is unwinding.
+      const processStopRequested = cancelActiveRun(id);
       const updated = await prisma.run.update({
         where: { id },
         data: { status: 'CANCELLED', finishedAt: new Date() },
       });
 
-      await audit(req.user?.sub ?? null, 'run.cancel', 'Run', id);
+      await audit(req.user?.sub ?? null, 'run.cancel', 'Run', id, { processStopRequested });
       hub.publish('run.finished', { runId: id, agentId: run.agentId, status: 'CANCELLED' });
 
-      return reply.send(ok({ id: updated.id, status: updated.status }));
+      return reply.send(ok({
+        id: updated.id,
+        status: updated.status,
+        processStopRequested,
+      }));
     } catch (e) {
       return sendError(reply, e);
     }
