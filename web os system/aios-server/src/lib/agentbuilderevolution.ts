@@ -27,6 +27,7 @@ import {
   normalizeTestInputRequirements,
   type BuilderTestInputRequirement,
 } from './buildertestinputs.js';
+import { assemblePrompt } from './promptassembly.js';
 
 export type BuilderGeneratedBy = 'model' | 'fallback' | 'questionnaire';
 
@@ -555,6 +556,10 @@ async function catalogContext(userId: string) {
   return deepRedactSecrets({ agents, skills, accounts, mcp });
 }
 
+function isNotBuildTurn(raw: unknown): boolean {
+  return asObject(raw)?.notBuildTurn === true;
+}
+
 function validatePayload(raw: unknown, fallback: EvolutionPayload): EvolutionPayload {
   const obj = asObject(raw);
   if (!obj) return fallback;
@@ -642,58 +647,79 @@ export async function processBuilderEvolution(
         realCatalog: skipLiveSideEffects ? {} : await catalogContext(iteration.session.userId),
         trigger: iteration.triggerSummary,
       });
-      const prompt = [
-        '你是 AIOS 的「員工演進建築師」。使用者仍在聊天，請把本輪新理解編譯成下一版非生效 Agent 草稿。',
-        '這不是固定欄位表單。請建立決策圖，辨認痛點、事實、假設、已決定事項、反悔／矛盾與仍需探索的分支。',
-        '能從已解析檔案或 realCatalog 得知的事實直接使用，不要把它列成要反問使用者的問題。',
-        '若新資訊推翻舊決定，將舊決定標成 revised，並在 changes 清楚說明。不得偷偷保留互相衝突的做法。',
-        'triggerKind=reflection 時，必須檢查完整的使用者輸入、Agent 行為與使用者回饋：把可重複的必要欄位、輸出格式、判斷規則、例外處理與防止重犯的測試更新到 Shadow Skill。Agent 自己聲稱「已了解」不是事實；沒有使用者證據時只能列 hypothesis，不能提升為 confirmed rule。',
-        'Harness 是 shadow draft：可更新 identity、skills、memory、tools、policies、testIdeas、testInputRequirements，但絕不可聲稱已啟用或已取得權限。',
-        'testInputRequirements 必須依這位員工的真實工作資料定義；每項包含 key、label、description、kind(FILE|TEXT)、required、acceptedExtensions、minFiles、maxFiles。不要把選填資料誤標必填。',
-        '工具只有 realCatalog 明確存在且健康時才能標 AVAILABLE；否則一律 NEEDS_FDE。',
-        '對 End User 的 userSummary 不得出現 Harness、manifest、MCP、engine、JSON 等技術詞，只說這位員工這次學會或調整了什麼。',
-        'FDE 摘要必須記錄新增、修改、移除與矛盾，便於日後審查。',
-        '所有技能 status 必須是 DRAFT。寄信、雲端寫入、電腦操作、不可逆動作必須列入 requiresApproval。',
-        '輸出純 JSON，鍵為 understanding、changes、harness、userSummary、fdeSummary、suggestTest。',
-        '',
-        JSON.stringify(safeSession),
-      ].join('\n');
+      const contextJson = JSON.stringify(safeSession);
+      let systemPrompt = '';
+      let userTurn = contextJson;
+      let assembledOk = false;
       try {
-        if (signal?.aborted) return;
-        let advisorId: string | undefined;
-        if (!skipLiveSideEffects) {
-          const { ensureBuilderAdvisor } = await import('./agentbuilder.js');
-          const advisor = await ensureBuilderAdvisor();
-          await guardBudget(advisor.id, advisor.costPolicy);
-          advisorId = advisor.id;
-        }
-        const result = await execute({
-          prompt,
-          cwd: paths.cache,
-          // This runs behind the conversation, but it must still keep up with an
-          // active interview. A deterministic compiler below preserves progress
-          // when the local model is unavailable or stalls.
-          timeoutMs: 20_000,
-          disallowedTools: ['Bash', 'Write', 'Edit', 'NotebookEdit', 'WebSearch', 'WebFetch', 'Task'],
-          signal,
+        const assembled = assemblePrompt({
+          stage: 'evolution',
+          vars: {},
+          contextMessage: contextJson,
         });
-        if (signal?.aborted) return;
-        if (advisorId) {
-          await recordCost({
-            agentId: advisorId,
-            engine: 'CLAUDE_CODE',
-            inputText: prompt,
-            outputText: result.stdout,
-            stepKey: 'builder.evolution',
-          }).catch(() => {});
+        systemPrompt = assembled.systemPrompt;
+        userTurn = assembled.contextMessage ?? contextJson;
+        assembledOk = true;
+      } catch (err) {
+        console.warn('[builder-evolution] prompt assembly failed; using fallback', err);
+      }
+      if (assembledOk) {
+        const costInput = systemPrompt ? `${systemPrompt}\n\n${userTurn}` : userTurn;
+        try {
+          if (signal?.aborted) return;
+          let advisorId: string | undefined;
+          if (!skipLiveSideEffects) {
+            const { ensureBuilderAdvisor } = await import('./agentbuilder.js');
+            const advisor = await ensureBuilderAdvisor();
+            await guardBudget(advisor.id, advisor.costPolicy);
+            advisorId = advisor.id;
+          }
+          const result = await execute({
+            prompt: userTurn,
+            systemAppend: systemPrompt,
+            cwd: paths.cache,
+            // This runs behind the conversation, but it must still keep up with an
+            // active interview. A deterministic compiler below preserves progress
+            // when the local model is unavailable or stalls.
+            timeoutMs: 20_000,
+            disallowedTools: ['Bash', 'Write', 'Edit', 'NotebookEdit', 'WebSearch', 'WebFetch', 'Task'],
+            signal,
+          });
+          if (signal?.aborted) return;
+          if (advisorId) {
+            await recordCost({
+              agentId: advisorId,
+              engine: 'CLAUDE_CODE',
+              inputText: costInput,
+              outputText: result.stdout,
+              stepKey: 'builder.evolution',
+            }).catch(() => {});
+          }
+          const raw = looseParseJson(result.stdout);
+          if (isNotBuildTurn(raw)) {
+            console.info('[builder-evolution] notBuildTurn: skipped draft', {
+              iterationId: iteration.id,
+              sessionId: iteration.sessionId,
+              sequence: iteration.sequence,
+            });
+            const liveSession = await prisma.agentBuildSession.findUnique({
+              where: { id: iteration.sessionId },
+              select: { status: true },
+            });
+            if (!liveSession || liveSession.status === 'ABANDONED') return;
+            await prisma.agentBuildIteration.updateMany({
+              where: { id: iteration.id, status: 'ANALYZING' },
+              data: { status: 'SUPERSEDED', completedAt: new Date() },
+            });
+            return;
+          }
+          payload = asObject(raw)
+            ? withGeneratedBy(validatePayload(raw, fallback), 'model')
+            : fallback;
+        } catch {
+          if (signal?.aborted) return;
+          payload = fallback;
         }
-        const raw = looseParseJson(result.stdout);
-        payload = asObject(raw)
-          ? withGeneratedBy(validatePayload(raw, fallback), 'model')
-          : fallback;
-      } catch {
-        if (signal?.aborted) return;
-        payload = fallback;
       }
     }
 
