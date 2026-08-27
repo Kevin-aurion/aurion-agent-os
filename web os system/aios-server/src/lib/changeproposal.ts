@@ -176,6 +176,23 @@ export async function approveProposal(
     throw errors.conflict(`Proposal already decided: ${existing.status}`);
   }
 
+  const proposedAction =
+    existing.proposedChange &&
+    typeof existing.proposedChange === 'object' &&
+    !Array.isArray(existing.proposedChange) &&
+    typeof (existing.proposedChange as { action?: unknown }).action === 'string'
+      ? (existing.proposedChange as { action: string }).action
+      : undefined;
+
+  if (proposedAction === 'builder_prompt_lesson') {
+    const { applyApprovedBuilderLesson } = await import('./builderlessons.js');
+    return applyApprovedBuilderLesson(existing, decidedBy);
+  }
+  if (proposedAction === 'builder_prompt_lesson_merge') {
+    const { applyApprovedBuilderLessonMerge } = await import('./builderlessons.js');
+    return applyApprovedBuilderLessonMerge(existing, decidedBy);
+  }
+
   // ── SKILL confirm_skill: atomic confirm + mark APPROVED ─────────────────
   if (existing.targetType === 'SKILL') {
     const skillId = existing.targetId;

@@ -96,7 +96,53 @@ function agentDisplayName(agentId: string, name?: string | null): string {
   return agentId.slice(0, 8);
 }
 
+function asRecord(v: unknown): Record<string, unknown> | null {
+  if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+    return v as Record<string, unknown>;
+  }
+  return null;
+}
+
+export function proposalActionOf(proposedChange: unknown): string | undefined {
+  const rec = asRecord(proposedChange);
+  return typeof rec?.action === 'string' ? rec.action : undefined;
+}
+
+export interface BuilderLessonCard {
+  action: 'builder_prompt_lesson' | 'builder_prompt_lesson_merge';
+  title: string;
+  lessonText: string;
+  evidence: string;
+}
+
+function formatEvidence(raw: unknown): string {
+  if (!Array.isArray(raw) || raw.length === 0) return '';
+  const turns = raw
+    .filter((item): item is number | string => typeof item === 'number' || typeof item === 'string')
+    .map((item) => String(item));
+  if (turns.length === 0) return '';
+  return `第 ${turns.join('、')} 輪`;
+}
+
+/** Project builder_prompt_lesson(+merge) payload for the unified inbox card. */
+export function builderLessonCard(proposedChange: unknown): BuilderLessonCard | null {
+  const rec = asRecord(proposedChange);
+  if (!rec) return null;
+  if (rec.action !== 'builder_prompt_lesson' && rec.action !== 'builder_prompt_lesson_merge') {
+    return null;
+  }
+  const title = typeof rec.title === 'string' ? rec.title : '';
+  const lessonText = typeof rec.lessonText === 'string' ? rec.lessonText : '';
+  return {
+    action: rec.action,
+    title,
+    lessonText,
+    evidence: formatEvidence(rec.evidence),
+  };
+}
+
 function projectProposal(row: ProposalRow): ReviewItem {
+  const lesson = builderLessonCard(row.proposedChange);
   return {
     key: `proposal:${row.id}`,
     kind: 'proposal',
@@ -106,7 +152,7 @@ function projectProposal(row: ProposalRow): ReviewItem {
     requester: row.proposedBy,
     risk: normalizeRisk(row.severity),
     source: row.source,
-    summary: row.targetType,
+    summary: lesson?.title || row.targetType,
     createdAt: row.createdAt,
     raw: row,
   };
@@ -238,13 +284,6 @@ export function classifyApprovalSignal(input: {
 /** Fail-closed role gate: only exact OWNER or TRAINER. */
 export function canReview(role: string | null | undefined): boolean {
   return role === 'OWNER' || role === 'TRAINER';
-}
-
-function asRecord(v: unknown): Record<string, unknown> | null {
-  if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
-    return v as Record<string, unknown>;
-  }
-  return null;
 }
 
 function readNestedStatus(response: unknown): string {

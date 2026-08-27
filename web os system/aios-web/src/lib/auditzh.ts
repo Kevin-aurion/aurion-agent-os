@@ -45,6 +45,9 @@ const ACTION_ZH: Record<string, string> = {
   'reflection.suggestion.dismissed': '忽略反思優化建議',
   'proposal.approved': '核准變更提案',
   'proposal.rejected': '駁回變更提案',
+  'builder.lesson.proposed': '提出 Builder 教訓候選',
+  'builder.lesson.adopted': '採納 Builder 教訓',
+  'builder.lesson.merge_proposed': '提出 Builder 教訓合併',
 };
 
 const ENTITY_ZH: Record<string, string> = {

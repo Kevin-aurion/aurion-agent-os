@@ -36,7 +36,9 @@ interface NotifyJobData {
 }
 
 interface BuilderEvolutionJobData {
-  iterationId: string;
+  kind?: 'evolution' | 'self-reflection';
+  iterationId?: string;
+  sessionId?: string;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-empty-interface
@@ -151,7 +153,7 @@ export async function enqueueBuilderEvolution(iterationId: string): Promise<bool
   try {
     await builderEvolutionQueue.add(
       'compile-shadow-harness',
-      { iterationId },
+      { kind: 'evolution', iterationId },
       {
         attempts: 3,
         backoff: { type: 'exponential', delay: 1500 },
@@ -162,6 +164,27 @@ export async function enqueueBuilderEvolution(iterationId: string): Promise<bool
     return true;
   } catch (error) {
     console.warn('[scheduler] failed to enqueue builder evolution:', error instanceof Error ? error.message : error);
+    return false;
+  }
+}
+
+/** Queue a post-finalize/abandon Builder lesson reflection. */
+export async function enqueueBuilderSelfReflectionJob(sessionId: string): Promise<boolean> {
+  if (!builderEvolutionQueue) return false;
+  try {
+    await builderEvolutionQueue.add(
+      'builder-self-reflection',
+      { kind: 'self-reflection', sessionId },
+      {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 1500 },
+        removeOnComplete: 200,
+        removeOnFail: 200,
+      },
+    );
+    return true;
+  } catch (error) {
+    console.warn('[scheduler] failed to enqueue builder self-reflection:', error instanceof Error ? error.message : error);
     return false;
   }
 }
@@ -251,6 +274,13 @@ async function runSyncJob(_job: Job<SyncJobData>): Promise<unknown> {
 }
 
 async function runBuilderEvolutionJob(job: Job<BuilderEvolutionJobData>): Promise<void> {
+  if (job.name === 'builder-self-reflection' || job.data.kind === 'self-reflection') {
+    if (!job.data.sessionId) return;
+    const { runBuilderSelfReflection } = await import('../lib/builderlessons.js');
+    await runBuilderSelfReflection(job.data.sessionId);
+    return;
+  }
+  if (!job.data.iterationId) return;
   const { processBuilderEvolution } = await import('../lib/agentbuilderevolution.js');
   await processBuilderEvolution(job.data.iterationId);
 }

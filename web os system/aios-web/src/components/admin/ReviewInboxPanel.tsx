@@ -18,6 +18,7 @@ import { cn } from '@/lib/cn';
 import { EmptyState, Spinner } from '@/components/ui';
 import {
   buildDecisionEvidence,
+  builderLessonCard,
   classifyApprovalSignal,
   filterInbox,
   mergeInbox,
@@ -498,6 +499,7 @@ export function ReviewInboxPanel() {
             const showProposalActions = isProposal;
             const approval = !isProposal ? (item.raw as ApprovalRow) : null;
             const proposal = isProposal ? (item.raw as ProposalRow) : null;
+            const lesson = proposal ? builderLessonCard(proposal.proposedChange) : null;
             const pay = approval ? payloadSummary(approval.payload) : {};
 
             return (
@@ -531,7 +533,13 @@ export function ReviewInboxPanel() {
                           isProposal ? 'bg-brand/10 text-brand' : 'bg-amber-500/15 text-amber-500',
                         )}
                       >
-                        {isProposal ? '變更提案' : '執行核准（HITL）'}
+                        {isProposal
+                          ? lesson?.action === 'builder_prompt_lesson_merge'
+                            ? 'Builder 教訓合併'
+                            : lesson
+                              ? 'Builder 教訓'
+                              : '變更提案'
+                          : '執行核准（HITL）'}
                       </span>
                       <span className={cn('badge', riskClass(item.risk))}>
                         {isProposal ? `severity: ${item.risk}` : `riskTier: ${item.risk}`}
@@ -544,12 +552,21 @@ export function ReviewInboxPanel() {
                       </span>
                     </div>
 
-                    <div className="font-medium">{item.agentName}</div>
+                    <div className="font-medium">{lesson?.title || item.agentName}</div>
+
+                    {lesson && (
+                      <div className="space-y-1 text-sm">
+                        <p className="whitespace-pre-wrap leading-relaxed text-muted">{lesson.lessonText}</p>
+                        {lesson.evidence && (
+                          <div className="text-xs text-muted">evidence：{lesson.evidence}</div>
+                        )}
+                      </div>
+                    )}
 
                     {isProposal && proposal && (
                       <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted">
                         <span>來源：{sourceLabel(item.source)}</span>
-                        <span>目標：{proposal.targetType}</span>
+                        <span>目標：{lesson ? (lesson.action === 'builder_prompt_lesson_merge' ? 'Builder 教訓合併' : 'Builder 教訓') : proposal.targetType}</span>
                         <span
                           className="font-mono"
                           title={item.requester}

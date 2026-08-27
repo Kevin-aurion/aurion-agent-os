@@ -1882,6 +1882,19 @@ export async function listBuilderSessions(opts: { userId: string }): Promise<Ses
 
 const ABANDONABLE_STATUSES: AgentBuildSessionStatus[] = ['DISCOVERY', 'PLAN_READY'];
 
+/** Fail-safe: session success must not depend on the lesson reflection. */
+async function enqueueBuilderSelfReflectionSafe(sessionId: string): Promise<void> {
+  try {
+    const { enqueueBuilderSelfReflection } = await import('./builderlessons.js');
+    await enqueueBuilderSelfReflection(sessionId);
+  } catch (err) {
+    console.warn(
+      '[agentbuilder] builder self-reflection enqueue failed (ignored):',
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
 /**
  * Soft-delete an unsubmitted owner draft. Governed sessions (AWAITING_FDE+)
  * cannot be abandoned here — they stay on the FDE path. Never hard-deletes.
@@ -1931,6 +1944,7 @@ export async function abandonBuilderSession(opts: {
   await audit(opts.userId, 'agentbuild.abandoned', 'AgentBuildSession', row.id, {
     previousStatus: row.status,
   });
+  await enqueueBuilderSelfReflectionSafe(row.id);
   return toSessionDto(updated);
 }
 
@@ -3223,6 +3237,7 @@ export async function finalizeBuilderSession(opts: {
     draftSkillIds: draftIds,
     importedWorkflowIds,
   });
+  await enqueueBuilderSelfReflectionSafe(row.id);
 
   return {
     session: toSessionDto(updated),
