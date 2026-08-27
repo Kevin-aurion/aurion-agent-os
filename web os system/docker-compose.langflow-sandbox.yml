@@ -1,0 +1,64 @@
+# =============================================================================
+# AIOS — Langflow FDE Authoring / Sandbox Lab（Phase 2）
+# =============================================================================
+# 這是 FDE-only 的 Authoring／Sandbox Lab，不是 Production Runtime，也不是 Engine。
+# 用途：隔離實驗 Langflow 作為未來 Runtime Adapter 的沙盒，與 AIOS 正式棧完全隔離。
+#
+# 安全／隔離邊界：
+#   - loopback-only：只綁 127.0.0.1:7860，不對外網暴露
+#   - 無正式憑證：不引用任何 .env 或 compose 環境檔注入，不注入 AIOS 或 provider API keys
+#   - 獨立 named volume + 獨立 network，不碰 aios_pgdata / aios_redis / aios-data
+#   - 不隨預設 `docker compose up -d` 啟動（本檔獨立；必須顯式 -f 指定）
+#   - top-level `name` 固定 project scope，避免與同目錄預設 compose（aios）共用
+#
+# 啟動：
+#   docker compose -f docker-compose.langflow-sandbox.yml up -d
+# 完全重置（可丟棄 disposable volume）：
+#   docker compose -f docker-compose.langflow-sandbox.yml down -v
+# =============================================================================
+
+name: aios-langflow-sandbox
+
+services:
+  langflow-sandbox:
+    image: langflowai/langflow:1.11.2
+    container_name: aios-langflow-sandbox
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:7860:7860"
+    environment:
+      # SQLite on the disposable named volume — not Production Postgres
+      LANGFLOW_DATABASE_URL: "sqlite:////app/langflow/sandbox.db"
+      LANGFLOW_CONFIG_DIR: "/app/langflow"
+      # Local sandbox convenience only; never use auto-login outside this lab
+      LANGFLOW_AUTO_LOGIN: "true"
+      # sandbox-only, not a production credential (random placeholder for local lab)
+      LANGFLOW_SECRET_KEY: "sandbox-only-not-prod-a7f3e9c2b1d84e6f90aa1122bb33cc44"
+      # Flow API auth (Langflow 1.11+). Fixed local-only placeholder — NOT production key,
+      # NOT a provider credential, must NOT start with sk-. Loopback + disposable lab only.
+      LANGFLOW_API_KEY_SOURCE: "env"
+      LANGFLOW_API_KEY: "sandbox-flow-api-key-not-production-local-only-v1"
+    volumes:
+      # Disposable named volume — `down -v` wipes the entire lab state
+      - aios_langflow_sandbox:/app/langflow
+    networks:
+      - aios_langflow_sandbox_net
+    healthcheck:
+      # Container may lack curl/wget; mirror docparse python urllib pattern
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:7860/health').status==200 else 1)\"",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+volumes:
+  # Disposable: `docker compose -f docker-compose.langflow-sandbox.yml down -v` 即可整個重置
+  aios_langflow_sandbox: {}
+
+networks:
+  aios_langflow_sandbox_net:
+    name: aios_langflow_sandbox_net

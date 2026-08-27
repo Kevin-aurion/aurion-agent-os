@@ -5,10 +5,10 @@
 ## 檔案
 - `runner.ts` — **核心**。`runAgent()`／`compileManifest()`／各步驟型別（DO / TOOL / AGENT / CONDITION / NOTIFY / COMPUTER_CONTROL）；execute↔verify 迴圈與 `maxRounds`；對話步驟 `skipVerify`；DO 步驟預設 `permissions:'full'`（允許寫檔）；限制注入；同步雲端檔案為 `data/cloud-files.md`；對話歷史（`history`）渲染成逐字稿。
 - `index.ts` — 對外入口（re-export `runAgent`）。
-- `claude.ts` — `claude -p` 適配（`--append-system-prompt`、`--disallowedTools`、`--allowedTools`、`--dangerously-skip-permissions`）；含串流版。
+- `claude.ts` — `claude -p` 適配（`--append-system-prompt`、`--disallowedTools`、`--allowedTools`、`--dangerously-skip-permissions`）；含串流版。非串流 CLI 以獨立 process group 啟動，timeout／AbortSignal 必須終止整個子行程群，避免 verifier 或 hooks 在外層逾時後繼續執行。
 - `codex.ts` — `codex exec` 適配。
 - `grok.ts` — `grok -p --output-format json --always-approve --cwd`（`disableWebSearch`、`resumeSessionId`）。
-- `tools.ts` — 內建工具（如 `upload_to_cloud`）＋ `ToolContext`（agentId/agentDir/cloudWrite）。
+- `tools.ts` — 內建工具（如 `upload_to_cloud`）＋ `ToolContext`（agentId/agentDir/cloudWrite）；`mcp:<serverId>:<tool>` 一律經 Broker 的 allowlist／restriction／approval／budget 閘。
 - `restrictions.ts` — `AgentRestrictions`、`DEFAULT_RESTRICTIONS`、`parseRestrictions()`、`restrictionsToRules()`。
 - `materialize.ts` — 依 DB 具現化員工工作區（`agent.md` + `skills/`）到 `MyAgent/`。
 - `types.ts` — 步驟與 manifest 型別。

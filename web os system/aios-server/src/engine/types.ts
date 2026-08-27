@@ -2,6 +2,7 @@
 // do|tool|agent|condition|notify|computer_control step model, round-loop
 // results, and the run outcome returned to callers (workflows/runs/conversations).
 import type { Engine, RunStatus, StepType } from '@prisma/client';
+import type { SkillMetadata } from '../lib/skillmanifest.js';
 
 /** Defect-routing on a failed step: which prior steps to send it back to. */
 export interface OnFailConfig {
@@ -11,7 +12,12 @@ export interface OnFailConfig {
 
 export interface CompiledSkill {
   name: string; // skill slug
-  contentMd: string; // SKILL.md content, injected into the execute engine's system prompt
+  /** Full SKILL.md retained for L2 fallback; must NOT be fully injected into system prompt. */
+  contentMd: string;
+  /** L1 metadata for progressive disclosure catalog. */
+  metadata: SkillMetadata;
+  /** Safe relative path e.g. skills/<slug>/SKILL.md for on-demand L2 reads. */
+  relPath: string;
 }
 
 interface BaseStep {
@@ -32,8 +38,14 @@ export interface DoStep extends BaseStep {
 }
 
 export interface ToolStepConfig {
-  tool: string; // tools/<tool>.js|.ts under the agent dir
+  /**
+   * tools/<tool>.js|.ts, built-in, central `mcp:<serverId>:<tool>`,
+   * or device-local `device-mcp:line-desktop:<tool>` (requires deviceId).
+   */
+  tool: string;
   args?: Record<string, string>; // values may be literal or "{{...}}" templates
+  /** Required for device-mcp:* tools — targeted execution device. */
+  deviceId?: string;
 }
 export interface ToolStep extends BaseStep {
   type: 'TOOL';
@@ -71,9 +83,17 @@ export interface NotifyStep extends BaseStep {
 }
 
 export interface ComputerControlStepConfig {
+  /** Target enrolled device (required; no public broadcast fallback). */
+  deviceId: string;
   skillId: string;
   instructions?: string;
   timeoutMs?: number;
+  app?: string;
+  checkpoint?: {
+    /** Default true when omitted on runner path. */
+    requireScreenshot?: boolean;
+    label?: string;
+  };
 }
 export interface ComputerControlStep extends BaseStep {
   type: 'COMPUTER_CONTROL';
@@ -96,6 +116,17 @@ export interface CompiledManifest {
   steps: Step[];
   /** L1 core wiki pages (index.md + facts.md) injected into the system prompt. */
   memoryCore: string;
+  /**
+   * Parsed identity card when the agent has one; null when Agent.identityCard is null.
+   * Used by the verify-gate semantic overstep review (ADR 0004) — never invent a card.
+   */
+  identityCard: import('../lib/identitycard.js').IdentityCard | null;
+  /**
+   * Isolated Agent Builder evidence. Draft skills are injected into this one
+   * manifest only; they remain unconfirmed and unavailable to normal runs.
+   */
+  builderTestDraftSkillIds?: string[];
+  builderTestDraftContent?: string;
 }
 
 export interface RoundRecord {
@@ -145,4 +176,16 @@ export interface RunAgentOptions {
   runId?: string;
   /** internal: delegation depth (0 = top-level run); callers should not set this. */
   depth?: number;
+  /** internal: set by the approval flow to bypass the high-risk pre-exec gate and resume the existing run. */
+  approvedApprovalId?: string;
+  /** Stronger-than-chat gate for eval/builder runs: ad-hoc DO must be cross-model verified. */
+  forceVerify?: boolean;
+  /**
+   * Internal Agent Builder test capability. The runner validates the session,
+   * actor, target agent and exact draft links before loading any draft content,
+   * and applies a hard-coded least-privilege restriction override.
+   */
+  builderTestSessionId?: string;
+  /** Optional caller cancellation propagated into every spawned engine CLI. */
+  signal?: AbortSignal;
 }

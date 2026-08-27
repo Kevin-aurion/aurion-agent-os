@@ -1,0 +1,93 @@
+# =============================================================================
+# AIOS — Langflow Production Runtime（票 17）
+# =============================================================================
+# 這是與 Sandbox 完全隔離的 Production Runtime，不是 FDE Authoring Lab，也不是 Engine。
+# Runtime ≠ Engine：LANGFLOW 只是 RuntimeKind；控制平面仍是 AIOS（核准、Artifact、成本、稽核）。
+#
+# 安全／隔離邊界：
+#   - 獨立 project name：aios-langflow-production（≠ aios-langflow-sandbox、≠ 預設 compose）
+#   - loopback-only：只綁 127.0.0.1:7861（與 sandbox 的 7860 不相交）
+#   - 唯讀 rootfs + cap_drop ALL + no-new-privileges；可寫路徑僅 tmpfs
+#   - 無 named volume、無 bind mount；durable state 全在 AIOS Postgres，容器可任意重建
+#   - 無 End-User UI：LANGFLOW_BACKEND_ONLY=true（無 UI 寫入、無 Custom Component upload UI）
+#   - 禁止 compose 環境檔注入、無 AIOS／provider credential；祕密以 shell 環境變數引用：
+#       AIOS_LANGFLOW_PRODUCTION_SECRET_KEY          → LANGFLOW_SECRET_KEY（內部加密）
+#       AIOS_LANGFLOW_PRODUCTION_API_KEY             → LANGFLOW_API_KEY（控制平面 x-api-key，非 provider key）
+#       AIOS_LANGFLOW_PRODUCTION_SUPERUSER_PASSWORD  → LANGFLOW_SUPERUSER_PASSWORD（本機 bootstrap，與 SECRET 分離）
+#     fail-closed：任一未設定則無法 config/up
+#   - LANGFLOW_API_KEY_SOURCE=env + AUTO_LOGIN=false：Flow API 需 x-api-key；不得 auto-login
+#   - 只應載入 active + digest 驗證通過的 Flow Artifact（由 AIOS productionloader + Adapter 推送）
+#   - 不隨預設 `docker compose up -d` 啟動（必須顯式 -f 本檔）
+#
+# 啟動前：
+#   export AIOS_LANGFLOW_PRODUCTION_SECRET_KEY=$(openssl rand -hex 32)
+#   export AIOS_LANGFLOW_PRODUCTION_API_KEY=$(openssl rand -hex 32)
+#   export AIOS_LANGFLOW_PRODUCTION_SUPERUSER_PASSWORD=$(openssl rand -hex 32)
+# 啟動：
+#   docker compose -f docker-compose.langflow-production.yml up -d --wait
+# 停止（無 durable volume 需保留）：
+#   docker compose -f docker-compose.langflow-production.yml down
+# =============================================================================
+
+name: aios-langflow-production
+
+services:
+  langflow-production:
+    image: langflowai/langflow:1.11.2
+    container_name: aios-langflow-production
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # Writable dirs only via tmpfs — never named volumes or bind mounts
+    tmpfs:
+      - /tmp:mode=1777,size=512m
+      - /app/langflow:mode=1777,size=256m
+      - /data:mode=1777,size=64m
+      - /home:mode=1777,size=64m
+      - /run:mode=1777,size=32m
+      - /var/tmp:mode=1777,size=64m
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+    mem_limit: 2g
+    cpus: 2.0
+    ports:
+      - "127.0.0.1:7861:7860"
+    environment:
+      LANGFLOW_BACKEND_ONLY: "true"
+      LANGFLOW_AUTO_LOGIN: "false"
+      LANGFLOW_CONFIG_DIR: "/tmp/langflow"
+      # SQLite on tmpfs only — not AIOS Postgres
+      LANGFLOW_DATABASE_URL: "sqlite:////tmp/langflow/production.db"
+      # Secrets reference: fail-closed if unset; never hardcode a literal secret
+      LANGFLOW_SECRET_KEY: "${AIOS_LANGFLOW_PRODUCTION_SECRET_KEY:?AIOS_LANGFLOW_PRODUCTION_SECRET_KEY must be set (secrets reference; never hardcode)}"
+      # Control-plane API key (Langflow 1.5+): validate x-api-key against env value.
+      # NOT a provider credential (OpenAI/Anthropic/xAI/…). Backend-only; AIOS Adapter attaches header.
+      LANGFLOW_API_KEY_SOURCE: "env"
+      LANGFLOW_API_KEY: "${AIOS_LANGFLOW_PRODUCTION_API_KEY:?AIOS_LANGFLOW_PRODUCTION_API_KEY must be set (control-plane API key; never hardcode)}"
+      # Local runtime bootstrap only (AUTO_LOGIN=false requires them). NOT a provider key.
+      # Password is a separate secrets reference from SECRET_KEY (rotation isolation).
+      LANGFLOW_SUPERUSER: "aios-production"
+      LANGFLOW_SUPERUSER_PASSWORD: "${AIOS_LANGFLOW_PRODUCTION_SUPERUSER_PASSWORD:?AIOS_LANGFLOW_PRODUCTION_SUPERUSER_PASSWORD must be set (local runtime credential; never hardcode)}"
+    networks:
+      - aios_langflow_production_net
+    healthcheck:
+      # Container may lack curl/wget; mirror sandbox / docparse python urllib pattern
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:7860/health').status==200 else 1)\"",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+networks:
+  aios_langflow_production_net:
+    name: aios_langflow_production_net

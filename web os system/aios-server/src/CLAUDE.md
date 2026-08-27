@@ -24,3 +24,4 @@ Fastify 應用的所有 TypeScript。ESM 模組，**相對 import 需帶 `.js` �
 - 所有可觀察事件經 `ws/hub` 的 `hub.publish(topic, payload)` 廣播。
 - 錯誤走 `lib/http.ts` 的 `ok()/errors/sendError()`。
 - 存取控制是**程式碼**（`lib/guard.ts` + 工具層綁定），不是提示。
+- `index.ts` 的正式路由必須使用靜態 import／register；不要用變數字串 `import(mod)`。`tsx` 開發模式雖可解析來源檔，`tsup` 正式 bundle 會留下不存在的 `dist/routes/*.js` 路徑，造成服務健康但功能路由 404。

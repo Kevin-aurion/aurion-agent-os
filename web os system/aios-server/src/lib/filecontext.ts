@@ -3,8 +3,10 @@
 // (the "指定同步到雲端硬碟的特定檔案，並讀取該 Excel 內容" capability).
 import * as XLSX from 'xlsx';
 import fs from 'node:fs';
+import path from 'node:path';
 import { prisma } from './db.js';
 import { downloadFile } from '../integrations/cloud.js';
+import { parseDocumentFile } from './docparse.js';
 
 const MAX_CHARS = 8000;
 
@@ -22,6 +24,60 @@ function xlsxToText(localPath: string): string {
   return parts.join('\n');
 }
 
+const SPREADSHEET_EXTS = new Set(['.xlsx', '.xls']);
+const DOCUMENT_EXTS = new Set([
+  '.pdf',
+  '.docx',
+  '.doc',
+  '.pptx',
+  '.ppt',
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.tiff',
+  '.bmp',
+]);
+
+function isSpreadsheet(name: string, mimeType?: string): boolean {
+  const ext = path.extname(name).toLowerCase();
+  if (SPREADSHEET_EXTS.has(ext)) return true;
+  if ((mimeType ?? '').toLowerCase().includes('spreadsheet')) return true;
+  return false;
+}
+
+function isDocument(name: string, mimeType?: string): boolean {
+  const ext = path.extname(name).toLowerCase();
+  if (DOCUMENT_EXTS.has(ext)) return true;
+  const mime = (mimeType ?? '').toLowerCase();
+  if (
+    mime.includes('pdf') ||
+    mime.includes('word') ||
+    mime.includes('presentation') ||
+    mime.includes('image')
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** 依副檔名/mime 把本地檔轉成可讀文字：試算表→表格文字；PDF/docx/pptx/圖片→Docling markdown；其餘→utf8。best-effort。 */
+export async function fileToText(localPath: string, name: string, mimeType?: string): Promise<string> {
+  if (isSpreadsheet(name, mimeType)) {
+    return xlsxToText(localPath);
+  }
+  if (isDocument(name, mimeType)) {
+    try {
+      const parsed = await parseDocumentFile(localPath, name);
+      const md = parsed.markdown ?? '';
+      if (!md.trim()) return '（文件解析失敗或無文字）';
+      return md;
+    } catch {
+      return '（文件解析失敗或無文字）';
+    }
+  }
+  return fs.readFileSync(localPath, 'utf8');
+}
+
 /** Returns a text block describing all of the agent's cloud file targets and
  * their current content (best-effort; failures per-file are noted, not thrown). */
 export async function gatherAgentFileContext(agentId: string): Promise<string> {
@@ -36,12 +92,8 @@ export async function gatherAgentFileContext(agentId: string): Promise<string> {
     const ref = t.cloudFileRef;
     const header = `檔案：${ref.name}（路徑：${ref.path}${t.purpose ? '，用途：' + t.purpose : ''}）`;
     try {
-      const isSpreadsheet =
-        ref.name.toLowerCase().endsWith('.xlsx') ||
-        ref.name.toLowerCase().endsWith('.xls') ||
-        (ref.mimeType ?? '').includes('spreadsheet');
       const localPath = await downloadFile(ref.accountId, ref.externalId);
-      const body = isSpreadsheet ? xlsxToText(localPath) : fs.readFileSync(localPath, 'utf8').slice(0, MAX_CHARS);
+      const body = await fileToText(localPath, ref.name, ref.mimeType ?? undefined);
       blocks.push(`${header}\n${body}`);
     } catch (e) {
       blocks.push(`${header}\n（讀取失敗：${e instanceof Error ? e.message : String(e)}）`);

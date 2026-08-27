@@ -1,0 +1,45 @@
+{
+  "generatedAt": "2026-08-23T16:24:30.850Z",
+  "files": [
+    {
+      "name": "aurion-aios-builder-plugin.zip",
+      "bytes": 23967,
+      "sha256": "f6590ff6ce92f00880a578f9a581d7b10815b62a5043afad49afcd5e28adbe87"
+    },
+    {
+      "name": "build-aios-agent.skill.zip",
+      "bytes": 8550,
+      "sha256": "e4b9705a434aef73d2a9ad5c0bcb6cc689651547d0760faebefe97cf67fe35ef"
+    },
+    {
+      "name": "use-aios-agent.skill.zip",
+      "bytes": 3664,
+      "sha256": "011cb2dd95d846c3436c79cc3da707827ceda0493a216519053e474d993b69be"
+    },
+    {
+      "name": "aurion-aios-one-click-install.zip",
+      "bytes": 43093,
+      "sha256": "8d01d95f13d5e7eda4f46c89b87a2668036e2bcd12048c5268146f8dbbb364dd"
+    },
+    {
+      "name": "SHA256SUMS.txt",
+      "bytes": 381,
+      "sha256": "0a8375ddd70284accc4321fe78393761c23bb10170c4e3396f05f520141359a1"
+    },
+    {
+      "name": "REMOTE-MCP-URL.txt",
+      "bytes": 106,
+      "sha256": "4aff71c4448e70dba9f08f2574d00723e4ca313cd0e9e500958450fdddb40bd1"
+    },
+    {
+      "name": "aios-remote-mcp.json",
+      "bytes": 133,
+      "sha256": "738c525ddaa240a43797593f544df62fba58626b11d31ef6ef5764499c751ae0"
+    },
+    {
+      "name": "AIOS-Agent-Builder-Installation-Guide.zh-TW.md",
+      "bytes": 10071,
+      "sha256": "c24109104e6bf32d23243eff5cd3ee1f2d4ab494635a8090a3b2311717866ce9"
+    }
+  ]
+}

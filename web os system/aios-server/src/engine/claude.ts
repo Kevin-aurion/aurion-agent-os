@@ -1,5 +1,5 @@
 // Claude Code CLI wrapper — spawns `claude -p` non-interactively (see the
-// reference lazyoffice engine's claude.ts). Exposes a plain call and a
+// reference implementation's claude.ts). Exposes a plain call and a
 // streaming variant that reports each output line as it arrives, so callers
 // can forward it onto the WS hub as `run.log` events.
 import { spawn } from 'node:child_process';
@@ -10,6 +10,7 @@ export interface CliResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  aborted: boolean;
 }
 
 export interface ExecCliOpts {
@@ -17,6 +18,10 @@ export interface ExecCliOpts {
   input?: string | null;
   timeoutMs?: number;
   onLine?: (line: string, stream: 'stdout' | 'stderr') => void;
+  /** When set, wrap the CLI spawn with `sandbox-exec -f <profile> <cmd> ...`. Opt-in only. */
+  sandboxProfilePath?: string;
+  /** Cancels the whole spawned CLI process group, including hook/tool children. */
+  signal?: AbortSignal;
 }
 
 function makeLineSplitter(onLine: (line: string) => void) {
@@ -46,9 +51,25 @@ function makeLineSplitter(onLine: (line: string) => void) {
  */
 export function execCli(cmd: string, args: string[], opts: ExecCliOpts = {}): Promise<CliResult> {
   return new Promise((resolve, reject) => {
+    if (opts.signal?.aborted) {
+      reject(new Error('CLI execution aborted before spawn'));
+      return;
+    }
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(cmd, args, { cwd: opts.cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+      // Opt-in L6 write sandbox: only wrap when a profile path is provided.
+      // Default path (no sandboxProfilePath) is byte-identical to the original spawn.
+      const spawnCmd = opts.sandboxProfilePath ? 'sandbox-exec' : cmd;
+      const spawnArgs = opts.sandboxProfilePath
+        ? ['-f', opts.sandboxProfilePath, cmd, ...args]
+        : args;
+      child = spawn(spawnCmd, spawnArgs, {
+        cwd: opts.cwd,
+        stdio: ['pipe', 'pipe', 'pipe'],
+        // A dedicated process group lets timeout/abort terminate the CLI plus
+        // any hook/MCP children it launched instead of orphaning them.
+        detached: process.platform !== 'win32',
+      });
     } catch (e) {
       reject(e);
       return;
@@ -57,15 +78,42 @@ export function execCli(cmd: string, args: string[], opts: ExecCliOpts = {}): Pr
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    let aborted = false;
     let timer: NodeJS.Timeout | undefined;
+    let forceKillTimer: NodeJS.Timeout | undefined;
 
     const outSplitter = opts.onLine ? makeLineSplitter((l) => opts.onLine!(l, 'stdout')) : null;
     const errSplitter = opts.onLine ? makeLineSplitter((l) => opts.onLine!(l, 'stderr')) : null;
+    const terminateGroup = (signal: NodeJS.Signals) => {
+      if (process.platform !== 'win32' && child.pid) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {
+          // Fall back to the direct child when the process group already exited.
+        }
+      }
+      child.kill(signal);
+    };
+    const scheduleForceKill = () => {
+      if (forceKillTimer) return;
+      forceKillTimer = setTimeout(() => terminateGroup('SIGKILL'), 2_000);
+    };
+    const onAbort = () => {
+      aborted = true;
+      terminateGroup('SIGTERM');
+      scheduleForceKill();
+    };
+    opts.signal?.addEventListener('abort', onAbort, { once: true });
 
     if (opts.timeoutMs) {
       timer = setTimeout(() => {
         timedOut = true;
-        child.kill('SIGTERM');
+        terminateGroup('SIGTERM');
+        // Some CLI children keep descriptors open after SIGTERM. A bounded
+        // second stage prevents user-facing requests from hanging past their
+        // declared timeout.
+        scheduleForceKill();
       }, opts.timeoutMs);
     }
 
@@ -81,13 +129,17 @@ export function execCli(cmd: string, args: string[], opts: ExecCliOpts = {}): Pr
     });
     child.on('error', (e) => {
       if (timer) clearTimeout(timer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      opts.signal?.removeEventListener('abort', onAbort);
       reject(e);
     });
     child.on('close', (code) => {
       if (timer) clearTimeout(timer);
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      opts.signal?.removeEventListener('abort', onAbort);
       outSplitter?.flush();
       errSplitter?.flush();
-      resolve({ code: code ?? -1, stdout, stderr, timedOut });
+      resolve({ code: code ?? -1, stdout, stderr, timedOut, aborted });
     });
 
     if (opts.input != null) child.stdin?.write(opts.input);
@@ -104,14 +156,20 @@ export interface RunClaudeOpts {
   fullPermissions?: boolean; // --dangerously-skip-permissions
   disallowedTools?: string[]; // hard tool bans, e.g. ['WebSearch','WebFetch'] (agent restrictions)
   allowedTools?: string[]; // pre-approved tools, e.g. verifier read-only web access
+  /** Opt-in L6 write sandbox profile path; forwarded to execCli. */
+  sandboxProfilePath?: string;
+  signal?: AbortSignal;
+  /** Disable user/project Claude customizations for deterministic sandbox runs. */
+  safeMode?: boolean;
 }
 
 export interface RunClaudeResult {
   stdout: string;
 }
 
-function buildClaudeArgs(opts: RunClaudeOpts): string[] {
+export function buildClaudeArgs(opts: RunClaudeOpts): string[] {
   const args = ['-p', opts.prompt, '--output-format', 'text'];
+  if (opts.safeMode) args.push('--safe-mode');
   if (opts.systemAppend) args.push('--append-system-prompt', opts.systemAppend);
   if (opts.mcpConfig) args.push('--mcp-config', opts.mcpConfig);
   if (opts.fullPermissions) args.push('--dangerously-skip-permissions');
@@ -122,10 +180,13 @@ function buildClaudeArgs(opts: RunClaudeOpts): string[] {
 
 /** Non-streaming exec: spawns `claude -p ...`, returns the trimmed stdout. */
 export async function runClaude(opts: RunClaudeOpts): Promise<RunClaudeResult> {
-  const { code, stdout, stderr, timedOut } = await execCli(config.engines.claudePath, buildClaudeArgs(opts), {
+  const { code, stdout, stderr, timedOut, aborted } = await execCli(config.engines.claudePath, buildClaudeArgs(opts), {
     cwd: opts.cwd,
     timeoutMs: opts.timeoutMs,
+    sandboxProfilePath: opts.sandboxProfilePath,
+    signal: opts.signal,
   });
+  if (aborted) throw new Error('claude aborted');
   if (timedOut) throw new Error(`claude timed out after ${opts.timeoutMs}ms`);
   if (code !== 0) throw new Error(`claude exit ${code}: ${(stderr || stdout).slice(0, 2000)}`);
   const out = stdout.trim();
@@ -135,13 +196,16 @@ export async function runClaude(opts: RunClaudeOpts): Promise<RunClaudeResult> {
 
 /** Streaming exec: same as runClaude but calls onLine for each stdout line as it arrives. */
 export async function runClaudeStream(opts: RunClaudeOpts & { onLine: (line: string) => void }): Promise<RunClaudeResult> {
-  const { code, stdout, stderr, timedOut } = await execCli(config.engines.claudePath, buildClaudeArgs(opts), {
+  const { code, stdout, stderr, timedOut, aborted } = await execCli(config.engines.claudePath, buildClaudeArgs(opts), {
     cwd: opts.cwd,
     timeoutMs: opts.timeoutMs,
+    sandboxProfilePath: opts.sandboxProfilePath,
     onLine: (line, stream) => {
       if (stream === 'stdout') opts.onLine(line);
     },
+    signal: opts.signal,
   });
+  if (aborted) throw new Error('claude aborted');
   if (timedOut) throw new Error(`claude timed out after ${opts.timeoutMs}ms`);
   if (code !== 0) throw new Error(`claude exit ${code}: ${(stderr || stdout).slice(0, 2000)}`);
   const out = stdout.trim();

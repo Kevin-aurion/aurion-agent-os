@@ -1,5 +1,6 @@
 'use client';
 import { useRef, useState } from 'react';
+import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Upload,
@@ -165,6 +166,12 @@ function SkillRow({ skill }: { skill: Skill }) {
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2">
+        <Link
+          href={`/skills/${skill.id}`}
+          className="text-xs text-brand hover:underline"
+        >
+          治理
+        </Link>
         <span className={cn('badge', ORIGIN_COLOR[skill.origin] ?? 'bg-black/10 dark:bg-white/10 text-muted')}>
           {ORIGIN_LABEL[skill.origin] ?? skill.origin}
         </span>

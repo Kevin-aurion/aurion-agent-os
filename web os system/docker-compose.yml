@@ -47,6 +47,20 @@ services:
     volumes:
       - ../aios-data/qdrant_storage:/qdrant/storage
 
+  # L8 感知層：本地文件解析（Docling）— PDF/掃描件/表格 → 結構化 IR/Markdown。
+  # 在地優先：只綁 127.0.0.1，文件不離機。OCR 引擎日後可換 PaddleOCR-VL。
+  docparse:
+    image: ghcr.io/docling-project/docling-serve-cpu:latest
+    container_name: aios-docparse
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5001:5001"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:5001/health').status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
 volumes:
   aios_pgdata: {}
   aios_redis: {}

@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.aios-mcp/
+*.log
+
+# Regenerable client packaging artifacts (`npm run package:client`).
+# Canonical Skill content lives in skills/; plugin/release copies are
+# generated at pack time. SHA256SUMS.txt is ignored with the zips: it is
+# a distribution sidecar of untracked binaries, not a source-of-truth file.
+releases/*.zip
+releases/aurion-aios-one-click/
+releases/aios-agent-builder-skill/
+releases/SHA256SUMS.txt

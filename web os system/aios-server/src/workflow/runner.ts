@@ -9,6 +9,7 @@
 import { prisma } from '../lib/db.js';
 import { errors } from '../lib/http.js';
 import { hub } from '../ws/hub.js';
+import { durableHighRiskRejected } from '../lib/approval.js';
 import type { RunOutcome } from '../engine/index.js';
 
 const VALID_STATUSES = new Set(['RUNNING', 'SUCCEEDED', 'FAILED', 'AWAITING_REVIEW', 'CANCELLED']);
@@ -31,12 +32,20 @@ export async function runWorkflow(
   input: Record<string, unknown>,
   triggeredBy: string,
   runId?: string,
+  signal?: AbortSignal,
 ): Promise<RunOutcome> {
   const workflow = await prisma.workflow.findUnique({
     where: { id: workflowId },
-    include: { steps: { orderBy: { position: 'asc' } } },
+    include: {
+      agent: { select: { status: true, deletedAt: true } },
+      steps: { orderBy: { position: 'asc' } },
+    },
   });
   if (!workflow || workflow.deletedAt) throw errors.notFound(`Workflow not found: ${workflowId}`);
+  if (!workflow.enabled) throw errors.conflict(`Workflow is not enabled: ${workflowId}`);
+  if (workflow.agent.deletedAt || workflow.agent.status !== 'ACTIVE') {
+    throw errors.conflict(`Workflow Agent is not active: ${workflow.agentId}`);
+  }
   if (workflow.steps.length === 0) throw errors.badRequest(`Workflow ${workflowId} has no steps configured`);
 
   hub.publish('workflow.triggered', {
@@ -51,15 +60,40 @@ export async function runWorkflow(
   // Dynamic import: the engine is a separate execution layer; importing it
   // lazily here keeps this module a thin adapter and avoids any load-order
   // coupling with the rest of the spine.
-  const { runAgent } = await import('../engine/index.js');
-
-  const outcome = await runAgent({
-    ...(runId ? { runId } : {}),
-    agentId: workflow.agentId,
-    workflowId: workflow.id,
-    input,
-    triggeredBy,
-  });
+  // Opt-in durable path: Workflow.durable=true → Temporal (HITL wait +
+  // runAgent activity). Requires `npm run temporal:worker` or the workflow
+  // will not progress. Non-durable stays in-process (unchanged).
+  // Durable + high-risk is rejected fail-closed (no Temporal HITL wiring yet).
+  let outcome: RunOutcome;
+  if (workflow.durable) {
+    const agent = await prisma.agent.findUnique({ where: { id: workflow.agentId } });
+    if (durableHighRiskRejected(agent?.riskTier, true)) {
+      throw errors.badRequest(
+        '耐久工作流尚不支援高風險員工的人工核准，請關閉 durable 或調降 riskTier',
+      );
+    }
+    const rid = runId ?? (await import('ulid')).ulid();
+    const { startDurableWorkflowRun, getDurableRunResult } = await import('../temporal/client.js');
+    await startDurableWorkflowRun({
+      runId: rid,
+      agentId: workflow.agentId,
+      workflowId: workflow.id,
+      triggeredBy,
+      input,
+      riskTier: agent?.riskTier ?? 'medium',
+    });
+    outcome = await getDurableRunResult(rid);
+  } else {
+    const { runAgent } = await import('../engine/index.js');
+    outcome = await runAgent({
+      ...(runId ? { runId } : {}),
+      agentId: workflow.agentId,
+      workflowId: workflow.id,
+      input,
+      triggeredBy,
+      signal,
+    });
+  }
 
   // Status contract: the engine must resolve to one of the RunStatus enum
   // values (never a thrown error masquerading as success, and never a bare

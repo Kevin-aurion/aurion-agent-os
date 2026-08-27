@@ -11,6 +11,11 @@ PostgreSQL（Docker，`127.0.0.1:5433`）的 schema 與遷移。真實來源（s
 - `Agent`：新增 `department`、`engineVerify (Engine?)`、`restrictions (Json?)`。
 - `CloudFileRef.webUrl`、`Skill.executionEnv`。
 - 主要資料表：User / Agent / Skill / Workflow / Step / Run / RunStep / Conversation / Message / Schedule / CloudFileRef / AuditLog / ComputerControlTask…
+- `AgentBuildSession` + `AgentBuildSessionStatus`（Agent Builder 耐久訪談／計畫／試跑／啟用；`draftState` 保存既有流程未送出欄位；內容一律 deep-redact 後落地）。
+- `AgentBuilderWorkspace`（每位使用者一筆、保存尚未建立 Session 的首段需求草稿，供跨裝置恢復）。
+- `RecordingSession`（使用者錄製操作示範；opaque session/artifact id，主機路徑不外流，並綁定開始錄製時的 Agent）。
+- `ReflectionCycle` / `ReflectionFeedback` / `ReflectionSuggestion`（時段冪等、遮罩後證據、僅供 FDE 決策的建議）；`Agent.systemManaged` 隔離內部反思 Agent。
+- `McpOAuthCode`（公開 Remote MCP 的一次性 authorization code；只存 code/client hash、PKCE challenge、redirect、scope、到期與消耗時間，不落 access／refresh token 明文）。
 
 ## 慣例與雷點
 - 列舉**多行**書寫（單行無效）；欄位文件用 `///` doc comment（不是 `/** */`）。

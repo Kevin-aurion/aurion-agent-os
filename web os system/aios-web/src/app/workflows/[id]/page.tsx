@@ -5,10 +5,12 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Ban, ChevronDown, ChevronUp, Clock, FlaskConical, Hand, Play, Plus, Save, Sparkles, Trash2, Webhook, Zap } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
+import { DeviceSelector } from '@/components/devices/DeviceSelector';
 import { EmptyState, Field, PageHeader, Spinner, StatusBadge } from '@/components/ui';
 import { API } from '@/lib/api';
 import { useAwp } from '@/lib/awp';
 import { cn } from '@/lib/cn';
+import { deviceBoundStepsAgentErrors, isDeviceMcpLineTool, requirementForStep } from '@/lib/devices';
 
 // ---- types -----------------------------------------------------------
 
@@ -103,6 +105,8 @@ interface EditableStep {
   channelBindingId: string;
   template: string;
   skillId: string;
+  /** Target device for COMPUTER_CONTROL or device-mcp:line-desktop TOOL steps. */
+  deviceId: string;
   configText: string;
   verifyRubric: string;
   onFailText: string;
@@ -133,6 +137,7 @@ function newStep(type: StepType, index: number): EditableStep {
     channelBindingId: '',
     template: '',
     skillId: '',
+    deviceId: '',
     configText: type === 'AGENT' ? '{\n  "agentId": "",\n  "input": ""\n}' : '{}',
     verifyRubric: '',
     onFailText: '',
@@ -142,6 +147,8 @@ function newStep(type: StepType, index: number): EditableStep {
 function stepToEditable(s: WorkflowStep): EditableStep {
   const cfg = (s.config ?? {}) as Record<string, any>;
   const isKnown = ['DO', 'TOOL', 'CONDITION', 'NOTIFY', 'COMPUTER_CONTROL'].includes(s.type);
+  const deviceId =
+    typeof cfg.deviceId === 'string' && cfg.deviceId.trim() ? String(cfg.deviceId).trim() : '';
   return {
     localId: uid(),
     stepKey: s.stepKey,
@@ -153,6 +160,8 @@ function stepToEditable(s: WorkflowStep): EditableStep {
     channelBindingId: s.type === 'NOTIFY' ? (cfg.channelBindingId ?? '') : '',
     template: s.type === 'NOTIFY' ? (cfg.template ?? '') : '',
     skillId: s.type === 'COMPUTER_CONTROL' ? (cfg.skillId ?? '') : '',
+    deviceId:
+      s.type === 'COMPUTER_CONTROL' || s.type === 'TOOL' ? deviceId : '',
     configText: !isKnown || s.type === 'AGENT' ? JSON.stringify(cfg, null, 2) : '{}',
     verifyRubric: s.verifyRubric ?? '',
     onFailText: s.onFail != null ? JSON.stringify(s.onFail, null, 2) : '',
@@ -187,12 +196,22 @@ function buildServerSteps(steps: EditableStep[]): { ok: true; steps: WorkflowSte
         errors[s.localId] = 'TOOL 參數 (Args) 必須是有效的 JSON';
       }
       config = { tool: s.toolName, args };
+      if (isDeviceMcpLineTool(s.toolName)) {
+        if (!s.deviceId.trim()) {
+          errors[s.localId] = (errors[s.localId] ? errors[s.localId] + '；' : '') + 'device-mcp:line-desktop 必須選擇線上可用裝置（不可空白或離線既有綁定）';
+        } else {
+          config.deviceId = s.deviceId.trim();
+        }
+      }
     } else if (s.type === 'CONDITION') {
       config = { expr: s.expr };
     } else if (s.type === 'NOTIFY') {
       config = { channelBindingId: s.channelBindingId, template: s.template };
     } else if (s.type === 'COMPUTER_CONTROL') {
-      config = { skillId: s.skillId };
+      if (!s.deviceId.trim()) {
+        errors[s.localId] = 'COMPUTER_CONTROL 必須選擇線上可用裝置（config.deviceId）';
+      }
+      config = { skillId: s.skillId, deviceId: s.deviceId.trim() };
     } else {
       try {
         config = s.configText.trim() ? JSON.parse(s.configText) : {};
@@ -230,6 +249,7 @@ function StepCard({
   index,
   total,
   error,
+  agentId,
   onChange,
   onTypeChange,
   onRemove,
@@ -239,11 +259,15 @@ function StepCard({
   index: number;
   total: number;
   error?: string;
+  agentId?: string;
   onChange: (patch: Partial<EditableStep>) => void;
   onTypeChange: (t: StepType) => void;
   onRemove: () => void;
   onMove: (dir: -1 | 1) => void;
 }) {
+  const deviceReq = requirementForStep({ type: step.type, toolName: step.toolName });
+  const needsDevice = deviceReq != null;
+
   return (
     <div className="rounded-lg border border-border p-4">
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -278,11 +302,21 @@ function StepCard({
       {step.type === 'TOOL' && (
         <div className="space-y-2">
           <Field label="工具名稱 Tool">
-            <input className="input" value={step.toolName} onChange={(e) => onChange({ toolName: e.target.value })} placeholder="例如 scan_invoices" />
+            <input
+              className="input"
+              value={step.toolName}
+              onChange={(e) => onChange({ toolName: e.target.value })}
+              placeholder="例如 scan_invoices 或 device-mcp:line-desktop:send_message_manual"
+            />
           </Field>
           <Field label="參數 Args（JSON）">
             <textarea className="input font-mono text-xs" rows={4} value={step.toolArgsText} onChange={(e) => onChange({ toolArgsText: e.target.value })} />
           </Field>
+          {isDeviceMcpLineTool(step.toolName) && (
+            <p className="text-xs text-amber-300">
+              LINE 桌面 MCP 工具：必須指定綁定且線上、MCP READY 的裝置；寄送類工具另需 run 核准。
+            </p>
+          )}
         </div>
       )}
 
@@ -304,9 +338,28 @@ function StepCard({
       )}
 
       {step.type === 'COMPUTER_CONTROL' && (
-        <Field label="技能 Skill ID">
-          <input className="input" value={step.skillId} onChange={(e) => onChange({ skillId: e.target.value })} placeholder="skillId" />
-        </Field>
+        <div className="space-y-2">
+          <Field label="技能 Skill ID">
+            <input className="input" value={step.skillId} onChange={(e) => onChange({ skillId: e.target.value })} placeholder="skillId" />
+          </Field>
+        </div>
+      )}
+
+      {needsDevice && deviceReq && (
+        <div className="mt-3">
+          {agentId ? (
+            <DeviceSelector
+              id={`step-device-${step.localId}`}
+              agentId={agentId}
+              requirement={deviceReq}
+              value={step.deviceId}
+              onChange={(deviceId) => onChange({ deviceId })}
+              required
+            />
+          ) : (
+            <p className="text-xs text-rose-400">此工作流未關聯員工，無法載入可用裝置清單。</p>
+          )}
+        </div>
       )}
 
       {step.type === 'AGENT' && (
@@ -351,6 +404,7 @@ export default function WorkflowEditorPage() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [savedMsg, setSavedMsg] = useState('');
   const [runId, setRunId] = useState<string | null>(null);
+  const [validatingDevices, setValidatingDevices] = useState(false);
 
   useEffect(() => {
     const r = searchParams.get('run');
@@ -411,11 +465,47 @@ export default function WorkflowEditorPage() {
     },
   });
 
-  function saveSteps() {
+  async function saveSteps() {
     const result = buildServerSteps(steps);
     if (!result.ok) {
       setFieldErrors(result.errors);
       return;
+    }
+    // Fail-closed: never persist device-bound steps without agent context.
+    const agentId = wfQuery.data?.agentId;
+    const noAgentErrors = deviceBoundStepsAgentErrors(steps, agentId);
+    if (Object.keys(noAgentErrors).length) {
+      setFieldErrors(noAgentErrors);
+      return;
+    }
+    // Fail-closed: never persist offline/ineligible deviceId (no silent swap).
+    if (agentId) {
+      setValidatingDevices(true);
+      const deviceErrors: Record<string, string> = {};
+      try {
+        for (const s of steps) {
+          const req = requirementForStep({ type: s.type, toolName: s.toolName });
+          if (!req || !s.deviceId.trim()) continue;
+          try {
+            const elig = await API.get<{ devices: Array<{ id: string }> }>(
+              `/api/agents/${agentId}/eligible-devices?requirement=${encodeURIComponent(req)}`,
+            );
+            const ok = (elig.devices ?? []).some((d) => d.id === s.deviceId.trim());
+            if (!ok) {
+              deviceErrors[s.localId] =
+                '所選裝置目前不在線上可用清單（離線／不合格／未綁定）。請明確改選其他線上裝置後再儲存；系統不會自動切換。';
+            }
+          } catch {
+            deviceErrors[s.localId] = '無法驗證裝置資格，已拒絕儲存（fail-closed）';
+          }
+        }
+      } finally {
+        setValidatingDevices(false);
+      }
+      if (Object.keys(deviceErrors).length) {
+        setFieldErrors(deviceErrors);
+        return;
+      }
     }
     setFieldErrors({});
     stepsMut.mutate({ steps: result.steps });
@@ -620,6 +710,7 @@ export default function WorkflowEditorPage() {
                     index={idx}
                     total={steps.length}
                     error={fieldErrors[s.localId]}
+                    agentId={wfQuery.data?.agentId}
                     onChange={(patch) => updateStep(s.localId, patch)}
                     onTypeChange={(t) => changeType(s.localId, t)}
                     onRemove={() => removeStep(s.localId)}
@@ -630,8 +721,13 @@ export default function WorkflowEditorPage() {
             )}
 
             <div className="flex justify-end">
-              <button type="button" className="btn-primary" onClick={saveSteps} disabled={stepsMut.isPending}>
-                <Save className="h-4 w-4" /> 儲存步驟
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => void saveSteps()}
+                disabled={stepsMut.isPending || validatingDevices}
+              >
+                <Save className="h-4 w-4" /> {validatingDevices ? '驗證裝置中…' : '儲存步驟'}
               </button>
             </div>
           </section>

@@ -49,6 +49,8 @@ enum SkillOrigin {
   UPLOADED
   BUILTIN
   CLI_GENERATED
+  /// Produced by record-and-replay / event-stream capture (Codex MCP).
+  RECORDED
 }
 
 enum SkillKind {
@@ -89,6 +91,63 @@ enum RunStatus {
   CANCELLED
 }
 
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// Who/what originated a change proposal (operator suggestion or system signal).
+enum ProposalSource {
+  OPERATOR
+  VIOLATION
+  SEMANTIC
+  /// Repeated successful trajectory detection (advisory; never auto-promotes).
+  TRAJECTORY
+  /// Scheduled reflection agent recommendation; advisory until FDE approval.
+  REFLECTION
+}
+
+/// Lifecycle of a change proposal in the FDE inbox.
+enum ProposalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// What the proposal would mutate if approved.
+enum ProposalTarget {
+  AGENT
+  SKILL
+  RESTRICTION
+  IDENTITY_CARD
+  SCHEDULE
+}
+
+enum ReflectionCycleStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum FeedbackSentiment {
+  POSITIVE
+  NEGATIVE
+  NEUTRAL
+  MIXED
+}
+
+enum ReflectionSuggestionStatus {
+  PENDING
+  PROPOSED
+  DISMISSED
+}
+
+enum ReflectionSuggestionTarget {
+  AGENT
+  SKILL
+}
+
 enum MessageRole {
   USER
   AGENT
@@ -110,19 +169,22 @@ enum BindingKind {
 
 // ── Identity & auth (local only) ─────────────────────────────────────────────
 model User {
-  id            String    @id
-  email         String    @unique
-  displayName   String
-  passwordHash  String
-  role          UserRole  @default(OWNER)
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
-  deletedAt     DateTime?
+  id           String    @id
+  email        String    @unique
+  displayName  String
+  passwordHash String
+  role         UserRole  @default(OWNER)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
 
   sessions          Session[]
   connectedAccounts ConnectedAccount[]
   agents            Agent[]
   conversations     Conversation[]
+  ownedDevices      Device[]
+  builderWorkspace  AgentBuilderWorkspace?
+  mcpOAuthCodes     McpOAuthCode[]
 }
 
 model Session {
@@ -134,7 +196,28 @@ model Session {
   expiresAt DateTime
   createdAt DateTime  @default(now())
   revokedAt DateTime?
+
   @@index([userId])
+}
+
+/// One-time OAuth authorization code for the public AIOS Remote MCP.
+/// Client registrations are self-contained signed metadata; only consumable
+/// authorization codes require durable server-side state.
+model McpOAuthCode {
+  id            String    @id
+  codeHash      String    @unique
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientIdHash  String
+  redirectUri   String
+  codeChallenge String
+  scope         String
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([expiresAt, consumedAt])
 }
 
 // ── Connected cloud accounts (M365 / Google) ─────────────────────────────────
@@ -156,6 +239,7 @@ model ConnectedAccount {
   updatedAt          DateTime      @updatedAt
 
   cloudFiles CloudFileRef[]
+
   @@unique([userId, provider, providerAccountId])
 }
 
@@ -174,6 +258,7 @@ model CloudFileRef {
   createdAt  DateTime         @default(now())
 
   agentTargets AgentFileTarget[]
+
   @@unique([accountId, externalId])
 }
 
@@ -192,19 +277,28 @@ model Agent {
   /// Capability restrictions, enforced at prompt + CLI-flag level:
   /// { webSearch, computerUse, sendEmail, cloudWrite, shell: boolean, notes?: string }
   restrictions  Json?
+  /// 成本政策 { dailyBudgetUsd:number, monthlyBudgetUsd:number, hardStop:boolean }；null = 不限制。
+  costPolicy    Json?
+  /// 身分卡 { oneLiner, purpose, canDo[], cannotDo[], servedAudience, exampleCommands[] }；null = 未設定。
+  identityCard  Json?
+  /// 風險分級 low|medium|high。
+  riskTier      String      @default("medium")
   maxRounds     Int         @default(5)
   status        AgentStatus @default(ACTIVE)
+  /// Internal infrastructure Agent; hidden from MEMBER workbench lists.
+  systemManaged Boolean     @default(false)
   createdBy     String
   creator       User        @relation(fields: [createdBy], references: [id])
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
   deletedAt     DateTime?
 
-  skills        AgentSkill[]
-  fileTargets   AgentFileTarget[]
-  workflows     Workflow[]
-  runs          Run[]
-  conversations Conversation[]
+  skills         AgentSkill[]
+  fileTargets    AgentFileTarget[]
+  workflows      Workflow[]
+  runs           Run[]
+  conversations  Conversation[]
+  deviceBindings AgentDevice[]
 }
 
 model AgentSkill {
@@ -212,6 +306,7 @@ model AgentSkill {
   agent   Agent  @relation(fields: [agentId], references: [id], onDelete: Cascade)
   skillId String
   skill   Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
   @@id([agentId, skillId])
 }
 
@@ -221,30 +316,167 @@ model AgentFileTarget {
   cloudFileRefId String
   cloudFileRef   CloudFileRef @relation(fields: [cloudFileRefId], references: [id], onDelete: Cascade)
   purpose        String?
+
   @@id([agentId, cloudFileRefId])
 }
 
 // ── Skills ────────────────────────────────────────────────────────────────────
 model Skill {
-  id            String      @id
-  slug          String      @unique
-  name          String
-  origin        SkillOrigin
-  kind          SkillKind
-  version       Int          @default(1)
-  contentMd     String
-  assets        Json?
-  generator     String?
-  executionEnv  ExecutionEnv @default(CLI)
-  understanding Json?
-  reviewStatus  SkillReview @default(PENDING_UNDERSTANDING)
-  confirmedBy   String?
-  confirmedAt   DateTime?
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
-  deletedAt     DateTime?
+  id              String       @id
+  slug            String       @unique
+  name            String
+  origin          SkillOrigin
+  kind            SkillKind
+  version         Int          @default(1)
+  contentMd       String
+  assets          Json?
+  generator       String?
+  executionEnv    ExecutionEnv @default(CLI)
+  understanding   Json?
+  reviewStatus    SkillReview  @default(PENDING_UNDERSTANDING)
+  confirmedBy     String?
+  confirmedAt     DateTime?
+  /// Pointer to the currently promoted stable SkillVersion.id (null = none yet).
+  stableVersionId String?
+  /// Pointer to the latest canary SkillVersion.id (null = none yet).
+  canaryVersionId String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  deletedAt       DateTime?
 
   agents AgentSkill[]
+}
+
+// Content-addressed skill version history. Additive layer: existing Skill.contentMd
+// / Skill.version remain the live path until loaders are switched to these pointers.
+// channel: canary | stable | archived. Rollback = switch Skill.stableVersionId only.
+model SkillVersion {
+  id          String   @id
+  skillId     String
+  version     Int
+  contentHash String // sha256(contentMd)
+  contentMd   String
+  /// Skill IR schema 版本（例如 "aios.skill-ir/1"）；舊版本為 null
+  schemaVersion String?
+  /// 版本化、機器可讀的 Skill IR；舊版本為 null（additive，Native path 零回歸）
+  specJson      Json?
+  channel     String   @default("canary") // canary | stable | archived
+  createdBy   String?
+  createdAt   DateTime @default(now())
+
+  flowArtifacts FlowArtifact[]
+
+  @@unique([skillId, version])
+  @@index([skillId, channel])
+}
+
+enum RuntimeKind {
+  NATIVE
+  LANGFLOW
+}
+
+enum FlowArtifactStatus {
+  COMPILED
+  VALIDATED
+  REJECTED
+  SUPERSEDED
+}
+
+/// 由已核准 Skill IR 依固定 Template 確定性編譯出的不可變、內容定址 Runtime 產物。
+/// Runtime ≠ Engine：LANGFLOW 只是 RuntimeKind，永不進 Engine enum。
+model FlowArtifact {
+  id              String             @id
+  /// 來源 SkillVersion（可空：未來 workflow 來源產物）
+  skillVersionId  String?
+  skillVersion    SkillVersion?      @relation(fields: [skillVersionId], references: [id], onDelete: SetNull)
+  /// 來源 Workflow id（暫不建 FK relation，避免動 Workflow model）
+  workflowId      String?
+  runtimeKind     RuntimeKind
+  /// 固定 template 名（例如 email-triage-readonly-v1）
+  template        String
+  templateVersion String?
+  compilerVersion String
+  /// 已遮罩的 canonical artifact JSON（永不含明文 secret）
+  artifactJson    Json
+  /// sha256 hex of canonical(artifactJson)，遮罩後計算
+  digest          String
+  status          FlowArtifactStatus @default(COMPILED)
+  /// 已遮罩 metadata
+  metadata        Json?
+  createdBy       String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  deployments RuntimeDeployment[]
+
+  @@index([skillVersionId])
+  @@index([digest])
+  @@index([status, createdAt])
+}
+
+enum DeploymentEnvironment {
+  SANDBOX
+  STAGING
+  PRODUCTION
+}
+
+enum DeploymentChannel {
+  CANARY
+  STABLE
+}
+
+/// FDE 啟用的 Runtime 部署 pointer（artifact × env × channel）。
+/// 同 skill+env+channel 僅一列 active；rollback 只切 pointer，不刪列。
+model RuntimeDeployment {
+  id              String                @id
+  artifactId      String
+  artifact        FlowArtifact          @relation(fields: [artifactId], references: [id], onDelete: Restrict)
+  /// 由 artifact.skillVersion.skillId 反正規化，供 active pointer 範圍使用
+  skillId         String
+  environment     DeploymentEnvironment
+  channel         DeploymentChannel
+  /// Adapter 回傳的 opaque runtime binding（落地前 deep-redact）
+  runtimeBinding  Json
+  deployedBy      String?
+  active          Boolean               @default(true)
+  activatedAt     DateTime              @default(now())
+  deactivatedAt   DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@unique([artifactId, environment, channel])
+  @@index([skillId, environment, channel, active])
+}
+
+/// Per-deployment dead-letter for rate-limit / circuit-open / runtime failure (Phase 6).
+/// Manual FDE replay only; never auto-retry side effects.
+enum RuntimeDeadLetterStatus {
+  PENDING
+  REPLAYED
+  DISCARDED
+}
+
+model RuntimeDeadLetter {
+  id             String                  @id
+  /// 原始被拒/失敗的 Run（可空：派送前拒時可能尚無 Run）
+  runId          String?
+  workflowId     String
+  deploymentId   String?
+  artifactId     String?
+  /// RATE_LIMITED | CIRCUIT_OPEN | RUNTIME_UNREACHABLE | TIMEOUT
+  code           String
+  /// 已遮罩原因
+  reason         String
+  /// deepRedactSecrets 後的 dispatch input（含 messageId）
+  payload        Json
+  status         RuntimeDeadLetterStatus @default(PENDING)
+  replayedRunId  String?
+  replayedBy     String?
+  replayedAt     DateTime?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  @@index([status, createdAt])
 }
 
 // ── Workflows (many per agent) ────────────────────────────────────────────────
@@ -255,6 +487,8 @@ model Workflow {
   name        String
   description String
   enabled     Boolean   @default(true)
+  /// opt-in 走 Temporal 耐久執行
+  durable     Boolean   @default(false)
   trigger     Json
   inputSchema Json?
   createdAt   DateTime  @default(now())
@@ -276,6 +510,7 @@ model WorkflowStep {
   config       Json
   verifyRubric String?
   onFail       Json?
+
   @@unique([workflowId, position])
   @@unique([workflowId, stepKey])
 }
@@ -296,8 +531,17 @@ model Run {
   startedAt   DateTime  @default(now())
   finishedAt  DateTime?
 
-  steps           RunStep[]
-  computerTasks   ComputerControlTask[]
+  /// 本次 Run 的 Runtime（null=既有 Native 路徑）
+  runtimeKind              RuntimeKind?
+  /// 執行所用 FlowArtifact.id（不建 FK，避免動既有 Run 行為）
+  artifactId               String?
+  /// 來源事件穩定 ID；duplicate trigger 併為單一 Run
+  idempotencyKey           String?      @unique
+  executionModelFamily     String?
+  verificationModelFamily  String?
+
+  steps RunStep[]
+
   @@index([agentId, startedAt])
 }
 
@@ -314,7 +558,49 @@ model RunStep {
   error     String?
   startedAt DateTime  @default(now())
   endedAt   DateTime?
+
   @@index([runId, stepKey])
+}
+
+// ── HITL pre-execution approval (high-risk agents) ────────────────────────────
+model ApprovalRequest {
+  id          String         @id
+  runId       String         @unique
+  agentId     String
+  reason      String
+  /// runAgent 的重派載荷（agentId/workflowId/input/triggeredBy），核准後據此續跑。
+  payload     Json
+  status      ApprovalStatus @default(PENDING)
+  resumeToken String         @unique
+  decidedBy   String?
+  decidedAt   DateTime?
+  createdAt   DateTime       @default(now())
+
+  @@index([status, createdAt])
+}
+
+// ── Change proposals (operator suggestions + violation/semantic signals) ─────
+// Single FDE inbox: only TRAINER/OWNER can approve/reject; operators may create.
+// Approve applies target mutation; reject is a pure status change (no target write).
+model ChangeProposal {
+  id                 String         @id
+  agentId            String
+  runId              String?
+  source             ProposalSource
+  proposedBy         String
+  targetType         ProposalTarget
+  targetId           String?
+  proposedChange     Json
+  severity           String         @default("medium")
+  confidence         Float?
+  status             ProposalStatus @default(PENDING)
+  decidedBy          String?
+  decidedAt          DateTime?
+  resultingVersionId String?
+  createdAt          DateTime       @default(now())
+
+  @@index([status, createdAt])
+  @@index([agentId, createdAt])
 }
 
 // ── Conversations (chat with an agent) ────────────────────────────────────────
@@ -339,7 +625,78 @@ model Message {
   content        String
   runId          String?
   createdAt      DateTime     @default(now())
+
   @@index([conversationId, createdAt])
+}
+
+// ── Scheduled reflection & optimization ──────────────────────────────────────
+
+/// One idempotent analysis window. Raw messages are never copied here.
+model ReflectionCycle {
+  id                    String                @id
+  windowStart           DateTime
+  windowEnd             DateTime
+  status                ReflectionCycleStatus @default(RUNNING)
+  triggeredBy           String
+  sourceMessageCount    Int                   @default(0)
+  analyzedFeedbackCount Int                   @default(0)
+  summary               Json?
+  runIds                String[]              @default([])
+  error                 String?
+  createdAt             DateTime              @default(now())
+  finishedAt            DateTime?
+
+  feedback    ReflectionFeedback[]
+  suggestions ReflectionSuggestion[]
+
+  @@unique([windowStart, windowEnd])
+  @@index([status, windowEnd])
+}
+
+/// Redacted per-message reflection evidence for FDE review.
+model ReflectionFeedback {
+  id             String            @id
+  cycleId        String
+  cycle          ReflectionCycle   @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  messageId      String
+  conversationId String
+  userId         String
+  agentId        String
+  sentiment      FeedbackSentiment @default(NEUTRAL)
+  categories     String[]          @default([])
+  excerpt        String
+  reason         String?
+  messageAt      DateTime
+  createdAt      DateTime          @default(now())
+
+  @@unique([cycleId, messageId])
+  @@index([agentId, messageAt])
+  @@index([sentiment, messageAt])
+}
+
+/// Advisory optimization recommendation. It cannot mutate Agent/Skill directly.
+model ReflectionSuggestion {
+  id                 String                     @id
+  cycleId            String
+  cycle              ReflectionCycle            @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+  targetType         ReflectionSuggestionTarget
+  agentId            String
+  skillId            String?
+  title              String
+  rationale          String
+  proposedGuidance   String
+  evidenceMessageIds String[]                   @default([])
+  confidence         Float?
+  priority           String                     @default("medium")
+  status             ReflectionSuggestionStatus @default(PENDING)
+  changeProposalId   String?
+  decidedBy          String?
+  decidedAt          DateTime?
+  createdAt          DateTime                   @default(now())
+
+  @@index([status, createdAt])
+  @@index([agentId, createdAt])
+  @@index([skillId, createdAt])
 }
 
 // ── Scheduling ────────────────────────────────────────────────────────────────
@@ -363,20 +720,26 @@ model ChannelBinding {
   label      String
   meta       Json?
   createdAt  DateTime    @default(now())
+
   @@unique([channel, externalId])
 }
 
-// ── Computer-control (Codex screen-recording skills) ─────────────────────────
-model ComputerControlTask {
+// ── Cost ledger (estimated; fail-closed budget guard at L7) ───────────────────
+// CLI engines do not return token usage — costs are estimates from char length
+// so a runaway agent loop can be hard-stopped by daily/monthly budget.
+model CostLog {
   id           String   @id
-  runId        String
-  run          Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
-  stepKey      String
-  skillId      String
-  status       String
-  dispatchedTo String?
-  result       Json?
+  agentId      String
+  runId        String?
+  engine       Engine
+  inputTokens  Int
+  outputTokens Int
+  costUsd      Decimal  @db.Decimal(12, 6)
+  /// 對應 workflow step，null=非步驟情境
+  stepKey      String?
   createdAt    DateTime @default(now())
+
+  @@index([agentId, createdAt])
 }
 
 // ── Governance / ops ──────────────────────────────────────────────────────────
@@ -387,17 +750,13 @@ model AuditLog {
   entity    String
   entityId  String
   detail    Json?
+  /// Previous row's hash in the append-only chain (null for genesis / pre-backfill).
+  prevHash  String?
+  /// sha256 hex of canonical(prevHash + row content); null until backfilled.
+  hash      String?
   createdAt DateTime @default(now())
-  @@index([entity, entityId])
-}
 
-model Lesson {
-  id        String   @id
-  agentId   String
-  runId     String
-  signal    String
-  status    String   @default("pending")
-  createdAt DateTime @default(now())
+  @@index([entity, entityId])
 }
 
 // Tracks which wiki/summary paths have been embedded into Qdrant (index
@@ -413,4 +772,677 @@ model MemoryDoc {
 
   @@unique([agentId, path])
   @@index([agentId])
+}
+
+// ── Skill evaluation suites & promotion evidence ─────────────────────────────
+// Slice 2: evaluation contract + fail-closed release gate.
+// Evidence is always redacted before write; non-deterministic cases require
+// executeEngine != verifyEngine (cross-model verification invariant).
+
+enum EvalCaseKind {
+  POSITIVE_TRIGGER
+  NEGATIVE_TRIGGER
+  CONFUSION_PAIR
+  TRAJECTORY
+  OUTPUT_RUBRIC
+  PROMPT_INJECTION
+  RED_TEAM
+}
+
+enum EvalRunStatus {
+  PENDING
+  RUNNING
+  PASSED
+  FAILED
+  ERROR
+}
+
+enum EvalResultStatus {
+  PASS
+  FAIL
+  ERROR
+  SKIPPED
+}
+
+model EvalSuite {
+  id          String   @id
+  /// 此評測套件所屬技能（Skill 擁有 evaluation contract）。
+  skillId     String
+  name        String
+  description String?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cases EvalCase[]
+  runs  EvalRun[]
+
+  @@index([skillId])
+}
+
+model EvalCase {
+  id             String       @id
+  suiteId        String
+  kind           EvalCaseKind
+  name           String
+  /// 觸發語句 / 情境輸入 / 注入 payload（依 kind）。
+  input          Json
+  /// 期望結果：shouldTrigger、triggerKeywords、rubric、toolsInvoked、forbiddenOutput 等。
+  expected       Json?
+  /// 決定性工具檢查：必須用到的工具。
+  requiredTools  String[]
+  /// 決定性工具檢查：禁止用到的工具。
+  forbiddenTools String[]
+  weight         Int          @default(1)
+  createdAt      DateTime     @default(now())
+
+  suite   EvalSuite    @relation(fields: [suiteId], references: [id], onDelete: Cascade)
+  results EvalResult[]
+
+  @@index([suiteId])
+}
+
+model EvalRun {
+  id                 String        @id
+  suiteId            String
+  skillId            String
+  /// 被評測的候選 SkillVersion.id（null=尚未鎖定版本）。
+  candidateVersionId String?
+  /// 候選 execute 引擎（決定跨模型不變式）。
+  executeEngine      Engine
+  /// 非決定性評測用的驗證引擎，必須 != executeEngine。
+  verifyEngine       Engine
+  status             EvalRunStatus @default(PENDING)
+  totalCases         Int           @default(0)
+  passedCases        Int           @default(0)
+  failedCases        Int           @default(0)
+  /// 本次 run 累計成本（USD）。
+  costUsd            Decimal       @default(0) @db.Decimal(12, 6)
+  triggeredBy        String?
+  startedAt          DateTime      @default(now())
+  finishedAt         DateTime?
+
+  suite   EvalSuite    @relation(fields: [suiteId], references: [id], onDelete: Cascade)
+  results EvalResult[]
+
+  @@index([suiteId])
+  @@index([skillId, candidateVersionId])
+}
+
+model EvalResult {
+  id            String           @id
+  runId         String
+  caseId        String
+  status        EvalResultStatus
+  /// 0..1 分數（非金額，可為 null）。
+  score         Float?
+  /// 非決定性評測所用的驗證引擎；決定性檢查為 null。
+  engine        Engine?
+  /// true=免 LLM 的決定性檢查。
+  deterministic Boolean          @default(true)
+  latencyMs     Int?
+  /// 本 case 成本（USD）。
+  costUsd       Decimal          @default(0) @db.Decimal(12, 6)
+  /// 已 redact 的證據（輸出片段 / 判決理由）。
+  evidence      String           @default("")
+  /// 高風險失敗（prompt-injection / red-team 破防）。
+  highRisk      Boolean          @default(false)
+  /// 高風險是否已由 FDE 解除。
+  resolved      Boolean          @default(false)
+  createdAt     DateTime         @default(now())
+
+  run  EvalRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  case EvalCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([caseId])
+}
+
+// ── MCP Capability Gateway (consumer-side registry) ──────────────────────────
+
+enum McpTransport {
+  STDIO
+  LOOPBACK_HTTP
+  REMOTE_HTTP
+}
+
+enum McpTrustTier {
+  UNTRUSTED
+  TRUSTED
+  INTERNAL
+}
+
+/// Registered MCP server the capability broker may dispatch to.
+/// Secrets live only as env/keychain REFERENCES (credentialRef); never plaintext.
+model McpServerRegistry {
+  id                   String       @id
+  /// Stable logical id used by brokerDispatch (distinct from row id).
+  serverId             String       @unique
+  name                 String
+  transport            McpTransport
+  /// Absolute path to stdio binary (STDIO only).
+  command              String?
+  commandArgs          String[]     @default([])
+  cwd                  String?
+  /// Loopback HTTP base URL (LOOPBACK_HTTP only).
+  url                  String?
+  protocolVersion      String       @default("2024-11-05")
+  /// Disabled by default — FDE must enable.
+  enabled              Boolean      @default(false)
+  trustTier            McpTrustTier @default(UNTRUSTED)
+  /// Secret REFERENCE only, e.g. "env:MY_TOKEN" or "keychain:name". Never plaintext.
+  credentialRef        String?
+  /// Empty allowlist ⇒ nobody allowed (fail-closed).
+  allowedAgentIds      String[]     @default([])
+  toolAllowlist        String[]     @default([])
+  resourceAllowlist    String[]     @default([])
+  /// read | write | admin
+  readWriteClass       String       @default("read")
+  /// Agent restriction flags that must be true (e.g. ["computerUse"]).
+  requiredRestrictions String[]     @default([])
+  riskTier             String       @default("medium")
+  approvalRequired     Boolean      @default(false)
+  timeoutMs            Int          @default(12000)
+  healthStatus         String       @default("unknown")
+  lastVersion          String?
+  lastHealthAt         DateTime?
+  createdBy            String
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  @@index([enabled])
+}
+
+// ── Durable Recording Sessions (Record & Replay) ─────────────────────────────
+
+enum RecordingSessionStatus {
+  RECORDING
+  STOPPED
+  COMPILING
+  RECORDED
+  INTERRUPTED
+  FAILED
+}
+
+/// Server-owned Record & Replay capture session. The host holds the real
+/// artifact paths (metadataPath/eventsPath); clients receive ONLY opaque ids.
+/// Persisted so a server restart can mark orphaned/in-flight sessions
+/// INTERRUPTED (fail-closed: record again rather than trust stale ownership).
+model RecordingSession {
+  id           String                 @id
+  /// Owner user id. Every operation is authorized against this (fail-closed).
+  userId       String
+  /// Agent selected when capture began. Null only for legacy pre-migration rows.
+  agentId      String?
+  status       RecordingSessionStatus @default(RECORDING)
+  /// Opaque artifact id handed to clients after stop (NEVER a real path).
+  artifactId   String?
+  /// Host-held capture product paths — INTERNAL ONLY, never returned to clients.
+  metadataPath String?
+  eventsPath   String?
+  /// Draft skill produced by compile-to-draft (stops at AWAITING_USER_CONFIRM).
+  skillId      String?
+  /// Optional last progress note.
+  note         String?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+  stoppedAt    DateTime?
+  compiledAt   DateTime?
+
+  @@index([userId])
+  @@index([agentId])
+  @@index([status])
+}
+
+// ── Run traces (post-run redacted trajectory sedimentation) ───────────────────
+
+enum RunTraceOutcome {
+  SUCCEEDED
+  FAILED
+}
+
+/// Redacted post-run trace summary. Never stores secrets or raw prompts.
+model RunTrace {
+  id               String          @id
+  agentId          String
+  runId            String          @unique
+  /// Redacted skill selection (slugs + short metadata), NO skill bodies.
+  selectedSkills   Json
+  /// Redacted capability/step trajectory (step types, tools, verdict pass/fail), NO raw prompts.
+  trajectory       Json
+  /// Redacted verifier feedback snippets.
+  verifierFeedback Json
+  outcome          RunTraceOutcome
+  /// Stable hash of the successful trajectory shape for dedupe detection (null when failed).
+  trajectoryKey    String?
+  engineExecute    Engine
+  engineVerify     Engine
+  /// 本 trace 的 Runtime（null=既有 Native 路徑）
+  runtimeKind      RuntimeKind?
+  /// 執行所用 FlowArtifact.id（不建 FK）
+  artifactId       String?
+  createdAt        DateTime        @default(now())
+
+  @@index([agentId, createdAt])
+  @@index([trajectoryKey])
+}
+
+// ── A2A gateway (opt-in remote delegation to FDE-approved peers) ──────────────
+
+enum A2ATaskStatus {
+  PENDING
+  SUBMITTED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+/// FDE-registered external A2A peer. DISABLED by default (fail-closed).
+model A2APeer {
+  id              String    @id
+  peerId          String    @unique
+  name            String
+  description     String    @default("")
+  baseUrl         String
+  /// opt-in remote delegation — DISABLED by default (fail-closed).
+  enabled         Boolean   @default(false)
+  /// Reference to an auth credential (e.g. env:FOO / keychain:bar) — NEVER a resolved secret.
+  credentialRef   String?
+  /// Risk tier of this peer: low|medium|high.
+  riskTier        String    @default("high")
+  /// Max payload bytes accepted for a submitted task (bounded).
+  maxPayloadBytes Int       @default(65536)
+  /// Per-task timeout in ms.
+  timeoutMs       Int       @default(30000)
+  /// FDE user id who approved/registered this peer.
+  approvedBy      String?
+  approvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  tasks           A2ATask[]
+
+  @@index([enabled])
+}
+
+model A2ATask {
+  id              String        @id
+  peerId          String
+  peer            A2APeer       @relation(fields: [peerId], references: [id], onDelete: Cascade)
+  /// Local agent that originated the delegation.
+  agentId         String?
+  /// Remote task id returned by the peer (null until submitted).
+  remoteTaskId    String?
+  status          A2ATaskStatus @default(PENDING)
+  /// Redacted request payload summary.
+  requestSummary  Json?
+  /// Redacted response/status summary.
+  responseSummary Json?
+  submittedBy     String
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([peerId, createdAt])
+  @@index([status])
+}
+
+// ── Agent Builder (CEO-friendly requirements interview → plan → authorize → test → finalize) ──
+
+/// Lifecycle of a durable Agent Builder interview/build session.
+enum AgentBuildSessionStatus {
+  DISCOVERY
+  PLAN_READY
+  AWAITING_FDE
+  BUILDING
+  AWAITING_TEST_DATA
+  TESTING
+  PASSED
+  FAILED
+  ACTIVE
+  ABANDONED
+}
+
+/// A non-effective, reviewable Harness evolution produced while the user is
+/// still talking. READY means the draft compiled successfully — never that it
+/// has been approved, attached or activated.
+enum AgentBuildIterationStatus {
+  QUEUED
+  ANALYZING
+  BUILDING
+  READY
+  FAILED
+  SUPERSEDED
+}
+
+/// Durable Agent Builder session. Transcript/brief/plan/test evidence are always redacted before persist.
+model AgentBuildSession {
+  id                   String                  @id
+  /// Session owner (creator). Only owner + FDE may read; foreign users get 404.
+  userId               String
+  /// 外部 client 綁定：來源 + 對話 id 構成穩定身分（建置初期用）。
+  externalSource            String?
+  externalConversationId    String?
+  externalConversationTitle String?
+  /// 第二階段鍵：本段建置所綁定的員工。綁定後同一 agent 的後續訓練一律續接此 session。
+  agentId                   String?
+  status               AgentBuildSessionStatus @default(DISCOVERY)
+  /// Redacted chat transcript [{ role, content, at }].
+  transcript           Json                    @default("[]")
+  /// Structured requirements brief filled during discovery (redacted).
+  brief                Json?
+  /// Capability plan: reuse/create, catalog matches, gaps (redacted, business language).
+  plan                 Json?
+  /// Discovery progress { answeredKeys[], currentKey?, total }.
+  progress             Json?
+  /// FDE-chosen build strategy: reuse | create.
+  strategy             String?
+  /// When strategy=reuse, the existing agent to attach the draft skill to.
+  targetAgentId        String?
+  /// Agent created by this session (create strategy) — remains PAUSED until finalize.
+  builtAgentId         String?
+  /// Builder-owned draft skill ids (AWAITING_USER_CONFIRM until FDE finalize).
+  draftSkillIds        String[]                @default([])
+  /// Redacted manual fixture payload for the real runAgent test.
+  testData             Json?
+  /// Redacted expected outcome description for the test gate.
+  testExpected         Json?
+  /// Compact redacted test result (never a fake pass).
+  testResult           Json?
+  /// Latest builder test Run id.
+  lastRunId            String?
+  /// Plain-language assistant message last returned to the client.
+  lastAssistantMessage String?
+  /// Redacted unsent UI fields { reply, testData, testExpected } for cross-device resume.
+  draftState           Json?
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+  /// 使用者主動捨棄未送審草稿的時間；軟刪，紀錄保留。
+  abandonedAt          DateTime?
+
+  iterations AgentBuildIteration[]
+
+  @@unique([userId, externalSource, externalConversationId], map: "AgentBuildSession_external_binding_key")
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+/// Append-only history of how a Builder conversation changed the proposed
+/// Agent. The artifact snapshot is a shadow draft and cannot execute until the
+/// existing FDE authorization/finalization gates compile it into live rows.
+model AgentBuildIteration {
+  id                 String                    @id
+  sessionId          String
+  session            AgentBuildSession         @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  sequence           Int
+  basedOnIterationId String?
+  triggerKind        String                    @default("message")
+  /// Redacted user input or source event that caused this iteration.
+  triggerSummary     String
+  status             AgentBuildIterationStatus @default(QUEUED)
+  /// Dynamic decision graph: facts, hypotheses, decisions, contradictions and open branches.
+  understanding      Json?
+  /// Business-facing change list for the end user and detailed change list for FDE.
+  proposedChanges    Json?
+  /// Shadow Harness snapshot: identity, skills, memory, tools, policies and test ideas.
+  artifactSnapshot   Json?
+  userSummary        String?
+  fdeSummary         String?
+  error              String?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
+
+  @@unique([sessionId, sequence])
+  @@index([sessionId, createdAt])
+  @@index([status, createdAt])
+}
+
+/// Cross-device draft for the first requirement before an AgentBuildSession exists.
+model AgentBuilderWorkspace {
+  userId    String   @id
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  newDraft  String?
+  updatedAt DateTime @updatedAt
+}
+
+// ── Multi-device execution platform (durable tasks; WS is wake-up only) ───────
+
+/// Host OS family of an enrolled execution device.
+enum DevicePlatform {
+  MACOS
+  WINDOWS
+  LINUX
+}
+
+/// Lifecycle of an execution device (registry row).
+enum DeviceStatus {
+  /// Created by FDE; waiting for one-time enrollment code consumption.
+  PENDING_ENROLLMENT
+  /// Token issued; may accept device REST/WS and tasks.
+  ACTIVE
+  /// Token revoked; fail-closed for all device auth.
+  REVOKED
+  /// Soft-disabled by FDE without destroying history.
+  DISABLED
+}
+
+/// Typed device work unit (never arbitrary shell).
+enum DeviceTaskKind {
+  COMPUTER_CONTROL
+  MCP_TOOL
+  SCREENSHOT
+  CAPABILITY_PROBE
+  LINE_DESKTOP
+  /// Install / reconcile a pinned device-local MCP package (server-defined manifest only).
+  MCP_INSTALL
+}
+
+/// Lifecycle of a device-local MCP installation record.
+enum DeviceMcpStatus {
+  REQUESTED
+  INSTALLING
+  READY
+  ERROR
+  DISABLED
+}
+
+/// Durable DeviceTask state machine.
+enum DeviceTaskStatus {
+  PENDING
+  DISPATCHED
+  ACKED
+  RUNNING
+  AWAITING_CONFIRM
+  SUCCEEDED
+  FAILED
+  TIMEOUT
+  CANCELLED
+}
+
+/// Artifact uploaded outside WebSocket (screenshots, logs, binaries).
+enum DeviceArtifactKind {
+  SCREENSHOT
+  LOG
+  BINARY
+  OTHER
+}
+
+/// Execution device enrolled for targeted Computer Use / local MCP.
+/// Device token plaintext is returned once; only SHA-256 hash + safe prefix are stored.
+model Device {
+  id           String         @id
+  /// FDE/owner who registered the device row.
+  ownerUserId  String
+  owner        User           @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  name         String
+  platform     DevicePlatform
+  status       DeviceStatus   @default(PENDING_ENROLLMENT)
+  /// SHA-256 hex of device bearer token (null until enrolled).
+  tokenHash    String?        @unique
+  /// Safe identification prefix of the raw token (never full secret).
+  tokenPrefix  String?
+  /// Last validated capability document (strict schema; redacted).
+  capabilities Json?
+  /// Last successful REST/WS activity.
+  lastSeenAt   DateTime?
+  osVersion    String?
+  appVersion   String?
+  enrolledAt   DateTime?
+  revokedAt    DateTime?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  enrollments   DeviceEnrollment[]
+  agentBindings AgentDevice[]
+  tasks         DeviceTask[]
+  artifacts     DeviceArtifact[]
+  mcpInstalls   DeviceMcpInstallation[]
+
+  @@index([ownerUserId, status])
+  @@index([status, lastSeenAt])
+  @@index([tokenPrefix])
+}
+
+/// One-time enrollment code for a Device. Plaintext code returned once; only hash+prefix stored.
+model DeviceEnrollment {
+  id         String    @id
+  deviceId   String
+  device     Device    @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  /// SHA-256 hex of enrollment code.
+  codeHash   String    @unique
+  /// Safe prefix of the raw enrollment code.
+  codePrefix String
+  expiresAt  DateTime
+  /// FDE user id who issued the code.
+  createdBy  String
+  /// When the code was consumed (null = unused). Reuse is fail-closed.
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([deviceId, createdAt])
+  @@index([expiresAt])
+}
+
+/// Explicit Agent ↔ Device binding. Only ACTIVE devices may be bound.
+model AgentDevice {
+  agentId  String
+  agent    Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  deviceId String
+  device   Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  /// FDE who created the binding.
+  boundBy  String?
+  boundAt  DateTime @default(now())
+
+  @@id([agentId, deviceId])
+  @@index([deviceId])
+}
+
+/// Durable device task. PostgreSQL is the sole source of truth; WS only wakes with taskId.
+model DeviceTask {
+  id                     String           @id
+  deviceId               String
+  device                 Device           @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  /// Optional originating agent / run context.
+  agentId                String?
+  runId                  String?
+  stepKey                String?
+  kind                   DeviceTaskKind
+  status                 DeviceTaskStatus @default(PENDING)
+  /// Client-supplied idempotency key; unique per device when present.
+  idempotencyKey         String?
+  /// Redacted task payload (typed; never arbitrary shell).
+  payload                Json
+  /// Redacted terminal result (first writer wins).
+  result                 Json?
+  /// Redacted error object when FAILED/TIMEOUT/CANCELLED.
+  error                  Json?
+  /// Opaque lease id issued on ACK; renewals must match.
+  leaseId                String?
+  leaseExpiresAt         DateTime?
+  /// Hard deadline; reclaim → TIMEOUT when exceeded.
+  deadlineAt             DateTime?
+  /// Redacted progress snapshot.
+  progress               Json?
+  /// User who requested this task (for confirm/reject authorization).
+  requestedByUserId      String?
+  /// When true, device must pause at AWAITING_CONFIRM with a screenshot artifact.
+  confirmationRequired   Boolean          @default(false)
+  /// Artifact id of the confirmation screenshot (must belong to this task).
+  confirmationArtifactId String?
+  confirmedAt            DateTime?
+  confirmedBy            String?
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+  /// When the task first entered a terminal status.
+  terminalAt             DateTime?
+
+  artifacts DeviceArtifact[]
+
+  @@unique([deviceId, idempotencyKey])
+  @@index([deviceId, status])
+  @@index([status, leaseExpiresAt])
+  @@index([status, deadlineAt])
+  @@index([agentId, createdAt])
+  @@index([requestedByUserId, status])
+}
+
+/// Pinned device-local MCP package installation (LINE Desktop etc.). No arbitrary command/URL.
+model DeviceMcpInstallation {
+  id               String          @id
+  deviceId         String
+  device           Device          @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  /// Stable key, e.g. line-desktop-mcp.
+  mcpKey           String
+  packageName      String
+  version          String
+  /// Expected tarball / package content digest (hex sha256).
+  sha256           String
+  status           DeviceMcpStatus @default(REQUESTED)
+  /// Tools this install may expose (subset of server allowlist).
+  toolAllowlist    String[]        @default([])
+  /// low | medium | high
+  riskTier         String          @default("medium")
+  /// When true, send/write tools require a real ApprovalRequest on the run.
+  approvalRequired Boolean         @default(false)
+  installedBy      String?
+  lastHealthAt     DateTime?
+  /// Redacted last error message.
+  lastError        String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@unique([deviceId, mcpKey])
+  @@index([mcpKey, status])
+  @@index([deviceId, status])
+}
+
+/// Binary/text artifact bound to a DeviceTask. Stored under data root via safepath; never via WS.
+model DeviceArtifact {
+  id                     String             @id
+  taskId                 String
+  task                   DeviceTask         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  deviceId               String
+  device                 Device             @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  /// Monotonic sequence within a task (upload order).
+  seq                    Int
+  kind                   DeviceArtifactKind
+  /// Content digest of stored bytes.
+  sha256                 String
+  sizeBytes              Int
+  mimeType               String
+  /// Relative path under device-artifacts data root (never external absolute paths).
+  storageRelPath         String
+  /// Server-confirmed redaction flag. Images require clientDeclaredRedacted=true (fail-closed).
+  redacted               Boolean            @default(false)
+  /// Client attestation that content was redacted on-device before upload.
+  clientDeclaredRedacted Boolean            @default(false)
+  expiresAt              DateTime
+  /// Redacted metadata only.
+  meta                   Json?
+  createdAt              DateTime           @default(now())
+
+  @@unique([taskId, seq])
+  @@index([deviceId, createdAt])
+  @@index([expiresAt])
 }

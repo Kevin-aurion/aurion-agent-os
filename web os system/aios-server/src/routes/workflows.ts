@@ -13,8 +13,9 @@ import { requireAuth, requireTrainer } from '../lib/guard.js';
 import { audit } from '../lib/audit.js';
 import { sha256 } from '../lib/crypto.js';
 import { runWorkflow } from '../workflow/runner.js';
+import { requireVisibleAgent, requireVisibleWorkflow } from '../lib/agentaccess.js';
 
-const TriggerSchema = z
+export const TriggerSchema = z
   .object({
     type: z.enum(['schedule', 'manual', 'keyword', 'webhook', 'event']),
     cron: z.string().optional(),
@@ -22,10 +23,13 @@ const TriggerSchema = z
     topic: z.string().optional(),
     secret: z.string().optional(), // plaintext, only ever accepted in — never persisted
     secretHash: z.string().optional(),
+    timezone: z.string().min(1).max(120).optional(),
+    input: z.record(z.unknown()).optional(),
+    scheduleEnabled: z.boolean().optional(),
   })
   .passthrough();
 
-const StepInputSchema = z.object({
+export const StepInputSchema = z.object({
   stepKey: z.string().min(1),
   type: z.enum(['DO', 'TOOL', 'AGENT', 'CONDITION', 'NOTIFY', 'COMPUTER_CONTROL']),
   config: z.record(z.unknown()).default({}),
@@ -34,7 +38,7 @@ const StepInputSchema = z.object({
 });
 
 /** For 'webhook' triggers, hash any plaintext `secret` on the way in and never persist it raw. */
-function normalizeTrigger(trigger: Record<string, unknown>): Record<string, unknown> {
+export function normalizeTrigger(trigger: Record<string, unknown>): Record<string, unknown> {
   const t: Record<string, unknown> = { ...trigger };
   if (t.type === 'webhook' && typeof t.secret === 'string' && t.secret.trim()) {
     t.secretHash = sha256(t.secret.trim());
@@ -45,7 +49,7 @@ function normalizeTrigger(trigger: Record<string, unknown>): Record<string, unkn
 
 /** Keep the Schedule row in sync with a workflow's trigger config, and tell the
  * live BullMQ scheduler so changes take effect without a restart. */
-async function syncSchedule(workflowId: string, trigger: Record<string, unknown>, enabled: boolean): Promise<void> {
+export async function syncSchedule(workflowId: string, trigger: Record<string, unknown>, enabled: boolean): Promise<void> {
   // Best-effort live-scheduler notifications; a down Redis must not break CRUD.
   const scheduler = await import('../scheduler/index.js').catch(() => null);
 
@@ -57,21 +61,29 @@ async function syncSchedule(workflowId: string, trigger: Record<string, unknown>
     return;
   }
   const cron = String(trigger.cron);
+  const timezone =
+    typeof trigger.timezone === 'string' && trigger.timezone.trim()
+      ? trigger.timezone.trim()
+      : config.tz;
+  const scheduleEnabled = enabled && trigger.scheduleEnabled !== false;
   const existing = await prisma.schedule.findFirst({ where: { workflowId } });
   let scheduleId: string;
   if (existing) {
-    await prisma.schedule.update({ where: { id: existing.id }, data: { cron, enabled } });
+    await prisma.schedule.update({
+      where: { id: existing.id },
+      data: { cron, timezone, enabled: scheduleEnabled },
+    });
     scheduleId = existing.id;
   } else {
     const created = await prisma.schedule.create({
-      data: { id: ulid(), workflowId, cron, timezone: config.tz, enabled },
+      data: { id: ulid(), workflowId, cron, timezone, enabled: scheduleEnabled },
     });
     scheduleId = created.id;
   }
   await scheduler?.syncSchedule?.(scheduleId).catch(() => {});
 }
 
-function serializeWorkflowSummary(w: {
+export function serializeWorkflowSummary(w: {
   id: string;
   agentId: string;
   name: string;
@@ -132,6 +144,19 @@ export async function workflowRoutes(app: FastifyInstance) {
   app.get('/api/agents/:agentId/workflows', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { agentId } = z.object({ agentId: z.string() }).parse(req.params);
+      const { scope } = z.object({ scope: z.enum(['mine', 'all']).default('mine') }).parse(req.query);
+      if (scope === 'all') {
+        if (req.user!.scope || !['OWNER', 'TRAINER'].includes(req.user!.role)) {
+          throw errors.forbidden('Only an unscoped FDE session may list workflows across accounts');
+        }
+        const agent = await prisma.agent.findFirst({
+          where: { id: agentId, deletedAt: null, systemManaged: false },
+          select: { id: true },
+        });
+        if (!agent) throw errors.notFound('Agent not found');
+      } else {
+        await requireVisibleAgent(agentId, req.user!);
+      }
       const workflows = await prisma.workflow.findMany({
         where: { agentId, deletedAt: null },
         include: { _count: { select: { steps: true } }, schedules: true },
@@ -182,10 +207,48 @@ export async function workflowRoutes(app: FastifyInstance) {
     }
   });
 
+  // ── Compose from natural language (async draft; never blocks HTTP) ─────────
+  app.post('/api/agents/:agentId/workflows/compose', { preHandler: requireTrainer }, async (req, reply) => {
+    try {
+      const { agentId } = z.object({ agentId: z.string() }).parse(req.params);
+      const body = z
+        .object({
+          requirement: z.string().min(1),
+          engine: z.enum(['CLAUDE_CODE', 'CODEX', 'GROK']).default('CLAUDE_CODE'),
+        })
+        .parse(req.body);
+
+      const agent = await prisma.agent.findUnique({ where: { id: agentId } });
+      if (!agent || agent.deletedAt) throw errors.notFound(`Agent not found: ${agentId}`);
+
+      // Dynamic import avoids a static cycle: compose.ts imports helpers from this module.
+      const { composeWorkflowForAgent } = await import('../workflow/compose.js');
+      const { workflowId } = await composeWorkflowForAgent({
+        agentId,
+        requirement: body.requirement,
+        engine: body.engine,
+        createdBy: req.user!.sub,
+      });
+      await audit(req.user!.sub, 'workflow.compose', 'Workflow', workflowId, {
+        agentId,
+        engine: body.engine,
+      });
+
+      const full = await prisma.workflow.findUnique({
+        where: { id: workflowId },
+        include: { _count: { select: { steps: true } }, schedules: true },
+      });
+      return ok({ ...serializeWorkflowSummary(full!), composing: true });
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  });
+
   // ── Single workflow (+ ordered steps) ─────────────────────────────────────
   app.get('/api/workflows/:id', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { id } = z.object({ id: z.string() }).parse(req.params);
+      await requireVisibleWorkflow(id, req.user!);
       const workflow = await prisma.workflow.findUnique({
         where: { id },
         include: { steps: { orderBy: { position: 'asc' } }, schedules: true },
@@ -296,6 +359,7 @@ export async function workflowRoutes(app: FastifyInstance) {
     try {
       const { id } = z.object({ id: z.string() }).parse(req.params);
       const body = z.object({ input: z.record(z.unknown()).optional() }).parse(req.body ?? {});
+      await requireVisibleWorkflow(id, req.user!);
       const triggeredBy = `user:${req.user!.sub}`;
 
       const runId = await kickOffRun(app, id, body.input ?? {}, triggeredBy);
@@ -311,6 +375,7 @@ export async function workflowRoutes(app: FastifyInstance) {
     try {
       const { id } = z.object({ id: z.string() }).parse(req.params);
       const body = z.object({ message: z.string().optional() }).parse(req.body ?? {});
+      await requireVisibleWorkflow(id, req.user!);
       const triggeredBy = `test:${req.user!.sub}`;
 
       const runId = await kickOffRun(

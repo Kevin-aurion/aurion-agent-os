@@ -1,5 +1,6 @@
 // Uniform API envelope + typed error helper.
 import type { FastifyReply } from 'fastify';
+import { ZodError } from 'zod';
 
 export type Ok<T> = { success: true; data: T };
 export type Err = { success: false; error: { code: string; message: string; detail?: unknown } };
@@ -30,6 +31,12 @@ export const errors = {
 };
 
 export function sendError(reply: FastifyReply, e: unknown) {
+  if (e instanceof ZodError) {
+    return reply.code(400).send({
+      success: false,
+      error: { code: 'BAD_REQUEST', message: 'Invalid request', detail: e.flatten() },
+    } satisfies Err);
+  }
   if (e instanceof ApiError) {
     return reply.code(e.statusCode).send({
       success: false,
