@@ -540,8 +540,7 @@ model Run {
   executionModelFamily     String?
   verificationModelFamily  String?
 
-  steps         RunStep[]
-  computerTasks ComputerControlTask[]
+  steps RunStep[]
 
   @@index([agentId, startedAt])
 }
@@ -725,19 +724,6 @@ model ChannelBinding {
   @@unique([channel, externalId])
 }
 
-// ── Computer-control (Codex screen-recording skills) ─────────────────────────
-model ComputerControlTask {
-  id           String   @id
-  runId        String
-  run          Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
-  stepKey      String
-  skillId      String
-  status       String
-  dispatchedTo String?
-  result       Json?
-  createdAt    DateTime @default(now())
-}
-
 // ── Cost ledger (estimated; fail-closed budget guard at L7) ───────────────────
 // CLI engines do not return token usage — costs are estimates from char length
 // so a runaway agent loop can be hard-stopped by daily/monthly budget.
@@ -771,15 +757,6 @@ model AuditLog {
   createdAt DateTime @default(now())
 
   @@index([entity, entityId])
-}
-
-model Lesson {
-  id        String   @id
-  agentId   String
-  runId     String
-  signal    String
-  status    String   @default("pending")
-  createdAt DateTime @default(now())
 }
 
 // Tracks which wiki/summary paths have been embedded into Qdrant (index
