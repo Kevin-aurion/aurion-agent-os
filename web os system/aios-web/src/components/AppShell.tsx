@@ -53,6 +53,7 @@ const ADMIN_NAV = [
   { href: '/workflows', label: '工作流 Workflows', icon: Workflow },
   { href: '/settings', label: '設定 Settings', icon: Plug },
   { href: '/audit', label: '稽核 Audit', icon: ScrollText },
+  { href: '/agent-builds', label: '建置治理', icon: GitBranch },
 ];
 
 interface PendingProposalRow {

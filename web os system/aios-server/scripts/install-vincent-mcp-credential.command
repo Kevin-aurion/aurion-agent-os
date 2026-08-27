@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 
-CLIENT_ID='3db2b7a3-9fcf-4cf4-9afc-d30d29fbe801'
+CLIENT_ID='7a23acfa-a548-48ca-a280-f2b2a9566031'
 KEYCHAIN_SERVICE='app.aurion.aios.vincent.read'
 SCRIPT_DIR="${0:A:h}"
 SERVER_DIR="${SCRIPT_DIR:h}"

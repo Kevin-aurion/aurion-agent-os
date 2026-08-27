@@ -15,7 +15,7 @@ import {
 } from '../lib/mcpregistry.js';
 
 const SERVER_ID = 'vincent-knowledge-read';
-const CLIENT_ID = '3db2b7a3-9fcf-4cf4-9afc-d30d29fbe801';
+const CLIENT_ID = '7a23acfa-a548-48ca-a280-f2b2a9566031';
 const KEYCHAIN_SERVICE = 'app.aurion.aios.vincent.read';
 const QUERY_AGENT_NAME = 'Vincent 知識庫查詢顧問';
 const QUERY_AGENT_OWNER = 'hank@aurion-group.com';
@@ -136,7 +136,7 @@ async function provision() {
   const { fde, agent } = await resolveContext();
   const input = {
     serverId: SERVER_ID,
-    name: 'Vincent Knowledge MCP（read-only · client 3db2b7a3…）',
+    name: 'Vincent Knowledge MCP（read-only · client 7a23acfa…）',
     transport: 'STDIO' as const,
     command: process.execPath,
     commandArgs: [bridgePath],

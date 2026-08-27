@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const VINCENT_MCP_URL = 'https://vincent.pinnovabiotech.com.tw/api/mcp';
-export const VINCENT_CLIENT_ID = '3db2b7a3-9fcf-4cf4-9afc-d30d29fbe801';
+export const VINCENT_CLIENT_ID = '7a23acfa-a548-48ca-a280-f2b2a9566031';
 export const VINCENT_CALLBACK_PORT = 3335;
 export const VINCENT_KEYCHAIN_SERVICE = 'app.aurion.aios.vincent.read';
 
@@ -153,4 +153,3 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     process.exitCode = 1;
   });
 }
-

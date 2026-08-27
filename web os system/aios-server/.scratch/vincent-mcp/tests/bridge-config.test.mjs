@@ -12,7 +12,7 @@ test('Vincent bridge pins endpoint, callback, transport, and file-based credenti
   const args = buildProxyArgs('/private/tmp/oauth-client.json');
   assert.equal(VINCENT_MCP_URL, 'https://vincent.pinnovabiotech.com.tw/api/mcp');
   assert.equal(VINCENT_CALLBACK_PORT, 3335);
-  assert.equal(VINCENT_CLIENT_ID, '3db2b7a3-9fcf-4cf4-9afc-d30d29fbe801');
+  assert.equal(VINCENT_CLIENT_ID, '7a23acfa-a548-48ca-a280-f2b2a9566031');
   assert.equal(VINCENT_KEYCHAIN_SERVICE, 'app.aurion.aios.vincent.read');
   assert.deepEqual(args.slice(1), [
     VINCENT_MCP_URL,
@@ -29,4 +29,3 @@ test('Vincent bridge pins endpoint, callback, transport, and file-based credenti
   ]);
   assert.equal(args.some((arg) => arg.includes('client_secret')), false);
 });
-

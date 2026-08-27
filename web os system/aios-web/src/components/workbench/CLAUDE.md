@@ -13,7 +13,7 @@ Phase 1 從員工詳情訓練／對話分頁抽出的可重用塊，供 `/work` 
 
 ## Agent Builder（業務語言）
 - 入口：`/work` 左欄「建立 AI 員工」（不需先選 Agent）；`?mode=builder`。
-- 每次進入固定先顯示建立方式與本人未完成清單，`localStorage` 只標示「上次開啟」，不得自動續接。
+- 開啟時：無未完成 session 直接進新輸入畫面；有未完成則續接並在頂部顯示「繼續上次的建置（另開新的）」可切換。不再先出現選擇建立方式攔截頁。`localStorage` 記住上次開啟的 id 供續接。
 - REST：`GET /api/agent-builder/sessions`（清單）、`GET|PUT /api/agent-builder/draft`（跨裝置草稿）、`POST /sessions` + `messages`／`authorize`／`test-data`／`test`／`finalize`。
 - 訪談不是固定欄位順序：後端 `progress.turn` 依 decision graph 選一個高價值分支，提供 context／recommendation／question／suggestions；前端讓使用者自由輸入或點建議起點。
 - 每輪另建立 append-only `BuilderIteration`；前臺輪詢非同步狀態並用業務語言顯示「這位員工正在學習／這次學會了什麼」。不得向 End User 暴露 Harness、MCP、manifest 等詞。

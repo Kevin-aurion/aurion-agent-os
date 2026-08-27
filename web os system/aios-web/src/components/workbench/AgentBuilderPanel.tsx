@@ -18,9 +18,7 @@ import {
   UserPlus,
   Users,
   History,
-  Plus,
   Save,
-  ChevronRight,
   X,
   Download,
 } from 'lucide-react';
@@ -40,11 +38,6 @@ function savedFlowName(flow: BuilderSession): string {
     ?? flow.brief?.requestedAgentName
     ?? flow.brief?.objective?.slice(0, 52)
     ?? '未命名 AI 員工';
-}
-
-function savedFlowTime(value?: string): string {
-  if (!value) return '時間未知';
-  return new Date(value).toLocaleString('zh-Hant-TW', { hour12: false });
 }
 
 function BuilderThinkingBubble({ elapsedSeconds }: { elapsedSeconds: number }) {
@@ -94,10 +87,10 @@ export function AgentBuilderPanel(props: {
   const isFde = isFdeRole(user?.role);
 
   const [session, setSession] = useState<BuilderSession | null>(null);
-  const [view, setView] = useState<'loading' | 'chooser' | 'new' | 'starting' | 'session'>('loading');
-  const [unfinishedSessions, setUnfinishedSessions] = useState<BuilderSession[]>([]);
+  const [view, setView] = useState<'loading' | 'new' | 'starting' | 'session'>('loading');
+  /** Unfinished flow we auto-resumed (or could resume). Not a chooser — a one-line switch. */
+  const [resumeCandidate, setResumeCandidate] = useState<BuilderSession | null>(null);
   const [newDraft, setNewDraft] = useState('');
-  const [lastOpenedSessionId, setLastOpenedSessionId] = useState<string | null>(null);
   const [draftSaveState, setDraftSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
@@ -129,36 +122,62 @@ export function AgentBuilderPanel(props: {
     [onSessionChange],
   );
 
-  // Remember only which flow was last opened. Opening Builder always presents
-  // the explicit chooser; it never resumes this id without user confirmation.
+  // Remember which flow was last opened so the next visit can resume it.
   useEffect(() => {
     if (!session?.id) return;
     window.localStorage.setItem(builderSessionStorageKey, session.id);
-    setLastOpenedSessionId(session.id);
   }, [session?.id]);
 
   useEffect(() => {
     let cancelled = false;
-    setLastOpenedSessionId(window.localStorage.getItem(builderSessionStorageKey));
-    void Promise.all([
-      API.get<BuilderSession[]>('/api/agent-builder/sessions'),
-      API.get<{ reply: string; testData: string; testExpected: string }>('/api/agent-builder/draft'),
-    ])
-      .then(([sessions, savedDraft]) => {
+    const lastId = window.localStorage.getItem(builderSessionStorageKey);
+    void (async () => {
+      try {
+        const [sessions, savedDraft] = await Promise.all([
+          API.get<BuilderSession[]>('/api/agent-builder/sessions'),
+          API.get<{ reply: string; testData: string; testExpected: string }>('/api/agent-builder/draft'),
+        ]);
         if (cancelled) return;
-        setUnfinishedSessions(sessions);
+        const unfinished = sessions.filter(
+          (flow) => flow.status !== 'ACTIVE' && flow.status !== 'ABANDONED',
+        );
         setNewDraft(savedDraft.reply);
-        setView('chooser');
-      })
-      .catch((e) => {
+        const resume =
+          (lastId ? unfinished.find((flow) => flow.id === lastId) : undefined) ?? unfinished[0] ?? null;
+        setResumeCandidate(resume);
+        if (!resume) {
+          publishSession(null);
+          setDraft(savedDraft.reply);
+          setTestData('');
+          setTestExpected('');
+          hydratedDraftContextRef.current = 'new';
+          setDraftSaveState(savedDraft.reply ? 'saved' : 'idle');
+          setShowSourceUpload(false);
+          setSourceAdviceDismissed(false);
+          setView('new');
+          return;
+        }
+        const latest = await API.get<BuilderSession>(`/api/agent-builder/sessions/${resume.id}`);
+        if (cancelled) return;
+        publishSession(latest);
+        setDraft(latest.draftState.reply);
+        setTestData(latest.draftState.testData);
+        setTestExpected(latest.draftState.testExpected);
+        hydratedDraftContextRef.current = `session:${latest.id}`;
+        setDraftSaveState('saved');
+        setShowSourceUpload((latest.brief?.sourceFiles?.length ?? 0) > 0);
+        setSourceAdviceDismissed(false);
+        setView('session');
+      } catch (e) {
         if (cancelled) return;
         setError(e instanceof Error ? e.message : String(e));
-        setView('chooser');
-      });
+        setView('new');
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [publishSession]);
 
   const draftContext = view === 'new' ? 'new' : view === 'session' && session ? `session:${session.id}` : null;
 
@@ -234,19 +253,9 @@ export function AgentBuilderPanel(props: {
     setView('new');
   }
 
-  async function showChooser() {
+  async function startFresh() {
     await persistCurrentDraft();
-    try {
-      const sessions = await API.get<BuilderSession[]>('/api/agent-builder/sessions');
-      setUnfinishedSessions(sessions);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-    publishSession(null);
-    hydratedDraftContextRef.current = null;
-    setShowSourceUpload(false);
-    setSourceAdviceDismissed(false);
-    setView('chooser');
+    chooseNew();
   }
 
   async function closeBuilder() {
@@ -447,6 +456,12 @@ export function AgentBuilderPanel(props: {
     }
   }
 
+  function adoptSuggestedTest(idea: { name: string; input: string; expected: string }) {
+    setTestData(idea.input);
+    setTestExpected(idea.expected);
+    setError(null);
+  }
+
   async function submitTestDataOnly() {
     if (!session || locked) return;
     if (!testData.trim() || !testExpected.trim()) {
@@ -539,6 +554,7 @@ export function AgentBuilderPanel(props: {
   const progress = session?.progress;
   const transcript = session?.transcript ?? [];
   const latestIteration = session?.latestIteration ?? null;
+  const suggestedTest = latestIteration?.harness?.testIdeas?.[0] ?? null;
   const evolutionBusy = ['QUEUED', 'ANALYZING', 'BUILDING'].includes(latestIteration?.status ?? '');
   const openAgentId = session?.builtAgentId ?? session?.targetAgentId ?? null;
 
@@ -571,59 +587,7 @@ export function AgentBuilderPanel(props: {
     );
   }
 
-  if (view === 'chooser') {
-    return (
-      <div className="flex h-full min-h-0 flex-col">
-        <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-          <div>
-            <div className="flex items-center gap-2 text-sm font-semibold"><History className="h-4 w-4 text-brand" />選擇建立方式</div>
-            <div className="mt-0.5 text-xs text-muted">繼續之前的進度，或從空白建立一位新員工</div>
-          </div>
-          <button type="button" className="btn-ghost h-8 w-8 p-0" onClick={() => props.onClose()} aria-label="關閉建立流程"><X className="h-4 w-4" /></button>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5">
-          <div className="mx-auto max-w-2xl space-y-6">
-            {error && <p className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">{error}</p>}
-            <button type="button" className="card flex w-full items-center gap-4 border-brand/40 bg-brand/[0.05] p-5 text-left transition-colors hover:bg-brand/10" disabled={busy} onClick={chooseNew}>
-              <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-brand text-white"><Plus className="h-5 w-5" /></span>
-              <span className="min-w-0 flex-1">
-                <span className="block font-semibold">建立新的 AI 員工</span>
-                <span className="mt-1 block text-sm text-muted">從需求描述開始，不會覆蓋下方任何未完成紀錄。</span>
-                {newDraft && <span className="mt-2 inline-flex items-center gap-1 text-xs text-emerald-400"><Save className="h-3.5 w-3.5" />有一段尚未送出的需求草稿</span>}
-              </span>
-              <ChevronRight className="h-5 w-5 shrink-0 text-muted" />
-            </button>
-
-            <section>
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div><h2 className="text-sm font-semibold">繼續訓練或建立</h2><p className="mt-0.5 text-xs text-muted">已啟用的員工也可以回來補充新資訊；每次調整都會保留紀錄。</p></div>
-                <span className="badge bg-black/5 text-muted dark:bg-white/5">{unfinishedSessions.length} 筆</span>
-              </div>
-              {unfinishedSessions.length === 0 ? (
-                <div className="card p-6 text-center text-sm text-muted">目前沒有可繼續的 AI 員工紀錄。</div>
-              ) : (
-                <div className="space-y-2">
-                  {unfinishedSessions.map((flow) => (
-                    <button key={flow.id} type="button" className="card flex w-full items-center gap-3 p-4 text-left transition-colors hover:border-brand/40 hover:bg-brand/[0.04]" disabled={busy} onClick={() => void chooseSession(flow.id)}>
-                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-brand/10 text-brand"><UserPlus className="h-4 w-4" /></span>
-                      <span className="min-w-0 flex-1">
-                        <span className="flex flex-wrap items-center gap-2"><span className="truncate font-medium">{savedFlowName(flow)}</span><span className="badge bg-amber-500/15 text-amber-400">{builderStatusLabel(flow.status)}</span>{lastOpenedSessionId === flow.id && <span className="badge bg-brand/10 text-brand">上次開啟</span>}</span>
-                        <span className="mt-1 block text-xs text-muted">最後更新：{savedFlowTime(flow.updatedAt)}</span>
-                        {(flow.draftState.reply || flow.draftState.testData || flow.draftState.testExpected) && <span className="mt-1.5 inline-flex items-center gap-1 text-xs text-emerald-400"><Save className="h-3.5 w-3.5" />含尚未送出的內容</span>}
-                      </span>
-                      <ChevronRight className="h-4 w-4 shrink-0 text-muted" />
-                    </button>
-                  ))}
-                </div>
-              )}
-            </section>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Empty state for a deliberately selected new flow ──────────────────────
+  // ── Empty state for a new flow (no chooser intercept) ─────────────────────
   if (view === 'new' && !session) {
     return (
       <div className="flex h-full min-h-0 flex-col">
@@ -632,11 +596,26 @@ export function AgentBuilderPanel(props: {
             <Sparkles className="h-4 w-4 text-brand" />
             建立 AI 員工
           </div>
-          <div className="flex items-center gap-1">
-            <button type="button" className="btn-ghost h-8 gap-1.5 px-2 text-xs" onClick={() => void showChooser()}><History className="h-3.5 w-3.5" />建立紀錄</button>
-            <button type="button" className="btn-ghost h-8 w-8 p-0" onClick={() => void closeBuilder()} aria-label="關閉建立流程"><X className="h-4 w-4" /></button>
-          </div>
+          <button type="button" className="btn-ghost h-8 w-8 p-0" onClick={() => void closeBuilder()} aria-label="關閉建立流程"><X className="h-4 w-4" /></button>
         </div>
+        {resumeCandidate && (
+          <div className="flex items-center justify-between gap-3 border-b border-border bg-brand/[0.04] px-4 py-2 text-xs">
+            <span className="text-muted">
+              繼續上次的建置（
+              <span className="text-fg">另開新的</span>
+              ）
+            </span>
+            <button
+              type="button"
+              className="btn-ghost h-7 gap-1 px-2 text-xs text-brand"
+              disabled={busy}
+              onClick={() => void chooseSession(resumeCandidate.id)}
+            >
+              <History className="h-3.5 w-3.5" />
+              回到上次
+            </button>
+          </div>
+        )}
 
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-4 py-8">
           <div className="w-full max-w-lg space-y-6">
@@ -795,10 +774,9 @@ export function AgentBuilderPanel(props: {
     return (
       <div className="grid h-full min-h-0 place-items-center px-4">
         <div className="card max-w-md space-y-3 p-5 text-center">
-          <p className="text-sm text-muted">這筆建立紀錄目前無法載入，請回到清單重新選擇。</p>
-          <button type="button" className="btn-primary mx-auto" onClick={() => void showChooser()}>
-            <History className="h-4 w-4" />
-            回到建立紀錄
+          <p className="text-sm text-muted">這筆建立紀錄目前無法載入，請重新開始。</p>
+          <button type="button" className="btn-primary mx-auto" onClick={() => chooseNew()}>
+            開始新的建置
           </button>
         </div>
       </div>
@@ -824,10 +802,26 @@ export function AgentBuilderPanel(props: {
             <Save className="h-3.5 w-3.5" />
             {draftSaveState === 'saving' ? '儲存中…' : draftSaveState === 'error' ? '儲存失敗' : '已自動儲存'}
           </span>
-          <button type="button" className="btn-ghost h-8 gap-1.5 px-2 text-xs" onClick={() => void showChooser()}><History className="h-3.5 w-3.5" />建立紀錄</button>
           <button type="button" className="btn-ghost h-8 w-8 p-0" onClick={() => void closeBuilder()} aria-label="關閉建立流程"><X className="h-4 w-4" /></button>
         </div>
       </div>
+      {resumeCandidate && session.id === resumeCandidate.id && (
+        <div className="flex items-center justify-between gap-3 border-b border-border bg-brand/[0.04] px-4 py-2 text-xs">
+          <span>
+            繼續上次的建置（
+            <button
+              type="button"
+              className="font-medium text-brand hover:underline"
+              disabled={locked}
+              onClick={() => void startFresh()}
+            >
+              另開新的
+            </button>
+            ）
+          </span>
+          <span className="truncate text-muted">{savedFlowName(session)}</span>
+        </div>
+      )}
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
         {/* Durable transcript */}
@@ -1214,7 +1208,88 @@ export function AgentBuilderPanel(props: {
         )}
 
         {/* Test fixture + run */}
-        {showTestPanel && (
+        {showTestPanel && suggestedTest && (
+          <div className="card space-y-3 border-border/80 p-4">
+            <div className="text-sm font-medium">建議測試</div>
+            <p className="text-xs text-muted">
+              已依目前草稿準備一組測試。可一鍵採用，或改為自行填寫。試跑是真實執行，失敗不會假裝通過。
+            </p>
+            <div className="rounded-md border border-brand/25 bg-brand/[0.04] px-3 py-3">
+              <div className="text-sm font-medium">{suggestedTest.name}</div>
+              <div className="mt-2 space-y-2 text-xs leading-relaxed text-muted">
+                <div>
+                  <div className="font-medium text-fg/80">測試資料</div>
+                  <p className="mt-0.5 whitespace-pre-wrap">{suggestedTest.input}</p>
+                </div>
+                <div>
+                  <div className="font-medium text-fg/80">期望結果</div>
+                  <p className="mt-0.5 whitespace-pre-wrap">{suggestedTest.expected}</p>
+                </div>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="btn-primary text-sm"
+                disabled={locked}
+                onClick={() => adoptSuggestedTest(suggestedTest)}
+              >
+                採用建議測試
+              </button>
+              <button
+                type="button"
+                className="btn-ghost border border-border text-sm"
+                disabled={
+                  locked ||
+                  (!session.hasTestData && (!testData.trim() || !testExpected.trim()))
+                }
+                onClick={() => void submitAndTest()}
+              >
+                {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Rocket className="h-4 w-4" />}
+                {testing ? '試跑中…' : status === 'FAILED' ? '重新試跑' : '開始試跑'}
+              </button>
+            </div>
+            <details className="rounded-md border border-border/60 px-3 py-2">
+              <summary className="cursor-pointer text-xs font-medium text-muted">自行填寫測試資料</summary>
+              <div className="mt-3 space-y-3">
+                <label className="block space-y-1">
+                  <span className="label">測試資料</span>
+                  <textarea
+                    className="input min-h-[80px] w-full resize-y text-sm"
+                    placeholder="例如：三封假帳款郵件摘要（金額、廠商、日期）"
+                    value={testData}
+                    onChange={(e) => setTestData(e.target.value)}
+                    disabled={locked}
+                  />
+                </label>
+                <label className="block space-y-1">
+                  <span className="label">期望結果</span>
+                  <textarea
+                    className="input min-h-[60px] w-full resize-y text-sm"
+                    placeholder="例如：表內有三列、金額合計正確、標註待審項目"
+                    value={testExpected}
+                    onChange={(e) => setTestExpected(e.target.value)}
+                    disabled={locked}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn-ghost text-sm"
+                  disabled={locked || !testData.trim() || !testExpected.trim()}
+                  onClick={() => void submitTestDataOnly()}
+                >
+                  {busy && !testing ? <Spinner /> : null}
+                  儲存測試資料
+                </button>
+              </div>
+            </details>
+            {session.hasTestData && (
+              <p className="text-[11px] text-muted">已儲存一組測試資料；可覆寫後再試跑。</p>
+            )}
+          </div>
+        )}
+
+        {showTestPanel && !suggestedTest && (
           <div className="card space-y-3 border-border/80 p-4">
             <div className="text-sm font-medium">測試資料（必填）</div>
             <p className="text-xs text-muted">
