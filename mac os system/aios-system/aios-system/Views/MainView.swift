@@ -2,291 +2,292 @@
 //  MainView.swift
 //  aios-system
 //
-//  Root authenticated shell: NavigationSplitView with sidebar sections,
-//  connection/user footer, and a Dashboard detail pane.
+//  Slim authenticated shell: connection, device-agent status, recent
+//  device tasks, and a button that opens the web admin console.
 //
 
+import AppKit
 import SwiftUI
 
-/// Top-level sidebar sections of the authenticated app shell.
-enum MainSection: String, CaseIterable, Identifiable {
-    case dashboard, agents, skills, workflows, runs, org, audit, settings
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .dashboard: return "總覽"
-        case .agents: return "員工"
-        case .skills: return "技能"
-        case .workflows: return "工作流"
-        case .runs: return "執行"
-        case .org: return "組織"
-        case .audit: return "稽核"
-        case .settings: return "設定"
-        }
+/// Opens aios-web (default loopback :3100) in the system browser.
+enum WebConsole {
+    static var adminURL: URL {
+        var c = URLComponents()
+        c.scheme = AIOSConfig.httpBase.scheme ?? "http"
+        c.host = AIOSConfig.httpBase.host ?? "127.0.0.1"
+        c.port = 3100
+        c.path = "/admin"
+        return c.url ?? URL(string: "http://127.0.0.1:3100/admin")!
     }
 
-    var icon: String {
-        switch self {
-        case .dashboard: return "square.grid.2x2"
-        case .agents: return "person.2.fill"
-        case .skills: return "wrench.and.screwdriver"
-        case .workflows: return "arrow.triangle.branch"
-        case .runs: return "play.circle"
-        case .org: return "building.2"
-        case .audit: return "doc.text.magnifyingglass"
-        case .settings: return "gearshape"
-        }
+    static func open() {
+        NSWorkspace.shared.open(adminURL)
     }
 }
 
 struct MainView: View {
     @Environment(AppState.self) private var app
-    @State private var selection: MainSection? = .dashboard
+
+    private var device: DeviceAgentService { app.deviceAgent }
 
     var body: some View {
-        NavigationSplitView {
-            List(MainSection.allCases, selection: $selection) { section in
-                Label(section.label, systemImage: section.icon)
-                    .tag(section)
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    connectionCard
+                    deviceCard
+                    recentTasksCard
+                    openWebButton
+                }
+                .padding(20)
             }
-            .navigationTitle("AIOS")
+            .navigationTitle("AIOS 裝置代理")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
+                        Label("設定", systemImage: "gearshape")
+                    }
+                }
+            }
             .safeAreaInset(edge: .bottom) {
-                SidebarFooter()
-            }
-        } detail: {
-            NavigationStack {
-                detailView
+                windowFooter
             }
         }
     }
 
-    @ViewBuilder
-    private var detailView: some View {
-        switch selection ?? .dashboard {
-        case .dashboard: DashboardPane()
-        case .agents: AgentsView()
-        case .skills: SkillsView()
-        case .workflows: WorkflowsView()
-        case .runs: RunsView()
-        case .org: OrgView()
-        case .audit: AuditView()
-        case .settings: SettingsView()
-        }
-    }
-}
+    // MARK: - Connection
 
-/// Sidebar footer: realtime connection indicator + current user + logout.
-private struct SidebarFooter: View {
-    @Environment(AppState.self) private var app
-
-    var body: some View {
-        Divider()
-        HStack(spacing: 10) {
-            Image(systemName: app.connected ? "bolt.fill" : "bolt.slash.fill")
-                .foregroundStyle(app.connected ? .green : .red)
-                .imageScale(.small)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(app.user?.displayName ?? "未登入")
+    private var connectionCard: some View {
+        StatusCard(title: "連線狀態") {
+            LabeledContent("使用者 AWP") {
+                StatusPill(
+                    text: app.connected ? "已連線" : "未連線",
+                    tone: app.connected ? .ok : .bad
+                )
+            }
+            LabeledContent("帳號", value: app.user?.displayName ?? "—")
+            LabeledContent("角色", value: app.user?.role ?? "—")
+            LabeledContent("伺服器") {
+                Text(AIOSConfig.serverBaseURLString)
                     .font(.caption)
-                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    // MARK: - Device agent
+
+    private var deviceCard: some View {
+        StatusCard(title: "裝置代理") {
+            LabeledContent("註冊") {
+                StatusPill(
+                    text: device.isEnrolled ? "已註冊" : "未註冊",
+                    tone: device.isEnrolled ? .ok : .neutral
+                )
+            }
+            LabeledContent("通道") {
+                StatusPill(
+                    text: device.connectionState.rawValue,
+                    tone: deviceTone
+                )
+            }
+            LabeledContent("裝置 ID") {
+                Text(device.deviceId ?? "—")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
-                Text(app.connected ? "已連線" : "未連線")
-                    .font(.caption2)
+                    .textSelection(.enabled)
+            }
+            if let err = device.lastError, !err.isEmpty {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+            if !device.isEnrolled {
+                Text("請到設定以一次性註冊碼把這台 Mac 登記為執行裝置。")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
-
-            Spacer()
-
-            Button(action: { app.logout() }) {
-                Image(systemName: "rectangle.portrait.and.arrow.right")
-            }
-            .buttonStyle(.plain)
-            .help("登出")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-    }
-}
-
-// MARK: - Dashboard
-
-/// Dashboard/overview pane: quick stat tiles from the nested summary endpoint
-/// plus a compact live activity feed sourced from `app.activity`.
-struct DashboardPane: View {
-    @Environment(AppState.self) private var app
-    @State private var summary: DashboardSummary?
-    @State private var loadError: String?
-    @State private var loading = false
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                statGrid
-
-                if let loadError {
-                    Text(loadError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-
-                enginesSection
-
-                Divider()
-
-                activitySection
-            }
-            .padding(20)
-        }
-        .navigationTitle("總覽")
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button(action: { Task { await load() } }) {
-                    Label("重新整理", systemImage: "arrow.clockwise")
-                }
-                .disabled(loading)
-            }
-        }
-        .task { await load() }
-    }
-
-    private var activeAgents: Int? { summary?.agents.active }
-    private var enabledWorkflows: Int? { summary?.workflows.enabled }
-    private var runsTodayTotal: Int? {
-        guard let runs = summary?.runsToday else { return nil }
-        return runs.values.reduce(0, +)
-    }
-    private var skillsTotal: Int? {
-        guard let skills = summary?.skills else { return nil }
-        return skills.values.reduce(0, +)
-    }
-    private var pendingSkills: Int? {
-        summary?.skills["AWAITING_USER_CONFIRM"]
-    }
-    private var connectedAccountsTotal: Int? {
-        guard let accounts = summary?.connectedAccounts else { return nil }
-        return accounts.reduce(0) { $0 + $1.count }
-    }
-
-    private var statGrid: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 12)], spacing: 12) {
-            StatTile(title: "活躍員工", value: activeAgents, systemImage: "person.2.fill")
-            StatTile(title: "今日執行", value: runsTodayTotal, systemImage: "calendar")
-            StatTile(title: "已啟用工作流", value: enabledWorkflows, systemImage: "arrow.triangle.branch")
-            StatTile(title: "技能總數", value: skillsTotal, systemImage: "wrench.and.screwdriver")
-            StatTile(title: "待審技能", value: pendingSkills, systemImage: "checkmark.seal")
-            StatTile(title: "已連線帳號", value: connectedAccountsTotal, systemImage: "link")
-        }
-    }
-
-    private var enginesSection: some View {
-        Group {
-            if let preflight = app.preflight {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("執行引擎").font(.headline)
-                    HStack(spacing: 16) {
-                        EngineBadge(name: "Claude", engine: preflight.engines.claude)
-                        EngineBadge(name: "Codex", engine: preflight.engines.codex)
-                        EngineBadge(name: "Grok", engine: preflight.engines.grok)
-                    }
+            if let caps = device.lastCapabilities {
+                HStack(spacing: 8) {
+                    FeatureDot(label: "Computer Use", on: caps.features.computerUse)
+                    FeatureDot(label: "截圖", on: caps.features.screenshot)
+                    FeatureDot(label: "LINE", on: caps.features.lineDesktop)
                 }
             }
         }
     }
 
-    private var activitySection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("即時動態").font(.headline)
-            if app.activity.isEmpty {
-                Text("尚無動態").font(.caption).foregroundStyle(.secondary)
+    private var deviceTone: StatusPill.Tone {
+        switch device.connectionState {
+        case .online: return .ok
+        case .connecting, .reconnecting: return .warn
+        case .authFailed: return .bad
+        case .disconnected: return .neutral
+        }
+    }
+
+    // MARK: - Recent tasks
+
+    private var recentTasksCard: some View {
+        StatusCard(title: "最近裝置任務") {
+            if device.taskLog.isEmpty {
+                Text("尚無裝置任務")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             } else {
-                VStack(spacing: 0) {
-                    ForEach(app.activity.prefix(20)) { item in
-                        ActivityRow(item: item)
-                        if item.id != app.activity.prefix(20).last?.id {
-                            Divider()
-                        }
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(device.taskLog.prefix(12)) { entry in
+                        DeviceTaskRow(entry: entry)
                     }
                 }
-                .background(RoundedRectangle(cornerRadius: 8).fill(.background.secondary))
             }
         }
     }
 
-    private func load() async {
-        loading = true
-        loadError = nil
-        do {
-            summary = try await APIClient.shared.request("/api/dashboard/summary")
-        } catch let e as APIClient.APIError {
-            loadError = e.message
-        } catch {
-            loadError = "無法載入總覽資料"
-        }
-        loading = false
-    }
-}
+    // MARK: - Open web
 
-private struct StatTile: View {
-    let title: String
-    let value: Int?
-    let systemImage: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: systemImage).foregroundStyle(.tint)
-                Spacer()
+    private var openWebButton: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                WebConsole.open()
+            } label: {
+                Label("開啟 Web 後台", systemImage: "safari")
+                    .frame(maxWidth: .infinity)
             }
-            Text(value.map(String.init) ?? "—")
-                .font(.title).bold()
-            Text(title)
-                .font(.caption)
+            .buttonStyle(.borderedProminent)
+            Text(WebConsole.adminURL.absoluteString)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
         }
-        .padding(14)
+    }
+
+    // MARK: - Footer
+
+    private var windowFooter: some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 10) {
+                Image(systemName: app.connected ? "bolt.fill" : "bolt.slash.fill")
+                    .foregroundStyle(app.connected ? .green : .red)
+                    .imageScale(.small)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(app.user?.displayName ?? "未登入")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .lineLimit(1)
+                    Text(app.connected ? "使用者已連線" : "使用者未連線")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(action: { app.logout() }) {
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
+                }
+                .buttonStyle(.plain)
+                .help("登出")
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+        .background(.bar)
+    }
+}
+
+// MARK: - Pieces
+
+private struct StatusCard<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.headline)
+            content
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
         .background(RoundedRectangle(cornerRadius: 10).fill(.background.secondary))
     }
 }
 
-private struct EngineBadge: View {
-    let name: String
-    let engine: Preflight.Engine
+private struct StatusPill: View {
+    enum Tone { case ok, warn, bad, neutral }
+    let text: String
+    let tone: Tone
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(engine.installed ? .green : .red)
-                .frame(width: 8, height: 8)
-            Text(name).font(.caption).fontWeight(.medium)
-            if let version = engine.version {
-                Text(version).font(.caption2).foregroundStyle(.secondary)
+        let color: Color = {
+            switch tone {
+            case .ok: return .green
+            case .warn: return .orange
+            case .bad: return .red
+            case .neutral: return .secondary
             }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 6).fill(.background.secondary))
+        }()
+        Text(text)
+            .font(.caption)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(color.opacity(0.15))
+            .foregroundStyle(color)
+            .clipShape(Capsule())
     }
 }
 
-private struct ActivityRow: View {
-    let item: AppState.ActivityItem
+private struct FeatureDot: View {
+    let label: String
+    let on: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.text).font(.caption).lineLimit(2)
-                Text(item.topic).font(.caption2).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Text(item.at, style: .time)
+        HStack(spacing: 4) {
+            Circle()
+                .fill(on ? Color.green : Color.red)
+                .frame(width: 6, height: 6)
+            Text(label)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+    }
+}
+
+private struct DeviceTaskRow: View {
+    let entry: DeviceTaskLogEntry
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+                .padding(.top, 5)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.message)
+                    .font(.caption)
+                    .lineLimit(2)
+                HStack(spacing: 8) {
+                    if let tid = entry.taskId {
+                        Text(String(tid.prefix(10)) + "…")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(entry.at.formatted(date: .omitted, time: .standard))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var color: Color {
+        switch entry.level {
+        case .info: return .secondary
+        case .warn: return .orange
+        case .error: return .red
+        case .success: return .green
+        }
     }
 }

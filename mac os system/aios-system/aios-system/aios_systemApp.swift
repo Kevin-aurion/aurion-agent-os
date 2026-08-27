@@ -6,18 +6,9 @@
 import AppKit
 import SwiftUI
 
-/// Default window size ≈ 72% of the main screen's visible frame.
+/// Compact default for the device-agent status window (not the old admin shell).
 private enum DefaultWindowMetrics {
-    static let size: CGSize = {
-        if let screen = NSScreen.main {
-            let visible = screen.visibleFrame.size
-            return CGSize(
-                width: max(1000, visible.width * 0.72),
-                height: max(700, visible.height * 0.72)
-            )
-        }
-        return CGSize(width: 1280, height: 860)
-    }()
+    static let size = CGSize(width: 520, height: 640)
 }
 
 @main
@@ -34,7 +25,7 @@ struct aios_systemApp: App {
         WindowGroup {
             ContentView()
                 .environment(app)
-                .frame(minWidth: 1000, minHeight: 700)
+                .frame(minWidth: 480, minHeight: 520)
                 .task { await app.boot() }
         }
         .defaultSize(width: defaultWindowSize.width, height: defaultWindowSize.height)

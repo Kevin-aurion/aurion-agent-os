@@ -94,6 +94,16 @@ struct MenuBarView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
 
+            Button {
+                WebConsole.open()
+            } label: {
+                Label("開啟 Web 後台", systemImage: "safari")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+
             Button(role: .destructive) {
                 app.logout()
             } label: {
