@@ -14,7 +14,10 @@ import { prisma } from './db.js';
 import { errors } from './http.js';
 import { isApproved } from '../engine/codex.js';
 import { estimateTokens, priceUsd, recordCost } from '../engine/cost.js';
+import { resolveVerifyEngine } from '../engine/verify.js';
 import { redactSecrets } from '../memory/redactor.js';
+
+export { resolveVerifyEngine };
 
 export interface EvalRunnerDeps {
   /** Produce candidate output for non-deterministic / high-risk cases. Default throws. */
@@ -29,22 +32,6 @@ export interface EvalRunnerDeps {
     output: string;
     rubric: string;
   }) => Promise<{ approved: boolean; rationale: string }>;
-}
-
-/** Fixed, predictable peer engine; always returns a different engine than input. */
-export function crossVerifyEngine(execute: Engine): Engine {
-  switch (execute) {
-    case 'CLAUDE_CODE':
-      return 'GROK';
-    case 'CODEX':
-      return 'GROK';
-    case 'GROK':
-      return 'CLAUDE_CODE';
-    default: {
-      const _exhaustive: never = execute;
-      throw errors.badRequest(`未知執行引擎: ${String(_exhaustive)}`);
-    }
-  }
 }
 
 export async function createSuite(args: {
@@ -477,7 +464,7 @@ export async function runSuite(args: {
   if (!suite) throw errors.notFound('EvalSuite not found');
 
   const executeEngine = args.executeEngine;
-  const verifyEngine = args.verifyEngine ?? crossVerifyEngine(executeEngine);
+  const verifyEngine = args.verifyEngine ?? resolveVerifyEngine(executeEngine);
 
   // Fail-closed cross-model invariant — before creating EvalRun
   if (verifyEngine === executeEngine) {

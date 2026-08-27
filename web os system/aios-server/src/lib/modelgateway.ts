@@ -19,6 +19,8 @@ import {
 import {
   isApproved,
   dispatchEngineForGateway,
+  resolveVerifyEngine,
+  buildVerifyPrompt,
   type GatewayDispatchArgs,
 } from '../engine/index.js';
 import { redactSecrets } from '../memory/redactor.js';
@@ -28,6 +30,8 @@ import {
   verifyServiceIdentity,
   type ServiceIdentity,
 } from './serviceidentity.js';
+
+export { resolveVerifyEngine };
 
 export type GatewayDispatch = (
   args: GatewayDispatchArgs,
@@ -49,29 +53,6 @@ export function assertServiceRequest(args: {
 }
 
 export type { ServiceIdentity };
-
-/**
- * Server-side verify-engine selection (mirrors runner autoVerify, by model family).
- * Post-condition: returned family must differ from execute family.
- */
-export function chooseVerifyEngine(
-  executeEngine: Engine,
-  configured: Engine | null,
-): Engine {
-  let chosen: Engine;
-  if (
-    configured != null &&
-    ENGINE_MODEL_FAMILY[configured] !== ENGINE_MODEL_FAMILY[executeEngine]
-  ) {
-    chosen = configured;
-  } else {
-    chosen = executeEngine === 'CLAUDE_CODE' ? 'CODEX' : 'CLAUDE_CODE';
-  }
-  if (ENGINE_MODEL_FAMILY[chosen] === ENGINE_MODEL_FAMILY[executeEngine]) {
-    throw errors.internal('verify engine family must differ (fail-closed)');
-  }
-  return chosen;
-}
 
 export type GatewayContext = {
   run: Run;
@@ -182,32 +163,6 @@ async function recordSideEffects(args: {
   }
 }
 
-function buildGatewayVerifyPrompt(args: {
-  artifact: string;
-  rubric?: string;
-  sourceOfTruth?: string;
-}): string {
-  const rubric = (args.rubric ?? '').trim() || '(none)';
-  const sot = (args.sourceOfTruth ?? '').trim() || '(none)';
-  return [
-    'You are an independent cross-model verifier. Treat the artifact as a claim to falsify.',
-    '',
-    '## Rubric',
-    rubric,
-    '',
-    '## Source of truth',
-    sot,
-    '',
-    '## Artifact',
-    args.artifact,
-    '',
-    'Respond with a section "## Verdict" followed by exactly one of:',
-    'APPROVED',
-    'or',
-    'ISSUES FOUND: <brief reason>',
-  ].join('\n');
-}
-
 export async function gatewayExecute(
   args: {
     runId: string;
@@ -303,18 +258,24 @@ export async function gatewayVerify(
   assertEnvironmentBinding(args.identity, ctx.deployment.environment);
 
   const executeEngine = ctx.agent.engineExecute;
-  const verifyEngine = chooseVerifyEngine(
-    executeEngine,
-    ctx.agent.engineVerify ?? null,
-  );
+  // Configured verify (if different) matches runner compileManifest; pairing
+  // itself is resolveVerifyEngine() only. Family post-check stays fail-closed.
+  const verifyEngine =
+    ctx.agent.engineVerify && ctx.agent.engineVerify !== executeEngine
+      ? ctx.agent.engineVerify
+      : resolveVerifyEngine(executeEngine);
+  if (ENGINE_MODEL_FAMILY[verifyEngine] === ENGINE_MODEL_FAMILY[executeEngine]) {
+    throw errors.internal('verify engine family must differ (fail-closed)');
+  }
 
   await guardBudgetOr403(ctx.agent.id, ctx.agent.costPolicy);
 
-  const prompt = buildGatewayVerifyPrompt({
-    artifact: args.artifact,
-    rubric: args.rubric,
-    sourceOfTruth: args.sourceOfTruth,
-  });
+  const prompt = buildVerifyPrompt(
+    args.rubric ?? '',
+    args.artifact,
+    args.sourceOfTruth ?? '',
+    false,
+  );
 
   const dispatch = deps?.dispatch ?? dispatchEngineForGateway;
   const res = await dispatch({

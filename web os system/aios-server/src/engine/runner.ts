@@ -20,6 +20,7 @@ import { materializeAgent } from './materialize.js';
 import { runClaude, runClaudeStream } from './claude.js';
 import { runCodex, isApproved } from './codex.js';
 import { runGrok } from './grok.js';
+import { resolveVerifyEngine, buildVerifyPrompt } from './verify.js';
 import {
   parseRestrictions,
   restrictionsToRules,
@@ -75,6 +76,8 @@ import {
   isLineSendTool,
   LINE_DESKTOP_MANIFEST,
 } from '../lib/devicemcp.js';
+
+export { resolveVerifyEngine, buildVerifyPrompt } from './verify.js';
 
 const MAX_DELEGATION_DEPTH = 1; // a delegate agent may not itself delegate
 const MAX_CONDITION_JUMPS = 50; // guard against a CONDITION cycle looping forever
@@ -432,13 +435,11 @@ export async function compileManifest(
   const engineExecute: Engine = builderTest ? 'CLAUDE_CODE' : agent.engineExecute;
   // Verifier: the agent's explicit choice (e.g. GROK for speed), else the
   // opposite CLI of the executor. Cross-model rule: never verify with the
-  // same engine that executed.
-  const autoVerify: Engine = engineExecute === 'CLAUDE_CODE' ? 'CODEX' : 'CLAUDE_CODE';
-  const engineVerify: Engine = builderTest
-    ? 'CODEX'
-    : agent.engineVerify && agent.engineVerify !== engineExecute
+  // same engine that executed. Pairing is resolveVerifyEngine() only.
+  const engineVerify: Engine =
+    !builderTest && agent.engineVerify && agent.engineVerify !== engineExecute
       ? agent.engineVerify
-      : autoVerify;
+      : resolveVerifyEngine(engineExecute);
 
   let steps: Step[];
   if (workflowId) {
@@ -879,77 +880,6 @@ async function runExecuteStep(ctx: RunContext, step: DoStep, feedback: string | 
     stepKey: step.stepKey,
   });
   return res.text;
-}
-
-function formatIdentityCardForVerify(card: IdentityCard): string {
-  return [
-    `oneLiner: ${card.oneLiner}`,
-    `purpose: ${card.purpose}`,
-    `canDo: ${JSON.stringify(card.canDo)}`,
-    `cannotDo: ${JSON.stringify(card.cannotDo)}`,
-    `servedAudience: ${card.servedAudience}`,
-  ].join('\n');
-}
-
-/**
- * Build the verifier user prompt. When the agent has an identity card, append
- * an Overstep block AFTER the Verdict format. Overstep must not affect
- * APPROVED / ISSUES FOUND (isApproved stays fail-closed and unchanged).
- */
-function buildVerifyPrompt(
-  rubric: string,
-  artifact: string,
-  sourceOfTruth: string,
-  isResume: boolean,
-  identityCard?: IdentityCard | null,
-): string {
-  const overstepAppendix =
-    identityCard != null
-      ? [
-          '',
-          '[Identity card — authorization scope for Overstep only]',
-          formatIdentityCardForVerify(identityCard),
-          '',
-          'After the Verdict block, output exactly these two additional lines as the absolute end of your reply.',
-          'IMPORTANT: The Overstep judgment does NOT affect APPROVED / ISSUES FOUND. Decide the Verdict first, independently.',
-          '## Overstep',
-          'NONE | LOW | HIGH — <one-sentence reason>',
-        ].join('\n')
-      : '';
-
-  if (isResume) {
-    return [
-      "[Re-review] The other party has attempted to fix the issues from your previous round. Below is the revised artifact.",
-      'Review it again against the same rubric and source of truth, and mark each of your previous pushback points CONCEDE or MAINTAIN.',
-      '',
-      '[Revised artifact]',
-      artifact,
-      '',
-      'Discipline: do not rubber-stamp, do not concede just to end the loop, do not treat MAINTAIN as APPROVED. If real problems remain, say ISSUES FOUND.',
-      '[Reply format — mandatory] Your Verdict block must be:',
-      '## Verdict',
-      'APPROVED  (or)  ISSUES FOUND',
-      overstepAppendix,
-    ].join('\n');
-  }
-  return [
-    'You are an independent, cross-model verifier. Treat the artifact under review as a claim to be falsified — verify it point by point, do not assume it is correct.',
-    '',
-    '[Verification rubric]',
-    rubric,
-    '',
-    '[Source of truth — the only facts that count]',
-    sourceOfTruth,
-    '',
-    '[Artifact under review]',
-    artifact,
-    '',
-    'Discipline: verify every completeness claim against the source; independently recompute anything arithmetic rather than trusting the artifact; only report substantive problems, ignore pure style; when in doubt say ISSUES FOUND.',
-    '[Reply format — mandatory] Your Verdict block must be:',
-    '## Verdict',
-    'APPROVED  (or)  ISSUES FOUND',
-    overstepAppendix,
-  ].join('\n');
 }
 
 export type OverstepLevel = 'NONE' | 'LOW' | 'HIGH' | 'UNKNOWN';

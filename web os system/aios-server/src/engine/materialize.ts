@@ -6,12 +6,14 @@
 // spawned with cwd = agentDir. Idempotent: unchanged files are left alone.
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { Engine } from '@prisma/client';
 import { prisma } from '../lib/db.js';
 import { paths } from '../config.js';
 import { sha256 } from '../lib/crypto.js';
 import { errors } from '../lib/http.js';
 import { sanitizeSegment, assertInsideRoot } from '../lib/safepath.js';
 import { ensureAgentWiki } from '../memory/memoryService.js';
+import { resolveVerifyEngine } from './verify.js';
 
 async function writeIfChanged(filePath: string, content: string): Promise<void> {
   try {
@@ -37,11 +39,11 @@ function sanitizeDepartment(department: string | null | undefined): string {
 }
 
 function buildAgentMd(
-  agent: { slug: string; name: string; description: string; engineExecute: string; maxRounds: number },
+  agent: { slug: string; name: string; description: string; engineExecute: Engine; maxRounds: number },
   skillSlugs: string[],
   workflows: { id: string; name: string; steps: { stepKey: string; type: string }[] }[],
 ): string {
-  const engineVerify = agent.engineExecute === 'CLAUDE_CODE' ? 'CODEX' : 'CLAUDE_CODE';
+  const engineVerify = resolveVerifyEngine(agent.engineExecute);
   const workflowLines = workflows.length
     ? workflows
         .map((w) => `  - id: ${w.id}\n    name: ${JSON.stringify(w.name)}\n    steps: [${w.steps.map((s) => `${s.stepKey}:${s.type}`).join(', ')}]`)

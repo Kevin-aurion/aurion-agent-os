@@ -18,6 +18,7 @@ import {
   BudgetExceededError,
   guardBudget,
 } from '../engine/cost.js';
+import { resolveVerifyEngine } from '../engine/verify.js';
 import {
   loadProductionArtifact,
   ProductionLoadError,
@@ -63,11 +64,10 @@ function resolvePilotEngines(agent: {
   engineVerify: Engine | null;
 }): { engineExecute: Engine; engineVerify: Engine } {
   const engineExecute = agent.engineExecute;
-  const autoVerify: Engine = engineExecute === 'CLAUDE_CODE' ? 'CODEX' : 'CLAUDE_CODE';
   const engineVerify =
     agent.engineVerify && agent.engineVerify !== engineExecute
       ? agent.engineVerify
-      : autoVerify;
+      : resolveVerifyEngine(engineExecute);
   return { engineExecute, engineVerify };
 }
 
