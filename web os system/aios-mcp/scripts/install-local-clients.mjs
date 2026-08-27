@@ -84,17 +84,7 @@ async function installMcpConfig(file) {
   await writeJsonWithBackup(file, config);
 }
 
-function withoutAiosHook(entries, tool) {
-  return entries.flatMap((entry) => {
-    if (!entry || typeof entry !== 'object' || !Array.isArray(entry.hooks)) return [entry];
-    const remaining = entry.hooks.filter((hook) => !(
-      hook?.type === 'mcp_tool' && hook?.server === 'aios' && hook?.tool === tool
-    ));
-    return remaining.length ? [{ ...entry, hooks: remaining }] : [];
-  });
-}
-
-async function installClaudeBuilderHooks(file) {
+async function installClaudeBuilderPermissions(file) {
   const config = await readJsonObject(file);
   const permissions = config.permissions && typeof config.permissions === 'object'
     ? config.permissions
@@ -104,50 +94,7 @@ async function installClaudeBuilderHooks(file) {
     ...permissions,
     allow: [...new Set([...existingAllow, ...claudeCodeAiosToolRules])],
   };
-  const hooks = config.hooks && typeof config.hooks === 'object' ? config.hooks : {};
-  const existingStop = Array.isArray(hooks.Stop) ? hooks.Stop : [];
-  const existingPrompt = Array.isArray(hooks.UserPromptSubmit) ? hooks.UserPromptSubmit : [];
-  config.hooks = {
-    ...hooks,
-    UserPromptSubmit: [
-      ...withoutAiosHook(existingPrompt, 'prepare_agent_build_prompt'),
-      {
-        hooks: [
-          {
-            type: 'mcp_tool',
-            server: 'aios',
-            tool: 'prepare_agent_build_prompt',
-            input: {
-              externalConversationId: '${session_id}',
-              prompt: '${prompt}',
-              source: 'CLAUDE_CODE',
-            },
-            timeout: 15,
-          },
-        ],
-      },
-    ],
-    Stop: [
-      ...withoutAiosHook(existingStop, 'guard_agent_build_stop'),
-      {
-        hooks: [
-          {
-            type: 'mcp_tool',
-            server: 'aios',
-            tool: 'guard_agent_build_stop',
-            input: {
-              externalConversationId: '${session_id}',
-              transcriptPath: '${transcript_path}',
-              lastAssistantMessage: '${last_assistant_message}',
-              stopHookActive: '${stop_hook_active}',
-              source: 'CLAUDE_CODE',
-            },
-            timeout: 20,
-          },
-        ],
-      },
-    ],
-  };
+  // stage-0: do not write UserPromptSubmit/Stop mcp_tool hooks; they misfire on ordinary turns.
   await writeJsonWithBackup(file, config);
 }
 
@@ -158,7 +105,7 @@ await requireFile(path.join(skillSource, 'SKILL.md'), 'AIOS Agent Builder Skill'
 await installMcpConfig(claudeConfig);
 await installMcpConfig(cursorConfig);
 await installMcpConfig(claudeCodeConfig);
-await installClaudeBuilderHooks(claudeCodeSettings);
+await installClaudeBuilderPermissions(claudeCodeSettings);
 
 await mkdir(path.dirname(skillDestination), { recursive: true });
 await rm(skillDestination, { recursive: true, force: true });
@@ -167,6 +114,6 @@ await cp(skillSource, skillDestination, { recursive: true });
 console.log(`Installed AIOS MCP in Claude Desktop: ${claudeConfig}`);
 console.log(`Installed AIOS MCP in Cursor: ${cursorConfig}`);
 console.log(`Installed AIOS MCP in Claude Code: ${claudeCodeConfig}`);
-console.log(`Installed AIOS-only tool permissions plus UserPromptSubmit/Stop hooks in Claude Code: ${claudeCodeSettings}`);
+console.log(`Installed AIOS-only tool permissions in Claude Code: ${claudeCodeSettings}`);
 console.log(`Installed the local Claude/Claude Code skill: ${skillDestination}`);
 console.log('Restart Claude Desktop and Cursor so they reload MCP configuration.');

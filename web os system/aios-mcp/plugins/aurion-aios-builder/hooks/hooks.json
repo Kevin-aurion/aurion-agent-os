@@ -1,5 +1,5 @@
 {
-  "description": "Close the Aurion AIOS Agent-building lifecycle across session start, prompt submission, successful MCP calls, and stop without storing OAuth credentials.",
+  "description": "Initialize Aurion AIOS Agent-building lifecycle state on session start without storing OAuth credentials.",
   "hooks": {
     "SessionStart": [
       {
@@ -12,112 +12,6 @@
             ],
             "timeout": 5,
             "statusMessage": "Initializing Aurion AIOS lifecycle"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/scripts/lifecycle-hook.mjs"
-            ],
-            "timeout": 5,
-            "statusMessage": "Checking Aurion AIOS build context"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "^mcp__(plugin_aurion-aios-builder_aurion_aios|claude_ai_aurion_aios(_2)?)__(start_agent_build|prepare_agent_build_prompt|guard_agent_build_stop)$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/scripts/lifecycle-hook.mjs"
-            ],
-            "timeout": 5,
-            "statusMessage": "Validating Aurion AIOS lifecycle call"
-          }
-        ]
-      },
-      {
-        "matcher": "^mcp__(plugin_aurion-aios-builder_aurion_aios|claude_ai_aurion_aios(_2)?)__(sync_agent_build_turn|sync_agent_build_artifact|upsert_agent_build_snapshot)$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/scripts/lifecycle-hook.mjs"
-            ],
-            "timeout": 5,
-            "statusMessage": "Validating Aurion AIOS inert draft synchronization"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "^mcp__(plugin_aurion-aios-builder_aurion_aios|claude_ai_aurion_aios(_2)?)__(start_agent_build|prepare_agent_build_prompt|guard_agent_build_stop)$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/scripts/lifecycle-hook.mjs"
-            ],
-            "timeout": 5,
-            "statusMessage": "Confirming Aurion AIOS synchronization"
-          }
-        ]
-      }
-    ],
-    "PermissionRequest": [
-      {
-        "matcher": "^mcp__(plugin_aurion-aios-builder_aurion_aios|claude_ai_aurion_aios(_2)?)__(start_agent_build|prepare_agent_build_prompt|guard_agent_build_stop)$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/scripts/lifecycle-hook.mjs"
-            ],
-            "timeout": 5,
-            "statusMessage": "Authorizing Aurion AIOS lifecycle synchronization"
-          }
-        ]
-      },
-      {
-        "matcher": "^mcp__(plugin_aurion-aios-builder_aurion_aios|claude_ai_aurion_aios(_2)?)__(sync_agent_build_turn|sync_agent_build_artifact|upsert_agent_build_snapshot)$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/scripts/lifecycle-hook.mjs"
-            ],
-            "timeout": 5,
-            "statusMessage": "Authorizing Aurion AIOS inert draft synchronization"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "args": [
-              "${CLAUDE_PLUGIN_ROOT}/scripts/lifecycle-hook.mjs"
-            ],
-            "timeout": 5,
-            "statusMessage": "Closing the Aurion AIOS build turn"
           }
         ]
       }
