@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { config, paths } from '../config.js';
+import { redactSecrets } from '../memory/redactor.js';
 import { assertInsideRoot } from './safepath.js';
 
 export type BuilderPromptStage = 'interview' | 'evolution' | 'shadow' | 'hook';
@@ -24,8 +25,23 @@ export const BUILDER_PROMPT_STAGES: readonly BuilderPromptStage[] = [
 const KEBAB_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const VAR_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const SECTION_SUFFIX = '.section.md';
+const PERSONA_FILE = 'advisor-persona.section.md';
 const OPEN = '{{';
 const CLOSE = '}}';
+
+/** Appendix A advisor persona. Shared by factory files, LAST_RESORT, and DB seed. */
+export const DEFAULT_ADVISOR_PERSONA_BODY =
+  '你像資深顧問：先講你對客戶情境的具體理解，再一次只問一個最有價值的問題。早期優先問「為什麼、卡點、現況」，而不是索取資料或權限。已知的事不重問。';
+
+const DEFAULT_PERSONA_FRONTMATTER = [
+  '---',
+  'name: advisor-persona',
+  'order: 0',
+  'enabled: true',
+  'origin: builtin',
+  'createdAt: "2026-08-27"',
+  '---',
+].join('\n');
 
 /** Order bands (convention; not a hard validator on extraSections). */
 export const PROMPT_ORDER = {
@@ -119,8 +135,8 @@ const LAST_RESORT: FileSection[] = [
     stages: null,
     origin: 'builtin',
     createdAt: '2026-08-27',
-    body: '你像資深顧問：先講你對客戶情境的具體理解，再一次只問一個最有價值的問題。早期優先問「為什麼、卡點、現況」，而不是索取資料或權限。已知的事不重問。',
-    fileName: 'advisor-persona.section.md',
+    body: DEFAULT_ADVISOR_PERSONA_BODY,
+    fileName: PERSONA_FILE,
   },
 ];
 
@@ -462,6 +478,57 @@ function toPromptSection(file: FileSection): PromptSection {
 function assertKebabName(name: string): void {
   if (!KEBAB_NAME.test(name)) {
     throw new PromptAssemblyError(`section name must be kebab-case: ${JSON.stringify(name)}`);
+  }
+}
+
+function splitFrontmatterBlock(raw: string): { block: string; body: string } | null {
+  const md = String(raw ?? '').replace(/\r\n/g, '\n');
+  const m = md.match(/^(---\n[\s\S]*?\n---)(?:\n([\s\S]*))?$/);
+  if (!m) return null;
+  const block = m[1];
+  if (!block) return null;
+  return { block, body: m[2] ?? '' };
+}
+
+function readFrontmatterBlock(dir: string, fileName: string): string | null {
+  if (!fs.existsSync(dir)) return null;
+  const candidate = path.join(dir, fileName);
+  if (!fs.existsSync(candidate)) return null;
+  try {
+    const root = realpathExisting(dir);
+    const abs = realpathInside(root, candidate);
+    const parsed = splitFrontmatterBlock(fs.readFileSync(abs, 'utf8'));
+    return parsed?.block ?? null;
+  } catch (err) {
+    warn(`could not read frontmatter from ${fileName}`, err);
+    return null;
+  }
+}
+
+/**
+ * Unidirectional DB → file sync for the advisor persona section.
+ * Keeps the existing YAML frontmatter block and replaces only the body.
+ * Fail-safe: write errors warn and never throw to the caller.
+ */
+export function syncAdvisorPersonaFromRolePrompt(rolePrompt: string): void {
+  const body = redactSecrets(String(rolePrompt ?? '')).replace(/\s+$/, '');
+  if (!body.trim()) {
+    warn('skipping advisor persona sync: empty rolePrompt after redact');
+    return;
+  }
+  try {
+    const destDir = ensureBuilderPromptDir();
+    const destRoot = realpathOrResolve(destDir);
+    fs.mkdirSync(destRoot, { recursive: true });
+    const dest = assertInsideRoot(destRoot, path.join(destRoot, PERSONA_FILE));
+    const frontmatter =
+      readFrontmatterBlock(destDir, PERSONA_FILE) ??
+      readFrontmatterBlock(builderPromptBuiltinDir(), PERSONA_FILE) ??
+      DEFAULT_PERSONA_FRONTMATTER;
+    fs.writeFileSync(dest, `${frontmatter}\n${body}\n`, 'utf8');
+    resetPromptAssemblyCache();
+  } catch (err) {
+    warn('failed to sync advisor persona section', err);
   }
 }
 

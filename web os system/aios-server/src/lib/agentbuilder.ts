@@ -37,7 +37,11 @@ import {
   finishBuilderInterviewCall,
   type BuilderClaudeFn,
 } from './builderabort.js';
-import { assemblePrompt } from './promptassembly.js';
+import {
+  assemblePrompt,
+  DEFAULT_ADVISOR_PERSONA_BODY,
+  syncAdvisorPersonaFromRolePrompt,
+} from './promptassembly.js';
 import {
   createExternalBuilderWorkflows,
   materializeExternalBuilderFiles,
@@ -242,11 +246,19 @@ const DISCOVERY_ORDER: BriefFieldKey[] = [
 ];
 
 const BUILDER_ADVISOR_SLUG = 'aios-agent-builder-advisor';
+/** Pre-v2 create-time stub. Never read back (P1); migrate to Appendix A on sync. */
+const LEGACY_ADVISOR_ROLE_PROMPT =
+  '你只協助釐清企業 AI 員工需求，不執行工具、不建立或修改任何系統物件。';
 
 export async function ensureBuilderAdvisor(): Promise<{
   id: string;
   costPolicy: unknown;
 }> {
+  // V2-3: PATCH /api/agents/:id forbids systemManaged agents, so there is no
+  // routes-layer editor for this advisor's rolePrompt. Persona sync is
+  // unidirectional DB → aios-data/prompts/builder/advisor-persona.section.md
+  // here on create/update. Direct section-file edits also work (mtime cache)
+  // until the next ensureBuilderAdvisor call overwrites them (DB wins).
   const existing = await prisma.agent.findUnique({ where: { slug: BUILDER_ADVISOR_SLUG } });
   const costPolicy = {
     dailyBudgetUsd: 1,
@@ -254,7 +266,11 @@ export async function ensureBuilderAdvisor(): Promise<{
     hardStop: true,
   };
   if (existing) {
-    return prisma.agent.update({
+    const nextRolePrompt =
+      existing.rolePrompt === LEGACY_ADVISOR_ROLE_PROMPT
+        ? DEFAULT_ADVISOR_PERSONA_BODY
+        : existing.rolePrompt;
+    const updated = await prisma.agent.update({
       where: { id: existing.id },
       data: {
         name: 'AIOS 員工建立顧問',
@@ -276,9 +292,12 @@ export async function ensureBuilderAdvisor(): Promise<{
           notes: '只產生訪談文字；不得執行工具或改變建立狀態。',
         },
         costPolicy,
+        ...(nextRolePrompt !== existing.rolePrompt ? { rolePrompt: nextRolePrompt } : {}),
       },
-      select: { id: true, costPolicy: true },
+      select: { id: true, costPolicy: true, rolePrompt: true },
     });
+    syncAdvisorPersonaFromRolePrompt(updated.rolePrompt);
+    return { id: updated.id, costPolicy: updated.costPolicy };
   }
   const creator = await prisma.user.findFirst({
     where: { deletedAt: null, role: { in: ['OWNER', 'TRAINER'] } },
@@ -286,14 +305,14 @@ export async function ensureBuilderAdvisor(): Promise<{
     select: { id: true },
   });
   if (!creator) throw errors.notConfigured('找不到可建立訪談顧問的 FDE 帳號');
-  return prisma.agent.create({
+  const created = await prisma.agent.create({
     data: {
       id: ulid(),
       slug: BUILDER_ADVISOR_SLUG,
       name: 'AIOS 員工建立顧問',
       description: '依客戶情境產生下一個高價值訪談問題；不能建立、修改或啟用任何 Agent／Skill。',
       department: 'AIOS 系統',
-      rolePrompt: '你只協助釐清企業 AI 員工需求，不執行工具、不建立或修改任何系統物件。',
+      rolePrompt: DEFAULT_ADVISOR_PERSONA_BODY,
       engineExecute: 'CLAUDE_CODE',
       engineVerify: 'GROK',
       restrictions: {
@@ -312,8 +331,10 @@ export async function ensureBuilderAdvisor(): Promise<{
       systemManaged: true,
       createdBy: creator.id,
     },
-    select: { id: true, costPolicy: true },
+    select: { id: true, costPolicy: true, rolePrompt: true },
   });
+  syncAdvisorPersonaFromRolePrompt(created.rolePrompt);
+  return { id: created.id, costPolicy: created.costPolicy };
 }
 
 const QUESTIONS: Record<

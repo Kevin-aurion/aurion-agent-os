@@ -448,7 +448,7 @@ test('disabled extraSections are omitted', () => {
   useRoots('disabled');
   const result = assemblePrompt({
     stage: 'hook',
-    vars: {},
+    vars: { sessionId: 's', status: 'DISCOVERY' },
     extraSections: [extra('quiet-rule', 120, 'SHOULD_NOT_APPEAR', false)],
   });
   assert.equal(result.sectionsUsed.includes('quiet-rule'), false);

@@ -194,6 +194,9 @@ export async function agentRoutes(app: FastifyInstance) {
       const body = updateSchema.parse(req.body);
       const existing = await prisma.agent.findFirst({ where: { id, deletedAt: null } });
       if (!existing) throw errors.notFound('Agent not found');
+      // Builder advisor (slug aios-agent-builder-advisor) is systemManaged, so
+      // this PATCH cannot update its rolePrompt. V2-3 persona sync is DB→file
+      // inside ensureBuilderAdvisor (src/lib/agentbuilder.ts), not this route.
       if (existing.systemManaged) throw errors.forbidden('系統管理 Agent 不可由一般編輯端修改');
       const agent = await prisma.agent.update({
         where: { id },

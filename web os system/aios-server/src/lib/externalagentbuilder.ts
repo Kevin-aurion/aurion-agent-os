@@ -40,6 +40,7 @@ import {
   type BuilderTestInputRequirement,
 } from './buildertestinputs.js';
 import { createBuilderWorkingAgent } from './builderworkingagent.js';
+import { assemblePrompt } from './promptassembly.js';
 
 export type ExternalBuilderSource = 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CHATGPT' | 'CURSOR' | 'OTHER';
 
@@ -566,13 +567,17 @@ async function findExternalSession(
   });
 }
 
-function hookContext(sessionId: string, status: AgentBuildSessionStatus): string {
-  return [
-    `AIOS 已自動追蹤這段 Agent 建置對話（建置 ID：${sessionId}，狀態：${status}）。`,
-    '請像資深顧問一樣自然理解需求、一次追問一個最有價值的問題；不要使用固定問卷，也不要要求使用者提醒你保存。',
-    '對話會由 Hook 自動同步並由 AIOS 在背景建立 Agent／Skill 草稿。草稿不代表已啟用；送審、測試與正式生效仍遵守 FDE 閘門。',
-    '如果使用者提供檔案，請使用 build-aios-agent Skill 的檔案同步流程；如果使用者明確要求送審，再使用該 Skill 的送審工具。',
-  ].join('\n');
+export function hookContext(sessionId: string, status: AgentBuildSessionStatus): string {
+  try {
+    const assembled = assemblePrompt({
+      stage: 'hook',
+      vars: { sessionId, status: String(status) },
+    });
+    return assembled.systemPrompt;
+  } catch (err) {
+    console.warn('[externalagentbuilder] hook prompt assembly failed; using fallback', err);
+    return `AIOS 已自動追蹤這段 Agent 建置對話（建置 ID：${sessionId}，狀態：${status}）。`;
+  }
 }
 
 /**
