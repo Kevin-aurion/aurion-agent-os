@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 function req(name: string, fallback?: string): string {
   const v = process.env[name] ?? fallback;
@@ -154,6 +155,10 @@ export const paths = {
   deviceArtifacts: path.join(config.dataDir, 'device-artifacts'),
   knowledgePilotRuns: path.join(config.dataDir, 'runs', 'knowledge-pilot'),
   builtinSkills: path.resolve(process.cwd(), 'builtin-skills'),
+  // Builder Prompt v2: runtime-editable sections under aios-data; factory copies
+  // live next to builtin-skills, resolved from this file so cwd does not matter.
+  builderPrompts: path.join(config.dataDir, 'prompts', 'builder'),
+  builtinPrompts: path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'builtin-prompts'),
 };
 
 /** Which integrations are configured (keys present in .env). */

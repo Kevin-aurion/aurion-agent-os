@@ -21,6 +21,7 @@
 - `recording.ts` — Record & Replay durable session；user/Agent 雙重歸屬、artifact 路徑只留主機、錄製提示先 redact，匯入後停在待 FDE 確認。
 - `reflection.ts` — 定時反思服務：收集指定 window 內所有非系統 Agent 的 USER 訊息，先 `redactSecrets` 再交給獨立 GROK Agent、CLAUDE_CODE 交叉驗證。模型輸出只可落成 `ReflectionSuggestion`，不得直接修改 Agent/Skill。
 - `changeproposal.ts` — `REFLECTION` 建議需先由 FDE 送交提案，再於提案頁第二次核准；`append_role_guidance` / `append_guidance` 只在核准交易中生效，Skill 同時產生並升級穩定版本。
+- `promptassembly.ts` — Builder Prompt v2 組裝器：`assemblePrompt()` 以 section 檔（`aios-data/prompts/builder/*.section.md`，mtime 快取、`safepath` 錨定）overlay 出廠段；同名衝突與 `{{var}}` 未註冊／未賦值／格式錯誤 fail-closed；壞段 skip + warn（組裝永遠能產出可用 prompt）。出廠檔在 `builtin-prompts/builder/`。
 
 ## 慣例
 - 任何對外副作用（寄信、發佈、刪除）都應留稽核紀錄。

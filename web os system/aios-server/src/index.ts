@@ -5,6 +5,7 @@ import multipart from '@fastify/multipart';
 import fs from 'node:fs';
 import { config, paths } from './config.js';
 import { prisma } from './lib/db.js';
+import { ensureBuilderPromptDir } from './lib/promptassembly.js';
 import { hub } from './ws/hub.js';
 import { sendError } from './lib/http.js';
 import { authRoutes } from './routes/auth.js';
@@ -87,6 +88,11 @@ async function main() {
     paths.deviceArtifacts,
   ]) {
     fs.mkdirSync(p, { recursive: true });
+  }
+  try {
+    ensureBuilderPromptDir();
+  } catch (err) {
+    console.warn('[promptassembly] failed to initialize builder prompts', err);
   }
 
   const app = Fastify({
