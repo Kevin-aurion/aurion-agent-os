@@ -6,7 +6,7 @@ import { API } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { Spinner } from '@/components/ui';
 
-/** Mic → OpenAI Whisper via `/api/voice/transcribe`. Extracted from employee TrainingTab. */
+/** Mic → OpenAI Whisper via `/api/voice/transcribe`. Used by the workbench conversation composer. */
 export function VoiceInput({
   onTranscript,
   disabled,

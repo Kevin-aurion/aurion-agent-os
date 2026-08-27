@@ -123,6 +123,26 @@ export function draftCardActions(input: {
 /**
  * Gate recording import when the bound agent differs from the selected agent.
  */
+/** Deterministic “有哪些流程？” intent — never calls the LLM. */
+export function isFlowsIntent(text: string): boolean {
+  return /有哪些流程|目前有哪些流程|流程清單|list\s*flows/i.test(text.trim());
+}
+
+/**
+ * Route a composer message to train/message instead of a work run.
+ * Prefix / keyword match is fail-closed toward work assignment: only explicit
+ * teaching language (or flows list) triggers a skill draft.
+ */
+export function isTrainIntent(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (isFlowsIntent(t)) return true;
+  return (
+    /^(教你|教它|教會|訓練|教學|新技能|教一下|請學|學會這個|示範|補充草稿)/i.test(t) ||
+    /(教你|教它|教會你|這是新技能|新增技能|訓練技能|教學文件|教這個流程)/i.test(t)
+  );
+}
+
 export function recordingImportTarget(
   boundAgentId: string | null | undefined,
   selectedAgentId: string | null | undefined,

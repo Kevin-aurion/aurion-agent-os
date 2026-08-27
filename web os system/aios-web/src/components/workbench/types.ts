@@ -142,6 +142,7 @@ export interface RecordingStatus {
   [key: string]: unknown;
 }
 
+/** @deprecated S1-4b: teach merged into work conversation; builder is left-rail only. */
 export type WorkbenchMode = 'work' | 'teach';
 
 export type TeachChatMsg =

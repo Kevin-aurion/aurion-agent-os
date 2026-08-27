@@ -10,7 +10,6 @@ import {
   GraduationCap,
   List,
   Menu,
-  MessageSquare,
   PanelRight,
   Paperclip,
   Plus,
@@ -26,6 +25,8 @@ import { useAuth, isFdeRole } from '@/lib/auth';
 import { useAwp, type AwpFrame } from '@/lib/awp';
 import {
   buildUploadTrainMessage,
+  isFlowsIntent,
+  isTrainIntent,
   recordingImportTarget,
   validateTeachUpload,
 } from '@/lib/teachjourney';
@@ -61,7 +62,6 @@ import {
   type SkillDetail,
   type TeachChatMsg,
   type TrainMessageResult,
-  type WorkbenchMode,
   isRecordingActive,
   normalizeUnderstanding,
   parseSkillNameFromMd,
@@ -94,8 +94,7 @@ function WorkbenchInner() {
 
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(agentFromUrl);
   const [activeConvId, setActiveConvId] = useState<string | null>(convFromUrl);
-  const [mode, setMode] = useState<WorkbenchMode>(modeFromUrl === 'teach' ? 'teach' : 'work');
-  /** Agent Builder surface — independent of selecting an existing Agent. */
+  /** Agent Builder surface — independent of selecting an existing Agent. Left-rail only. */
   const [builderOpen, setBuilderOpen] = useState(modeFromUrl === 'builder');
   /** Live builder session for right-rail checklist (no technical settings). */
   const [builderSession, setBuilderSession] = useState<BuilderSession | null>(null);
@@ -112,14 +111,8 @@ function WorkbenchInner() {
   const leftDrawerFirstBtnRef = useRef<HTMLButtonElement>(null);
   const rightDrawerCloseBtnRef = useRef<HTMLButtonElement>(null);
 
-  // Teach-mode local transcript (not persisted server-side in Phase 1).
-  const [teachMessages, setTeachMessages] = useState<TeachChatMsg[]>([
-    {
-      id: 'welcome',
-      kind: 'system',
-      text: '用文字、語音或上傳教學文件描述要教的流程，或按「有哪些流程？」。也可開始錄製桌面操作。技能不會自動確認。',
-    },
-  ]);
+  // Teach artifacts overlay the same conversation stream (not persisted server-side).
+  const [teachMessages, setTeachMessages] = useState<TeachChatMsg[]>([]);
   const [draftSkillId, setDraftSkillId] = useState<string | null>(null);
   const [teachSending, setTeachSending] = useState(false);
   const [teachError, setTeachError] = useState<string | null>(null);
@@ -135,25 +128,22 @@ function WorkbenchInner() {
   const teachEndRef = useRef<HTMLDivElement | null>(null);
   const teachFileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Keep URL query in sync for deep links (agent + conversation + mode).
+  // Keep URL query in sync for deep links (agent + conversation + builder).
   const syncUrl = useCallback(
     (next: {
       agent?: string | null;
       conversation?: string | null;
-      mode?: WorkbenchMode;
       builder?: boolean;
     }) => {
       const params = new URLSearchParams();
       const a = next.agent !== undefined ? next.agent : selectedAgentId;
       const c = next.conversation !== undefined ? next.conversation : activeConvId;
-      const m = next.mode !== undefined ? next.mode : mode;
       const b = next.builder !== undefined ? next.builder : builderOpen;
       if (b) {
         params.set('mode', 'builder');
       } else {
         if (a) params.set('agent', a);
         if (c) params.set('conversation', c);
-        if (m === 'teach') params.set('mode', 'teach');
       }
       const qs = params.toString();
       const nextPath = qs ? `/work?${qs}` : '/work';
@@ -162,7 +152,7 @@ function WorkbenchInner() {
       if (cur === nextPath) return;
       router.replace(nextPath, { scroll: false });
     },
-    [selectedAgentId, activeConvId, mode, builderOpen, router],
+    [selectedAgentId, activeConvId, builderOpen, router],
   );
 
   const agentsQ = useQuery({
@@ -245,7 +235,7 @@ function WorkbenchInner() {
   const messagesQ = useQuery({
     queryKey: ['messages', activeConvId],
     queryFn: () => API.get<ChatMessage[]>(`/api/conversations/${activeConvId}/messages`),
-    enabled: !!activeConvId && mode === 'work',
+    enabled: !!activeConvId,
   });
 
   const createConvMutation = useMutation({
@@ -315,7 +305,7 @@ function WorkbenchInner() {
       return active ? 3000 : false;
     },
     retry: false,
-    enabled: mode === 'teach',
+    enabled: !!selectedAgentId,
   });
   const recordingOn = recordingWanted || isRecordingActive(recStatusQ.data);
   const recSessionStatus = recordingSessionStatus(recStatusQ.data);
@@ -433,27 +423,17 @@ function WorkbenchInner() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messagesQ.data, runSteps]);
-
-  useEffect(() => {
-    teachEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [teachMessages, teachSending]);
+  }, [messagesQ.data, runSteps, teachMessages, teachSending]);
 
   // Reset teach draft chain when agent changes.
   useEffect(() => {
     setDraftSkillId(null);
     setTeachError(null);
-    setTeachMessages([
-      {
-        id: 'welcome',
-        kind: 'system',
-        text: '用文字或語音描述要教的流程，或按「有哪些流程？」。也可開始錄製桌面操作。技能不會自動確認。',
-      },
-    ]);
+    setTeachMessages([]);
   }, [selectedAgentId]);
 
   function selectAgent(id: string) {
-    // Selecting an Agent exits builder mode (workbench returns to work/teach).
+    // Selecting an Agent exits builder mode (workbench returns to conversation).
     setBuilderOpen(false);
     setBuilderSession(null);
     setSelectedAgentId(id);
@@ -473,19 +453,8 @@ function WorkbenchInner() {
     setActiveConvId(id);
     setWorkSession(createWorkSession(null));
     setSendError(null);
-    setMode('work');
     setLeftDrawerOpen(false);
-    syncUrl({ conversation: id, builder: false, mode: 'work' });
-  }
-
-  function switchMode(next: WorkbenchMode) {
-    setMode(next);
-    setBuilderOpen(false);
-    setBuilderSession(null);
-    setWorkSession(createWorkSession(null));
-    setSendError(null);
-    setTeachError(null);
-    syncUrl({ mode: next, builder: false });
+    syncUrl({ conversation: id, builder: false });
   }
 
   function openLeftDrawer() {
@@ -544,14 +513,16 @@ function WorkbenchInner() {
   function closeBuilder() {
     setBuilderOpen(false);
     setBuilderSession(null);
-    syncUrl({ builder: false, mode });
+    syncUrl({ builder: false });
   }
 
-  function submitWork(e: React.FormEvent) {
-    e.preventDefault();
-    const content = draft.trim();
-    if (!content || !activeConvId || sendMutation.isPending) return;
-    sendMutation.mutate(content);
+  function submitWork(content: string) {
+    if (!content || sendMutation.isPending) return;
+    if (activeConvId) {
+      sendMutation.mutate(content);
+      return;
+    }
+    void ensureConversationThenSend();
   }
 
   async function ensureConversationThenSend() {
@@ -585,10 +556,6 @@ function WorkbenchInner() {
 
   function pushTeach(msg: TeachChatMsg) {
     setTeachMessages((prev) => [...prev, msg]);
-  }
-
-  function isFlowsIntent(text: string): boolean {
-    return /有哪些流程|目前有哪些流程|流程清單|list\s*flows/i.test(text.trim());
   }
 
   async function loadFlows() {
@@ -762,7 +729,7 @@ function WorkbenchInner() {
           action: 'confirm_skill',
           skillId,
           name,
-          note: '操作者從工作台訓練模式送出：請 FDE 確認並掛載此技能草稿',
+          note: '操作者從工作台對話送出：請 FDE 確認並掛載此技能草稿',
         },
         severity: 'medium',
       });
@@ -892,7 +859,18 @@ function WorkbenchInner() {
   const busyWork = sendMutation.isPending || createConvMutation.isPending;
   const activeConvTitle =
     conversations.find((c) => c.id === activeConvId)?.title ?? null;
-  const showSessionRail = mode === 'work' && !!workSession.runId;
+  const busy = busyWork || teachSending;
+  const showSessionRail = !!workSession.runId;
+
+  function submitComposer(asTrain: boolean) {
+    const content = draft.trim();
+    if (!content || !selectedAgentId || busy) return;
+    if (asTrain || isTrainIntent(content) || isFlowsIntent(content)) {
+      void sendTrainMessage(content);
+      return;
+    }
+    submitWork(content);
+  }
 
   // Shared left-rail body (desktop + mobile drawer) — render fn avoids dual-mount of one element.
   function renderLeftRail(opts?: { focusFirst?: boolean }) {
@@ -920,11 +898,10 @@ function WorkbenchInner() {
               // New task exits builder and starts a work thread on the selected Agent.
               setBuilderOpen(false);
               setBuilderSession(null);
-              setMode('work');
               setWorkSession(createWorkSession(null));
               createConvMutation.mutate(undefined);
               setLeftDrawerOpen(false);
-              syncUrl({ builder: false, mode: 'work', agent: selectedAgentId });
+              syncUrl({ builder: false, agent: selectedAgentId });
             }}
           >
             {createConvMutation.isPending ? (
@@ -1106,8 +1083,8 @@ function WorkbenchInner() {
               <div className="text-[11px] font-medium uppercase tracking-wide">工作台提示</div>
               <ul className="list-disc space-y-1.5 pl-4 leading-relaxed">
                 <li>用「建立 AI 員工」從業務目標訪談、規劃、試跑到啟用。</li>
-                <li>用「交代工作」給既有 Agent 任務；回覆會即時出現。</li>
-                <li>用「教它新工作」口述或錄製流程，產生技能草稿。</li>
+                <li>在同一個對話裡交代工作；回覆會即時出現。</li>
+                <li>以「教你」開頭、問「有哪些流程？」、上傳或錄製，會產生技能草稿。</li>
                 <li>技能不會自動確認；MEMBER 只能送提案／送交 FDE。</li>
                 <li>不會顯示引擎、工作流編排等技術設定。</li>
               </ul>
@@ -1184,10 +1161,9 @@ function WorkbenchInner() {
                   setSelectedAgentId(agentId);
                   setBuilderOpen(false);
                   setBuilderSession(null);
-                  setMode('work');
                   setActiveConvId(null);
                   setWorkSession(createWorkSession(null));
-                  syncUrl({ agent: agentId, conversation: null, builder: false, mode: 'work' });
+                  syncUrl({ agent: agentId, conversation: null, builder: false });
                 }
               }}
             />
@@ -1210,39 +1186,15 @@ function WorkbenchInner() {
                   {selectedAgent?.name ?? '選擇 Agent'}
                 </div>
                 <div className="truncate text-xs text-muted">
-                  {mode === 'work'
-                    ? activeConvId
-                      ? activeConvTitle || `任務 ${activeConvId.slice(0, 8)}`
-                      : '交代工作'
-                    : '教它新工作'}
+                  {activeConvId
+                    ? activeConvTitle || `任務 ${activeConvId.slice(0, 8)}`
+                    : draftSkillId
+                      ? '補充技能草稿'
+                      : '對話'}
                 </div>
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
-              <div className="flex rounded-lg border border-border p-0.5">
-                <button
-                  type="button"
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors sm:px-3',
-                    mode === 'work' ? 'bg-brand/15 text-brand' : 'text-muted hover:text-fg',
-                  )}
-                  onClick={() => switchMode('work')}
-                >
-                  <MessageSquare className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">交代工作</span>
-                </button>
-                <button
-                  type="button"
-                  className={cn(
-                    'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors sm:px-3',
-                    mode === 'teach' ? 'bg-brand/15 text-brand' : 'text-muted hover:text-fg',
-                  )}
-                  onClick={() => switchMode('teach')}
-                >
-                  <GraduationCap className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">教它新工作</span>
-                </button>
-              </div>
               <button
                 ref={rightDetailBtnRef}
                 type="button"
@@ -1256,432 +1208,395 @@ function WorkbenchInner() {
             </div>
           </div>
 
-          {mode === 'work' ? (
-            <>
-              <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-                {!selectedAgentId && (
-                  <div className="flex h-full items-center justify-center">
-                    <EmptyState
-                      title="歡迎使用 AI 工作台"
-                      hint="從左側選一位 Agent，建立任務後用日常語言交代工作。"
+          <div className="border-b border-border px-4 py-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs text-muted">
+                交代工作會立即執行。以「教你」開頭、問流程、上傳或錄製，會產生技能草稿。
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  disabled={!selectedAgentId || teachSending}
+                  onClick={() => void loadFlows()}
+                >
+                  <List className="h-3.5 w-3.5" /> 有哪些流程？
+                </button>
+                {!recordingOn ? (
+                  <button
+                    type="button"
+                    className="btn-ghost text-xs"
+                    disabled={!selectedAgentId || recBusy || teachSending}
+                    onClick={() => setRecordingConsentOpen(true)}
+                  >
+                    {recBusy ? (
+                      <Spinner className="h-3.5 w-3.5" />
+                    ) : (
+                      <Video className="h-3.5 w-3.5" />
+                    )}
+                    錄製操作示範
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-primary bg-rose-600 text-xs hover:bg-rose-500"
+                    disabled={recBusy}
+                    onClick={() => void stopRecordingAndImport()}
+                  >
+                    {recBusy ? (
+                      <Spinner className="border-white/40 border-t-white" />
+                    ) : (
+                      <Square className="h-3 w-3" />
+                    )}
+                    結束錄製
+                  </button>
+                )}
+              </div>
+            </div>
+            {recordingConsentOpen && !recordingOn && (
+              <div className="mt-3 rounded-xl border border-brand/35 bg-brand/10 p-3 text-sm">
+                <div className="font-semibold">開始錄製前，先確認這次要教什麼</div>
+                <p className="mt-1 text-xs leading-5 text-muted">
+                  系統會擷取這台電腦上的畫面與操作事件。請先關閉含密碼、驗證碼、個資或帳號資訊的視窗；完成後只會建立技能草稿，仍需 FDE 審核才會生效。
+                </p>
+                <textarea
+                  className="input mt-3 min-h-[72px] w-full resize-y text-sm"
+                  value={recordingHint}
+                  onChange={(e) => setRecordingHint(e.target.value)}
+                  placeholder="例如：示範如何打開 LINE、進入指定群組、整理今天的訊息；群組名稱與日期要成為每次可更換的輸入。"
+                  maxLength={4000}
+                  autoFocus
+                />
+                <div className="mt-3 flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    className="btn-ghost text-xs"
+                    disabled={recBusy}
+                    onClick={() => setRecordingConsentOpen(false)}
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-primary text-xs"
+                    disabled={recBusy || !selectedAgentId}
+                    onClick={() => void startRecording()}
+                  >
+                    {recBusy ? <Spinner className="border-white/40 border-t-white" /> : <Circle className="h-3 w-3 fill-rose-500 text-rose-500" />}
+                    我準備好了，開始錄製
+                  </button>
+                </div>
+              </div>
+            )}
+            {recordingOn && (
+              <div className="mt-2 flex items-center gap-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300">
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-rose-500" />
+                </span>
+                正在錄製這台電腦的操作 — 單次上限 30 分鐘
+              </div>
+            )}
+            {recSessionStatus === 'INTERRUPTED' && !interruptedDismissed && (
+              <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200">
+                <span>上次錄製因伺服器重啟而中斷，請重新開始錄製。</span>
+                <button
+                  type="button"
+                  className="shrink-0 rounded px-1.5 py-0.5 text-amber-100/90 underline-offset-2 hover:underline"
+                  onClick={() => {
+                    setInterruptedDismissed(true);
+                    void recStatusQ.refetch();
+                  }}
+                >
+                  知道了
+                </button>
+              </div>
+            )}
+            {recSessionStatus === 'COMPILING' && (
+              <div className="mt-2 rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs text-sky-200">
+                正在把錄製編譯為技能草稿…
+              </div>
+            )}
+            {recSessionStatus === 'FAILED' && (
+              <div className="mt-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-300">
+                錄製編譯失敗，請重試。
+              </div>
+            )}
+          </div>
+
+          <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+            {!selectedAgentId && (
+              <div className="flex h-full items-center justify-center">
+                <EmptyState
+                  title="歡迎使用 AI 工作台"
+                  hint="從左側選一位 Agent，用日常語言交代工作，或以「教你」開頭訓練技能。"
+                />
+              </div>
+            )}
+            {selectedAgentId && !activeConvId && teachMessages.length === 0 && (
+              <div className="flex h-full items-center justify-center">
+                <EmptyState
+                  title="開始對話"
+                  hint="直接輸入會自動建立任務；教學、上傳或錄製會在同一視窗產生技能草稿。"
+                />
+              </div>
+            )}
+            {selectedAgentId && activeConvId && messagesQ.isLoading && (
+              <div className="flex justify-center py-12">
+                <Spinner className="h-5 w-5" />
+              </div>
+            )}
+            {selectedAgentId && activeConvId && messagesQ.isError && (
+              <p className="text-center text-sm text-rose-400">
+                {messagesQ.error instanceof Error
+                  ? messagesQ.error.message
+                  : '無法載入訊息'}
+              </p>
+            )}
+            {selectedAgentId &&
+              activeConvId &&
+              !messagesQ.isLoading &&
+              messages.length === 0 &&
+              teachMessages.length === 0 && (
+                <p className="text-center text-sm text-muted">
+                  尚無訊息。告訴 {selectedAgent?.name ?? '這位員工'} 要做什麼，或教它一個新流程。
+                </p>
+              )}
+            {messages.map((m) => {
+              const role = (m.role ?? m.sender ?? 'user').toString().toUpperCase();
+              const isUser = role.includes('USER');
+              const runId = m.runId ?? sentRunIds[m.id];
+              const runStatus = runId ? runsById.get(runId)?.status : undefined;
+              return (
+                <div
+                  key={m.id}
+                  className={cn('flex flex-col gap-1.5', isUser ? 'items-end' : 'items-start')}
+                >
+                  <div
+                    className={cn(
+                      'max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm',
+                      isUser ? 'bg-brand text-white' : 'bg-black/5 dark:bg-white/10',
+                    )}
+                  >
+                    {m.content}
+                  </div>
+                  {isUser && runId && (
+                    <ChatRunTimeline
+                      steps={runSteps[runId] ?? []}
+                      status={runStatus}
+                      onStop={
+                        runStatus === 'RUNNING'
+                          ? () => cancelRunMutation.mutate(runId)
+                          : undefined
+                      }
+                      stopping={cancelRunMutation.isPending && cancelRunMutation.variables === runId}
                     />
+                  )}
+                </div>
+              );
+            })}
+            {teachMessages.map((m) => {
+              if (m.kind === 'user') {
+                return (
+                  <div key={m.id} className="flex justify-end">
+                    <div className="max-w-[85%] rounded-2xl rounded-br-md bg-brand/20 px-3 py-2 text-sm">
+                      {m.text}
+                    </div>
                   </div>
-                )}
-                {selectedAgentId && !activeConvId && (
-                  <div className="flex h-full items-center justify-center">
-                    <EmptyState
-                      title="尚無任務 thread"
-                      hint="按左上「新任務」，或直接在下方輸入，系統會自動建立。"
-                    />
+                );
+              }
+              if (m.kind === 'system') {
+                return (
+                  <div key={m.id} className="text-center text-xs text-muted">
+                    {m.text}
                   </div>
-                )}
-                {selectedAgentId && activeConvId && messagesQ.isLoading && (
-                  <div className="flex justify-center py-12">
-                    <Spinner className="h-5 w-5" />
+                );
+              }
+              if (m.kind === 'drafting') {
+                return (
+                  <div key={m.id} className="flex items-center gap-2 text-sm text-muted">
+                    <Spinner className="h-4 w-4" /> 草擬中…
                   </div>
-                )}
-                {selectedAgentId && activeConvId && messagesQ.isError && (
-                  <p className="text-center text-sm text-rose-400">
-                    {messagesQ.error instanceof Error
-                      ? messagesQ.error.message
-                      : '無法載入訊息'}
-                  </p>
-                )}
-                {selectedAgentId && activeConvId && !messagesQ.isLoading && messages.length === 0 && (
-                  <p className="text-center text-sm text-muted">
-                    尚無訊息。直接告訴 {selectedAgent?.name ?? '這位員工'} 要做什麼。
-                  </p>
-                )}
-                {messages.map((m) => {
-                  const role = (m.role ?? m.sender ?? 'user').toString().toUpperCase();
-                  const isUser = role.includes('USER');
-                  const runId = m.runId ?? sentRunIds[m.id];
-                  const runStatus = runId ? runsById.get(runId)?.status : undefined;
-                  return (
-                    <div
-                      key={m.id}
-                      className={cn('flex flex-col gap-1.5', isUser ? 'items-end' : 'items-start')}
-                    >
-                      <div
-                        className={cn(
-                          'max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm',
-                          isUser ? 'bg-brand text-white' : 'bg-black/5 dark:bg-white/10',
-                        )}
+                );
+              }
+              if (m.kind === 'error') {
+                return (
+                  <div
+                    key={m.id}
+                    className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300"
+                  >
+                    <div>{m.text}</div>
+                    {m.retry && (
+                      <button
+                        type="button"
+                        className="btn-ghost mt-2 h-8 text-xs text-rose-200"
+                        disabled={teachSending}
+                        onClick={() => {
+                          const payload = m.retry!;
+                          setTeachMessages((prev) => prev.filter((x) => x.id !== m.id));
+                          void sendTrainMessage(payload.message, {
+                            display: payload.display,
+                          });
+                        }}
                       >
-                        {m.content}
-                      </div>
-                      {isUser && runId && (
-                        <ChatRunTimeline
-                          steps={runSteps[runId] ?? []}
-                          status={runStatus}
-                          onStop={
-                            runStatus === 'RUNNING'
-                              ? () => cancelRunMutation.mutate(runId)
-                              : undefined
-                          }
-                          stopping={cancelRunMutation.isPending && cancelRunMutation.variables === runId}
-                        />
+                        重試
+                      </button>
+                    )}
+                  </div>
+                );
+              }
+              if (m.kind === 'flows') {
+                return (
+                  <div key={m.id} className="card space-y-3 border-border/80 bg-black/10 p-4">
+                    <div className="text-sm font-medium">目前流程清單（免 LLM）</div>
+                    <div>
+                      <div className="mb-1 text-xs font-medium text-muted">技能</div>
+                      {m.skills.length === 0 ? (
+                        <p className="text-sm text-muted">尚無掛載技能</p>
+                      ) : (
+                        <ul className="space-y-2">
+                          {m.skills.map((s) => (
+                            <li
+                              key={s.id}
+                              className="flex items-start justify-between gap-2 text-sm"
+                            >
+                              <div className="min-w-0">
+                                <div className="font-medium">{s.name}</div>
+                                {s.summary && (
+                                  <div className="text-xs text-muted">{s.summary}</div>
+                                )}
+                              </div>
+                              <StatusBadge status={s.reviewStatus} />
+                            </li>
+                          ))}
+                        </ul>
                       )}
                     </div>
-                  );
-                })}
-              </div>
-
-              <div className="border-t border-border p-3">
-                {sendError && <p className="mb-2 text-sm text-rose-400">{sendError}</p>}
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    if (activeConvId) submitWork(e);
-                    else void ensureConversationThenSend();
-                  }}
-                  className="flex items-end gap-2"
-                >
-                  <textarea
-                    className="input min-h-[44px] max-h-32 flex-1 resize-y"
-                    placeholder={
-                      selectedAgentId
-                        ? `告訴 ${selectedAgent?.name ?? 'Agent'} 要做什麼…`
-                        : '請先選擇 Agent'
-                    }
-                    value={draft}
-                    rows={2}
-                    disabled={!selectedAgentId || busyWork}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        if (!draft.trim() || !selectedAgentId || busyWork) return;
-                        if (activeConvId) sendMutation.mutate(draft.trim());
-                        else void ensureConversationThenSend();
-                      }
-                    }}
-                  />
-                  <button
-                    type="submit"
-                    className="btn-primary h-9 shrink-0"
-                    disabled={!draft.trim() || !selectedAgentId || busyWork}
-                  >
-                    {busyWork ? (
-                      <Spinner className="border-white/40 border-t-white" />
-                    ) : (
-                      <Send className="h-4 w-4" />
-                    )}
-                  </button>
-                </form>
-              </div>
-            </>
-          ) : (
-            <>
-              {/* Teach mode */}
-              <div className="border-b border-border px-4 py-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-xs text-muted">
-                    讓 AI 看你操作一次，完成後會產生待審核的技能草稿
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      className="btn-ghost text-xs"
-                      disabled={!selectedAgentId || teachSending}
-                      onClick={() => void loadFlows()}
-                    >
-                      <List className="h-3.5 w-3.5" /> 有哪些流程？
-                    </button>
-                    {!recordingOn ? (
-                      <button
-                        type="button"
-                        className="btn-primary text-xs"
-                        disabled={!selectedAgentId || recBusy || teachSending}
-                        onClick={() => setRecordingConsentOpen(true)}
-                      >
-                        {recBusy ? (
-                          <Spinner className="border-white/40 border-t-white" />
-                        ) : (
-                          <Video className="h-3.5 w-3.5" />
-                        )}
-                        錄製操作示範
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn-primary bg-rose-600 text-xs hover:bg-rose-500"
-                        disabled={recBusy}
-                        onClick={() => void stopRecordingAndImport()}
-                      >
-                        {recBusy ? (
-                          <Spinner className="border-white/40 border-t-white" />
-                        ) : (
-                          <Square className="h-3 w-3" />
-                        )}
-                        結束錄製
-                      </button>
-                    )}
-                  </div>
-                </div>
-                {recordingConsentOpen && !recordingOn && (
-                  <div className="mt-3 rounded-xl border border-brand/35 bg-brand/10 p-3 text-sm">
-                    <div className="font-semibold">開始錄製前，先確認這次要教什麼</div>
-                    <p className="mt-1 text-xs leading-5 text-muted">
-                      系統會擷取這台電腦上的畫面與操作事件。請先關閉含密碼、驗證碼、個資或帳號資訊的視窗；完成後只會建立技能草稿，仍需 FDE 審核才會生效。
-                    </p>
-                    <textarea
-                      className="input mt-3 min-h-[72px] w-full resize-y text-sm"
-                      value={recordingHint}
-                      onChange={(e) => setRecordingHint(e.target.value)}
-                      placeholder="例如：示範如何打開 LINE、進入指定群組、整理今天的訊息；群組名稱與日期要成為每次可更換的輸入。"
-                      maxLength={4000}
-                      autoFocus
-                    />
-                    <div className="mt-3 flex flex-wrap justify-end gap-2">
-                      <button
-                        type="button"
-                        className="btn-ghost text-xs"
-                        disabled={recBusy}
-                        onClick={() => setRecordingConsentOpen(false)}
-                      >
-                        取消
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-primary text-xs"
-                        disabled={recBusy || !selectedAgentId}
-                        onClick={() => void startRecording()}
-                      >
-                        {recBusy ? <Spinner className="border-white/40 border-t-white" /> : <Circle className="h-3 w-3 fill-rose-500 text-rose-500" />}
-                        我準備好了，開始錄製
-                      </button>
+                    <div>
+                      <div className="mb-1 text-xs font-medium text-muted">工作流</div>
+                      {m.workflows.length === 0 ? (
+                        <p className="text-sm text-muted">尚無工作流</p>
+                      ) : (
+                        <ul className="space-y-2">
+                          {m.workflows.map((w) => (
+                            <li
+                              key={w.id}
+                              className="flex items-center justify-between gap-2 text-sm"
+                            >
+                              <span className="font-medium">{w.name}</span>
+                              <span className="badge bg-black/10 text-muted dark:bg-white/10">
+                                {w.trigger}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                   </div>
-                )}
-                {recordingOn && (
-                  <div className="mt-2 flex items-center gap-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300">
-                    <span className="relative flex h-2 w-2">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
-                      <span className="relative inline-flex h-2 w-2 rounded-full bg-rose-500" />
-                    </span>
-                    正在錄製這台電腦的操作 — 單次上限 30 分鐘
-                  </div>
-                )}
-                {recSessionStatus === 'INTERRUPTED' && !interruptedDismissed && (
-                  <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200">
-                    <span>上次錄製因伺服器重啟而中斷，請重新開始錄製。</span>
-                    <button
-                      type="button"
-                      className="shrink-0 rounded px-1.5 py-0.5 text-amber-100/90 underline-offset-2 hover:underline"
-                      onClick={() => {
-                        setInterruptedDismissed(true);
-                        void recStatusQ.refetch();
-                      }}
-                    >
-                      知道了
-                    </button>
-                  </div>
-                )}
-                {recSessionStatus === 'COMPILING' && (
-                  <div className="mt-2 rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs text-sky-200">
-                    正在把錄製編譯為技能草稿…
-                  </div>
-                )}
-                {recSessionStatus === 'FAILED' && (
-                  <div className="mt-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-300">
-                    錄製編譯失敗，請重試。
-                  </div>
-                )}
-              </div>
+                );
+              }
+              return (
+                <SkillDraftCard
+                  key={m.id}
+                  skillId={m.skillId}
+                  name={m.name}
+                  reviewStatus={m.reviewStatus}
+                  understanding={m.understanding}
+                  statusNote={m.statusNote}
+                  isFde={isFde}
+                  confirming={confirmingId === m.skillId}
+                  proposing={proposingId === m.skillId}
+                  onConfirm={(id) => void confirmSkill(id)}
+                  onPropose={(id, name) => void proposeSkill(id, name)}
+                />
+              );
+            })}
+            <div ref={teachEndRef} />
+          </div>
 
-              <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
-                {!selectedAgentId && (
-                  <EmptyState title="先選一位 Agent" hint="再開始教它新工作" />
+          <div className="border-t border-border px-3 py-3">
+            {(sendError || teachError) && (
+              <p className="mb-2 text-sm text-rose-400">{sendError || teachError}</p>
+            )}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                submitComposer(false);
+              }}
+              className="flex items-end gap-2"
+            >
+              <textarea
+                className="input min-h-[44px] max-h-32 flex-1 resize-y"
+                placeholder={
+                  selectedAgentId
+                    ? `告訴 ${selectedAgent?.name ?? 'Agent'} 要做什麼，或以「教你」開頭訓練技能…`
+                    : '請先選擇 Agent'
+                }
+                value={draft}
+                rows={2}
+                disabled={!selectedAgentId || busy}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    submitComposer(false);
+                  }
+                }}
+              />
+              <VoiceInput
+                disabled={!selectedAgentId || busy}
+                onTranscript={(text) => {
+                  setDraft((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
+                }}
+              />
+              <input
+                ref={teachFileInputRef}
+                type="file"
+                className="hidden"
+                accept=".md,.markdown,.txt,text/markdown,text/plain"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  void handleTeachUpload(file);
+                }}
+              />
+              <button
+                type="button"
+                className="btn-ghost h-9 shrink-0"
+                title="上傳教學文件"
+                disabled={!selectedAgentId || busy}
+                onClick={() => teachFileInputRef.current?.click()}
+              >
+                <Paperclip className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                className="btn-ghost h-9 shrink-0"
+                title="教它這件事（產生技能草稿，不會自動確認）"
+                disabled={!draft.trim() || !selectedAgentId || busy}
+                onClick={() => submitComposer(true)}
+              >
+                <GraduationCap className="h-4 w-4" />
+                <span className="hidden sm:inline">{draftSkillId ? '補充草稿' : '教它'}</span>
+              </button>
+              <button
+                type="submit"
+                className="btn-primary h-9 shrink-0"
+                disabled={!draft.trim() || !selectedAgentId || busy}
+              >
+                {busy ? (
+                  <Spinner className="border-white/40 border-t-white" />
+                ) : (
+                  <Send className="h-4 w-4" />
                 )}
-                {teachMessages.map((m) => {
-                  if (m.kind === 'user') {
-                    return (
-                      <div key={m.id} className="flex justify-end">
-                        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-brand/20 px-3 py-2 text-sm">
-                          {m.text}
-                        </div>
-                      </div>
-                    );
-                  }
-                  if (m.kind === 'system') {
-                    return (
-                      <div key={m.id} className="text-center text-xs text-muted">
-                        {m.text}
-                      </div>
-                    );
-                  }
-                  if (m.kind === 'drafting') {
-                    return (
-                      <div key={m.id} className="flex items-center gap-2 text-sm text-muted">
-                        <Spinner className="h-4 w-4" /> 草擬中…
-                      </div>
-                    );
-                  }
-                  if (m.kind === 'error') {
-                    return (
-                      <div
-                        key={m.id}
-                        className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300"
-                      >
-                        <div>{m.text}</div>
-                        {m.retry && (
-                          <button
-                            type="button"
-                            className="btn-ghost mt-2 h-8 text-xs text-rose-200"
-                            disabled={teachSending}
-                            onClick={() => {
-                              const payload = m.retry!;
-                              setTeachMessages((prev) => prev.filter((x) => x.id !== m.id));
-                              void sendTrainMessage(payload.message, {
-                                display: payload.display,
-                              });
-                            }}
-                          >
-                            重試
-                          </button>
-                        )}
-                      </div>
-                    );
-                  }
-                  if (m.kind === 'flows') {
-                    return (
-                      <div key={m.id} className="card space-y-3 border-border/80 bg-black/10 p-4">
-                        <div className="text-sm font-medium">目前流程清單（免 LLM）</div>
-                        <div>
-                          <div className="mb-1 text-xs font-medium text-muted">技能</div>
-                          {m.skills.length === 0 ? (
-                            <p className="text-sm text-muted">尚無掛載技能</p>
-                          ) : (
-                            <ul className="space-y-2">
-                              {m.skills.map((s) => (
-                                <li
-                                  key={s.id}
-                                  className="flex items-start justify-between gap-2 text-sm"
-                                >
-                                  <div className="min-w-0">
-                                    <div className="font-medium">{s.name}</div>
-                                    {s.summary && (
-                                      <div className="text-xs text-muted">{s.summary}</div>
-                                    )}
-                                  </div>
-                                  <StatusBadge status={s.reviewStatus} />
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                        <div>
-                          <div className="mb-1 text-xs font-medium text-muted">工作流</div>
-                          {m.workflows.length === 0 ? (
-                            <p className="text-sm text-muted">尚無工作流</p>
-                          ) : (
-                            <ul className="space-y-2">
-                              {m.workflows.map((w) => (
-                                <li
-                                  key={w.id}
-                                  className="flex items-center justify-between gap-2 text-sm"
-                                >
-                                  <span className="font-medium">{w.name}</span>
-                                  <span className="badge bg-black/10 text-muted dark:bg-white/10">
-                                    {w.trigger}
-                                  </span>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  }
-                  return (
-                    <SkillDraftCard
-                      key={m.id}
-                      skillId={m.skillId}
-                      name={m.name}
-                      reviewStatus={m.reviewStatus}
-                      understanding={m.understanding}
-                      statusNote={m.statusNote}
-                      isFde={isFde}
-                      confirming={confirmingId === m.skillId}
-                      proposing={proposingId === m.skillId}
-                      onConfirm={(id) => void confirmSkill(id)}
-                      onPropose={(id, name) => void proposeSkill(id, name)}
-                    />
-                  );
-                })}
-                <div ref={teachEndRef} />
-              </div>
-
-              <div className="border-t border-border px-3 py-3">
-                {teachError && <p className="mb-2 text-sm text-rose-400">{teachError}</p>}
-                <div className="flex items-end gap-2">
-                  <textarea
-                    className="input min-h-[44px] max-h-32 flex-1 resize-y"
-                    placeholder={
-                      selectedAgentId
-                        ? '描述要教的流程，或問「有哪些流程？」…'
-                        : '請先選擇 Agent'
-                    }
-                    value={draft}
-                    rows={2}
-                    disabled={!selectedAgentId || teachSending}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        void sendTrainMessage(draft);
-                      }
-                    }}
-                  />
-                  <VoiceInput
-                    disabled={!selectedAgentId || teachSending}
-                    onTranscript={(text) => {
-                      setDraft((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
-                    }}
-                  />
-                  <input
-                    ref={teachFileInputRef}
-                    type="file"
-                    className="hidden"
-                    accept=".md,.markdown,.txt,text/markdown,text/plain"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      e.target.value = '';
-                      void handleTeachUpload(file);
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="btn-ghost h-9 shrink-0"
-                    title="上傳教學文件"
-                    disabled={!selectedAgentId || teachSending}
-                    onClick={() => teachFileInputRef.current?.click()}
-                  >
-                    <Paperclip className="h-4 w-4" />
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-primary h-9 shrink-0"
-                    disabled={!draft.trim() || !selectedAgentId || teachSending}
-                    onClick={() => void sendTrainMessage(draft)}
-                  >
-                    {teachSending ? (
-                      <Spinner className="border-white/40 border-t-white" />
-                    ) : (
-                      <Send className="h-4 w-4" />
-                    )}
-                    送出
-                  </button>
-                </div>
-                {!isFde && (
-                  <p className="mt-2 text-[11px] text-muted">
-                    你是操作者：技能草稿只能送出提案，由 FDE 確認後才會掛載。
-                  </p>
-                )}
-              </div>
-            </>
-          )}
+              </button>
+            </form>
+            {!isFde && (
+              <p className="mt-2 text-[11px] text-muted">
+                你是操作者：技能草稿只能送出提案，由 FDE 確認後才會掛載。
+              </p>
+            )}
+          </div>
             </>
           )}
         </section>

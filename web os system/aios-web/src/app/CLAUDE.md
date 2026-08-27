@@ -3,7 +3,7 @@
 ## 版面/入口
 - `layout.tsx` / `providers.tsx` — 全域版面與 React Query provider。
 - `page.tsx` — 根路徑：auth 後導向 **`/work`**（未登入 → `/login`）。
-- `work/page.tsx` — **AI 工作台**（三欄：Agent／thread／訊息；**建立 AI 員工**入口 + 交代工作 + 教它新工作）。`?mode=builder` 開 Agent Builder。
+- `work/page.tsx` — **AI 工作台**（三欄：Agent／thread／訊息；左欄「建立 AI 員工」開 Agent Builder）。教學與交辦同一對話：SkillDraftCard／訓練意圖在對話流觸發。`?mode=builder` 開 Builder。
 - `admin/page.tsx` — **FDE 管理中心總覽**（原 Dashboard）。
 - `admin/devices/page.tsx` — **FDE 裝置管理**（註冊碼／token 輪替／撤銷／LINE MCP；`GET /api/device-tasks` 任務表＋篩選；`device.task.*` AWP 重抓；檢查點詳情）。能力晶片含獨立 `codexApp` / `codexCli` / `lineDesktop`（不可由 computerUse 推斷）。
 - `globals.css` — 全域樣式。
@@ -11,7 +11,7 @@
 - `install/agent-builder/` — 公開 Agent Builder 安裝中心；ChatGPT／Codex 與 Claude 分流說明，提供 Plugin、Skill、一鍵安裝包、MCP 設定、Markdown 文件與校驗碼下載。`prebuild` 會由 `aios-mcp/releases` 同步正式檔案到 `public/downloads/agent-builder/`。
 
 ## 功能頁（FDE 管理路由；MEMBER 前端會被導回 `/work`）
-- `employees/` — 員工列表與 **`[id]/page.tsx` 詳情**（概況/技能/**裝置**/雲端檔案/工作流/執行紀錄/訓練/記憶/對話）。含限制卡、引擎/驗證選擇（含 GROK）、LiveRunTimeline、RunsTab、ChatTab、TrainingTab、DevicesTab。用 `?tab=` 深連結。
+- `employees/` — 員工列表與 **`[id]/page.tsx` 詳情**（三分頁：概況／對話／執行紀錄）。概況含限制、技能掛載、雲端檔案、工作流唯讀卡、記憶最近 10 筆、裝置卡。舊 `?tab=` 深連結映射到這三分頁。教學聊天只留 `/work`。
 - `workflows/` — 工作流列表與 `[id]` 編輯（返回連到 `/employees/<id>?tab=workflows`）；COMPUTER_CONTROL / device-mcp:line-desktop 需選線上合格裝置。
 - `skills/` — 技能。
 - `settings/` — 連動 Google/Microsoft/LINE 帳號、環境設定。

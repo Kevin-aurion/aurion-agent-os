@@ -4,7 +4,6 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  LayoutDashboard,
   Users,
   Wrench,
   Workflow,
@@ -18,11 +17,8 @@ import {
   MessageSquare,
   Shield,
   ArrowLeftRight,
-  MonitorSmartphone,
-  BrainCircuit,
   GitBranch,
   BookOpen,
-  Rocket,
 } from 'lucide-react';
 import { useAuth, isFdeRole } from '@/lib/auth';
 import { useAwp } from '@/lib/awp';
@@ -42,18 +38,22 @@ const ADMIN_PREFIXES = [
   '/proposals',
 ] as const;
 
-const ADMIN_NAV = [
-  { href: '/admin', label: '總覽 Dashboard', icon: LayoutDashboard },
-  { href: '/employees', label: '員工 Agents', icon: Users },
-  { href: '/admin/devices', label: '裝置 Devices', icon: MonitorSmartphone },
-  { href: '/admin/reflections', label: '反思與優化 Reflections', icon: BrainCircuit },
-  { href: '/admin/runtime', label: 'Runtime 部署', icon: Rocket },
-  { href: '/org', label: '組織 Org', icon: Network },
-  { href: '/skills', label: '技能 Skills', icon: Wrench },
-  { href: '/workflows', label: '工作流 Workflows', icon: Workflow },
-  { href: '/settings', label: '設定 Settings', icon: Plug },
-  { href: '/audit', label: '稽核 Audit', icon: ScrollText },
+/** FDE admin nav (S1-4b). Pages under /admin/* and /org remain; they are not listed here. */
+const ADMIN_NAV: Array<{
+  href: string;
+  label: string;
+  icon: typeof Users;
+  pending?: boolean;
+}> = [
+  { href: '/work', label: '工作台', icon: MessageSquare },
+  { href: '/employees', label: '員工', icon: Users },
+  { href: '/skills', label: '技能', icon: Wrench },
+  { href: '/workflows', label: '工作流', icon: Workflow },
   { href: '/agent-builds', label: '建置治理', icon: GitBranch },
+  { href: '/proposals', label: '審核', icon: FileCheck2, pending: true },
+  { href: '/audit', label: '稽核', icon: ScrollText },
+  { href: '/settings', label: '設定', icon: Plug },
+  { href: '/org', label: '組織', icon: Network },
 ];
 
 interface PendingProposalRow {
@@ -233,22 +233,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             <div className="text-[11px] text-muted">FDE 管理中心</div>
           </div>
         </div>
-        {isFde && (
-          <div className="px-3 pb-2">
-            <Link
-              href="/work"
-              className="flex items-center gap-2 rounded-lg border border-border bg-black/5 px-3 py-2 text-sm font-medium hover:bg-brand/10 hover:text-brand dark:bg-white/5"
-            >
-              <MessageSquare className="h-4 w-4" />
-              回工作台
-              <ArrowLeftRight className="ml-auto h-3.5 w-3.5 opacity-60" />
-            </Link>
-          </div>
-        )}
         <nav className="flex-1 space-y-1 px-3">
           {ADMIN_NAV.map((n) => {
-            const active =
-              n.href === '/admin' ? pathname === '/admin' : pathname === n.href || pathname.startsWith(`${n.href}/`);
+            const active = pathname === n.href || pathname.startsWith(`${n.href}/`);
             return (
               <Link
                 key={n.href}
@@ -258,27 +245,14 @@ export function AppShell({ children }: { children: ReactNode }) {
                   active ? 'bg-brand/10 text-brand font-medium' : 'text-muted hover:bg-black/5 dark:hover:bg-white/5',
                 )}
               >
-                <n.icon className="h-4 w-4" /> {n.label}
+                <n.icon className="h-4 w-4" />
+                <span className="flex-1">{n.label}</span>
+                {n.pending && pendingCount !== null && pendingCount > 0 && (
+                  <span className="badge bg-brand/15 text-brand tabular-nums">{pendingCount}</span>
+                )}
               </Link>
             );
           })}
-          {isFde && (
-            <Link
-              href="/proposals"
-              className={cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2 text-sm',
-                pathname.startsWith('/proposals')
-                  ? 'bg-brand/10 text-brand font-medium'
-                  : 'text-muted hover:bg-black/5 dark:hover:bg-white/5',
-              )}
-            >
-              <FileCheck2 className="h-4 w-4" />
-              <span className="flex-1">提案審核 Proposals</span>
-              {pendingCount !== null && pendingCount > 0 && (
-                <span className="badge bg-brand/15 text-brand tabular-nums">{pendingCount}</span>
-              )}
-            </Link>
-          )}
         </nav>
         <div className="border-t border-border px-3 py-3">
           <div className="mb-2 flex items-center gap-2 px-2 text-xs text-muted">

@@ -5,46 +5,34 @@ import { useParams, useSearchParams } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Activity,
-  AlertTriangle,
   ArrowLeft,
   BookOpen,
   Bot,
   Check,
   CheckCircle2,
   ChevronRight,
-  Circle,
-  Clock,
   Cloud,
   ExternalLink,
   File as FileIcon,
   Folder,
-  GraduationCap,
-  List,
   Loader2,
   MessageSquare,
-  Mic,
-  MicOff,
-  Play,
   Plus,
   RefreshCw,
   Save,
-  Search,
   Send,
   Settings2,
-  Square,
-  Tag,
   Trash2,
   Workflow,
   Wrench,
   X,
   XCircle,
-  MonitorSmartphone,
   Wifi,
   WifiOff,
   Link2,
   Unlink,
 } from 'lucide-react';
-import { API, ApiError } from '@/lib/api';
+import { API } from '@/lib/api';
 import { useAuth, isFdeRole } from '@/lib/auth';
 import { useAwp, type AwpFrame } from '@/lib/awp';
 import { AppShell } from '@/components/AppShell';
@@ -156,34 +144,6 @@ interface CloudFileEntry {
   path: string;
   webUrl?: string;
 }
-// Workflow.trigger JSON convention (backend, EXTEND / back-compat):
-// {type:'schedule',cron,timezone?} | {type:'manual'} | {type:'keyword',keywords:string[]} | {type:'webhook'} | {type:'event',topic}
-interface WorkflowTrigger {
-  type: 'schedule' | 'manual' | 'keyword' | 'webhook' | 'event';
-  cron?: string;
-  timezone?: string;
-  keywords?: string[];
-  topic?: string;
-  [key: string]: unknown;
-}
-interface WorkflowListItem {
-  id: string;
-  name: string;
-  description?: string;
-  trigger: WorkflowTrigger;
-  enabled: boolean;
-  stepCount?: number;
-}
-// Live run tracking (from run.* WS events), keyed by runId at the tab level.
-interface RunStepLive {
-  stepKey: string;
-  round?: number;
-  type?: string;
-  phase?: string;
-  output?: string | null;
-}
-// GET /api/runs/:id response shape (poll-friendly), used to resume the
-// inline workflow-test timeline after a tab switch unmounts local state.
 interface RunSnapshotStep {
   stepKey: string;
   round?: number;
@@ -191,10 +151,6 @@ interface RunSnapshotStep {
   verdict?: string | null;
   approved?: boolean | null;
   output?: string | null;
-}
-interface RunSnapshot {
-  status: string;
-  steps: RunSnapshotStep[];
 }
 // GET /api/runs?agentId=&limit= list rows (newest first).
 interface RunListItem {
@@ -213,23 +169,6 @@ interface RunDetail {
   startedAt?: string | null;
   finishedAt?: string | null;
   steps: RunSnapshotStep[];
-}
-// Skill.understanding JSON shape (see src/skills/understand.ts on the backend).
-interface SkillUnderstanding {
-  summary: string;
-  capabilities: string[];
-  data_read: string[];
-  data_written: string[];
-  external_calls: string[];
-  irreversible_actions: string[];
-  risks: string[];
-}
-interface SkillDetail {
-  id: string;
-  name: string;
-  reviewStatus: string;
-  executionEnv: string;
-  understanding?: SkillUnderstanding | null;
 }
 interface Conversation {
   id: string;
@@ -253,16 +192,23 @@ interface RunStep {
 
 const TABS = [
   { key: 'overview', label: '概況', icon: Settings2 },
-  { key: 'skills', label: '技能', icon: Wrench },
-  { key: 'devices', label: '裝置', icon: MonitorSmartphone },
-  { key: 'files', label: '雲端檔案', icon: Cloud },
-  { key: 'workflows', label: '工作流', icon: Workflow },
-  { key: 'runs', label: '執行紀錄', icon: Activity },
-  { key: 'training', label: '訓練', icon: GraduationCap },
-  { key: 'memory', label: '記憶', icon: BookOpen },
   { key: 'chat', label: '對話', icon: MessageSquare },
+  { key: 'runs', label: '執行紀錄', icon: Activity },
 ] as const;
 type TabKey = typeof TABS[number]['key'];
+
+/** Legacy ?tab= keys from workflows editor / device admin still land on a live tab. */
+const LEGACY_TAB_TO_CURRENT: Record<string, TabKey> = {
+  overview: 'overview',
+  skills: 'overview',
+  devices: 'overview',
+  files: 'overview',
+  workflows: 'overview',
+  training: 'overview',
+  memory: 'overview',
+  chat: 'chat',
+  runs: 'runs',
+};
 
 export default function EmployeeDetailPage() {
   const params = useParams<{ id: string }>();
@@ -272,7 +218,8 @@ export default function EmployeeDetailPage() {
   const searchParams = useSearchParams();
   const initialTab = ((): TabKey => {
     const q = searchParams.get('tab');
-    return TABS.some((t) => t.key === q) ? (q as TabKey) : 'overview';
+    if (!q) return 'overview';
+    return LEGACY_TAB_TO_CURRENT[q] ?? 'overview';
   })();
   const [tab, setTab] = useState<TabKey>(initialTab);
 
@@ -329,14 +276,8 @@ export default function EmployeeDetailPage() {
           </div>
 
           {tab === 'overview' && <OverviewTab agent={agent} />}
-          {tab === 'skills' && <SkillsTab agent={agent} />}
-          {tab === 'devices' && <DevicesTab agent={agent} />}
-          {tab === 'files' && <FileTargetsTab agent={agent} />}
-          {tab === 'workflows' && <WorkflowsTab agent={agent} />}
-          {tab === 'runs' && <RunsTab agent={agent} />}
-          {tab === 'training' && <TrainingTab agent={agent} />}
-          {tab === 'memory' && <MemoryTab agentId={agent.id} />}
           {tab === 'chat' && <ChatTab agentId={agent.id} />}
+          {tab === 'runs' && <RunsTab agent={agent} />}
         </>
       )}
     </AppShell>
@@ -615,7 +556,7 @@ function OverviewTab({ agent }: { agent: AgentDetail }) {
     notes !== (initialRestrictions.notes ?? '');
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="max-w-3xl space-y-6">
       <div className="card space-y-4 p-6">
         <Field label="名稱">
           <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
@@ -779,6 +720,24 @@ function OverviewTab({ agent }: { agent: AgentDetail }) {
         </Field>
         <p className="text-xs text-muted">限制設定會與上方欄位一併透過「儲存變更」送出。</p>
       </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center gap-2 font-medium">
+          <Wrench className="h-4 w-4 text-brand" /> 技能掛載
+        </div>
+        <SkillsTab agent={agent} />
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center gap-2 font-medium">
+          <Cloud className="h-4 w-4 text-brand" /> 雲端檔案
+        </div>
+        <FileTargetsTab agent={agent} />
+      </div>
+
+      <WorkflowsOverviewCard agent={agent} />
+      <MemoryCard agentId={agent.id} />
+      <DevicesTab agent={agent} />
     </div>
   );
 }
@@ -1266,611 +1225,37 @@ function FileTargetsTab({ agent }: { agent: AgentDetail }) {
   );
 }
 
-// ---------- 工作流 Workflows ----------
+// ---------- 工作流（概況唯讀卡，編輯走 /workflows） ----------
 
-const CRON_PRESETS: { value: string; label: string }[] = [
-  { value: '*/15 * * * *', label: '每15分鐘' },
-  { value: '0 * * * *', label: '每小時' },
-  { value: '0 9 * * *', label: '每天09:00' },
-  { value: '0 9 * * 1', label: '每週一09:00' },
-  { value: 'custom', label: '自訂' },
-];
-
-const WEEKDAY_NAMES = ['日', '一', '二', '三', '四', '五', '六'];
-
-/** Human-friendly rendering of common cron patterns; falls back to the raw cron string. */
-function cronToHuman(cron?: string): string {
-  if (!cron) return '';
-  const preset = CRON_PRESETS.find((p) => p.value === cron);
-  if (preset) return preset.label;
-  const parts = cron.trim().split(/\s+/);
-  if (parts.length === 5) {
-    const [min, hour, dom, mon, dow] = parts;
-    if (dom === '*' && mon === '*' && dow === '*' && /^\d+$/.test(min) && /^\d+$/.test(hour)) {
-      return `每天 ${hour.padStart(2, '0')}:${min.padStart(2, '0')}`;
-    }
-    if (dom === '*' && mon === '*' && /^[0-6]$/.test(dow) && /^\d+$/.test(min) && /^\d+$/.test(hour)) {
-      return `每週${WEEKDAY_NAMES[Number(dow)]} ${hour.padStart(2, '0')}:${min.padStart(2, '0')}`;
-    }
-    if (min.startsWith('*/') && hour === '*' && dom === '*' && mon === '*' && dow === '*') {
-      return `每${min.slice(2)}分鐘`;
-    }
-  }
-  return cron;
-}
-
-function TriggerBadge({ trigger }: { trigger: WorkflowTrigger }) {
-  if (trigger?.type === 'schedule') {
-    return (
-      <span className="badge inline-flex items-center gap-1 bg-blue-500/15 text-blue-400">
-        <Clock className="h-3 w-3" /> 定期 · {cronToHuman(trigger.cron)}
-      </span>
-    );
-  }
-  if (trigger?.type === 'keyword') {
-    return (
-      <span className="inline-flex flex-wrap items-center gap-1">
-        <span className="badge inline-flex items-center gap-1 bg-amber-500/15 text-amber-400">
-          <Tag className="h-3 w-3" /> 觸發
-        </span>
-        {(trigger.keywords ?? []).map((k) => (
-          <span key={k} className="badge bg-amber-500/10 text-amber-500">
-            {k}
-          </span>
-        ))}
-      </span>
-    );
-  }
-  return <span className="badge bg-black/10 text-muted dark:bg-white/10">手動</span>;
-}
-
-// Terminal run states — once reached, the sessionStorage-persisted
-// "active run" entry for that workflow can be cleared.
-const TERMINAL_RUN_STATUSES = new Set(['SUCCEEDED', 'FAILED', 'CANCELLED']);
-const ACTIVE_RUN_STORAGE_PREFIX = 'aios.activeRun.';
-
-interface StoredActiveRun {
-  runId: string;
-  startedAt: number;
-}
-
-/**
- * Persists the currently-tracked test/run per workflow so the inline
- * timeline survives the WorkflowsTab component unmounting (e.g. the user
- * switches to another employee-detail tab and back).
- */
-function readStoredActiveRun(workflowId: string): StoredActiveRun | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.sessionStorage.getItem(`${ACTIVE_RUN_STORAGE_PREFIX}${workflowId}`);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredActiveRun;
-    if (!parsed?.runId) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredActiveRun(workflowId: string, runId: string) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.setItem(
-      `${ACTIVE_RUN_STORAGE_PREFIX}${workflowId}`,
-      JSON.stringify({ runId, startedAt: Date.now() } satisfies StoredActiveRun)
-    );
-  } catch {
-    // sessionStorage unavailable (e.g. private mode quota) — non-fatal.
-  }
-}
-
-function clearStoredActiveRun(workflowId: string) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.removeItem(`${ACTIVE_RUN_STORAGE_PREFIX}${workflowId}`);
-  } catch {
-    // ignore
-  }
-}
-
-function phaseIcon(phase?: string) {
-  if (phase === 'approved') return <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />;
-  if (phase === 'rejected') return <XCircle className="h-3.5 w-3.5 text-rose-400" />;
-  return <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-400" />;
-}
-
-/** Live run timeline rendered inline under a workflow card while `runId` is tracked. */
-function LiveRunTimeline({ runId, status, steps }: { runId: string; status?: string; steps: RunStepLive[] }) {
-  const [copied, setCopied] = useState(false);
-  const isTerminal = TERMINAL_RUN_STATUSES.has(status ?? '');
-  // The run's result = the last step that produced output (prefer approved).
-  const finalOutput = (() => {
-    if (!isTerminal) return null;
-    const withOutput = steps.filter((s) => (s.output ?? '').trim());
-    if (withOutput.length === 0) return null;
-    const approved = [...withOutput].reverse().find((s) => s.phase === 'approved');
-    return (approved ?? withOutput[withOutput.length - 1]).output!.trim();
-  })();
-
+function WorkflowsOverviewCard({ agent }: { agent: AgentDetail }) {
+  const list = agent.workflows ?? [];
   return (
-    <div className="space-y-2 rounded-lg border border-border bg-panel p-3">
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="text-muted">Run: {runId.slice(0, 10)}…</span>
-        <StatusBadge status={status ?? 'RUNNING'} />
-      </div>
-      {steps.length === 0 ? (
-        <div className="flex items-center gap-2 text-xs text-muted">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" /> 等待執行中...
+    <div className="card space-y-3 p-5">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 font-medium">
+          <Workflow className="h-4 w-4 text-brand" /> 工作流
         </div>
-      ) : (
-        <div className="space-y-1.5">
-          {steps.map((s, idx) => (
-            <div key={`${s.stepKey}-${s.round ?? idx}`} className="flex items-center gap-2 text-xs">
-              {phaseIcon(s.phase)}
-              <span className="font-medium">{s.stepKey}</span>
-              {typeof s.round === 'number' && <span className="text-muted">第 {s.round} 輪</span>}
-              {s.phase && <span className="text-muted">· {s.phase}</span>}
-            </div>
-          ))}
-        </div>
-      )}
-      {finalOutput && (
-        <div className="space-y-1.5 border-t border-border pt-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-muted">執行結果</span>
-            <button
-              type="button"
-              className="btn-ghost px-2 py-1 text-xs"
-              onClick={() => {
-                navigator.clipboard?.writeText(finalOutput).then(() => {
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 1500);
-                });
-              }}
-            >
-              {copied ? '已複製 ✓' : '複製'}
-            </button>
-          </div>
-          <div className="max-h-72 overflow-y-auto whitespace-pre-wrap rounded-md bg-black/20 p-3 text-xs leading-relaxed">
-            {finalOutput}
-          </div>
-        </div>
-      )}
-      {isTerminal && !finalOutput && (
-        <div className="border-t border-border pt-2 text-xs text-muted">（此次執行沒有文字產出）</div>
-      )}
-    </div>
-  );
-}
-
-function WorkflowCard({
-  w,
-  runId,
-  runStatus,
-  runSteps,
-  onTest,
-  onRun,
-  onToggleEnabled,
-  toggling,
-}: {
-  w: WorkflowListItem;
-  runId?: string;
-  runStatus?: string;
-  runSteps: RunStepLive[];
-  onTest: (message?: string) => void;
-  onRun: () => void;
-  onToggleEnabled: () => void;
-  toggling: boolean;
-}) {
-  const [testOpen, setTestOpen] = useState(false);
-  const [message, setMessage] = useState('');
-
-  return (
-    <div className="card space-y-3 p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="flex items-center gap-2">
-            <Workflow className="h-4 w-4 shrink-0 text-muted" />
-            <span className="truncate font-medium">{w.name}</span>
-          </div>
-          {w.description && <p className="text-sm text-muted">{w.description}</p>}
-          <div>
-            <TriggerBadge trigger={w.trigger} />
-          </div>
-        </div>
-        <button
-          type="button"
-          className={cn('inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0 transition-colors', w.enabled ? 'bg-brand' : 'bg-border')}
-          onClick={onToggleEnabled}
-          disabled={toggling}
-          title={w.enabled ? '已啟用（點擊停用）' : '已停用（點擊啟用）'}
-        >
-          <span
-            className={cn(
-              'inline-block h-4 w-4 transform rounded-full bg-white transition-transform',
-              w.enabled ? 'translate-x-[18px]' : 'translate-x-0.5',
-            )}
-          />
-        </button>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className="btn-ghost" onClick={() => setTestOpen((v) => !v)}>
-          <Play className="h-4 w-4" /> 測試
-        </button>
-        <button type="button" className="btn-ghost" onClick={onRun}>
-          <Play className="h-4 w-4" /> 執行
-        </button>
-        <Link href={`/workflows/${w.id}`} className="btn-ghost">
-          編輯
+        <Link href="/workflows" className="text-xs text-brand hover:underline">
+          前往工作流
         </Link>
       </div>
-
-      {testOpen && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-brand/30 p-2.5">
-          <input
-            className="input flex-1"
-            placeholder="測試訊息（選填）"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-          />
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={() => {
-              onTest(message.trim() || undefined);
-              setTestOpen(false);
-              setMessage('');
-            }}
-          >
-            送出測試
-          </button>
-        </div>
-      )}
-
-      {runId && <LiveRunTimeline runId={runId} status={runStatus} steps={runSteps} />}
-    </div>
-  );
-}
-
-function WorkflowsTab({ agent }: { agent: AgentDetail }) {
-  const qc = useQueryClient();
-  const [creating, setCreating] = useState(false);
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [mode, setMode] = useState<'schedule' | 'manual' | 'keyword'>('manual');
-  const [cronPreset, setCronPreset] = useState(CRON_PRESETS[2]!.value);
-  const [customCron, setCustomCron] = useState('');
-  const [keywordsText, setKeywordsText] = useState('');
-  const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
-  const [prompt, setPrompt] = useState('');
-  const [verifyRubric, setVerifyRubric] = useState('');
-
-  // runId currently being tracked per workflow, plus live step/status state
-  // fed by a single shared `run.*` subscription (avoids one WS connection
-  // per card). Mirrored into sessionStorage (see aios.activeRun.<workflowId>)
-  // so the inline test-run timeline survives this component unmounting when
-  // the user switches to another employee-detail tab and back.
-  const [runByWorkflow, setRunByWorkflow] = useState<Record<string, string>>({});
-  const [runStatusById, setRunStatusById] = useState<Record<string, string>>({});
-  const [runStepsById, setRunStepsById] = useState<Record<string, RunStepLive[]>>({});
-
-  const { data: workflows, isLoading } = useQuery({
-    queryKey: ['agent-workflows', agent.id],
-    queryFn: () => API.get<WorkflowListItem[]>(`/api/agents/${agent.id}/workflows?scope=all`),
-  });
-
-  /** Applies a GET /api/runs/:id snapshot into the live-timeline state, and
-   * clears the sessionStorage entry once the run has reached a terminal
-   * state and been rendered at least once (i.e. right after this fetch). */
-  function applyRunSnapshot(workflowId: string, runId: string, data: RunSnapshot) {
-    setRunStatusById((prev) => ({ ...prev, [runId]: data.status }));
-    setRunStepsById((prev) => ({
-      ...prev,
-      [runId]: (data.steps ?? []).map((s) => ({
-        stepKey: s.stepKey,
-        round: s.round,
-        phase: s.approved === true ? 'approved' : s.approved === false ? 'rejected' : undefined,
-        output: s.output ?? null,
-      })),
-    }));
-    if (TERMINAL_RUN_STATUSES.has(data.status)) {
-      clearStoredActiveRun(workflowId);
-    }
-  }
-
-  // On mount, resume any test/run that was in-flight before this tab was
-  // unmounted: restore the tracked runId from sessionStorage and fetch its
-  // current snapshot so the timeline reappears immediately.
-  const hydratedRef = useRef(false);
-  useEffect(() => {
-    if (!workflows || hydratedRef.current) return;
-    hydratedRef.current = true;
-    workflows.forEach((w) => {
-      const stored = readStoredActiveRun(w.id);
-      if (!stored) return;
-      setRunByWorkflow((prev) => ({ ...prev, [w.id]: stored.runId }));
-      setRunStatusById((prev) => ({ ...prev, [stored.runId]: prev[stored.runId] ?? 'RUNNING' }));
-      API.get<RunSnapshot>(`/api/runs/${stored.runId}`)
-        .then((data) => applyRunSnapshot(w.id, stored.runId, data))
-        .catch(() => clearStoredActiveRun(w.id));
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workflows]);
-
-  // Backup polling: while any tracked run hasn't reached a terminal state,
-  // periodically re-fetch its snapshot so the timeline stays correct even if
-  // a run.* WS frame was missed (e.g. right after the WS reconnects because
-  // this tab was remounted).
-  const runByWorkflowRef = useRef(runByWorkflow);
-  runByWorkflowRef.current = runByWorkflow;
-  const runStatusByIdRef = useRef(runStatusById);
-  runStatusByIdRef.current = runStatusById;
-  useEffect(() => {
-    const interval = setInterval(() => {
-      Object.entries(runByWorkflowRef.current).forEach(([workflowId, runId]) => {
-        const status = runStatusByIdRef.current[runId];
-        if (status && TERMINAL_RUN_STATUSES.has(status)) return;
-        API.get<RunSnapshot>(`/api/runs/${runId}`)
-          .then((data) => applyRunSnapshot(workflowId, runId, data))
-          .catch(() => {});
-      });
-    }, 3000);
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useAwp(['run.*'], (frame) => {
-    const topic = frame.topic ?? '';
-    const payload = (frame.payload ?? {}) as { runId?: string; stepKey?: string; round?: number; type?: string; phase?: string; status?: string };
-    const rid = payload.runId;
-    if (!rid) return;
-    if (topic === 'run.started') {
-      setRunStatusById((prev) => ({ ...prev, [rid]: 'RUNNING' }));
-    } else if (topic === 'run.step') {
-      setRunStepsById((prev) => {
-        const list = prev[rid] ? [...prev[rid]] : [];
-        const idx = list.findIndex((s) => s.stepKey === payload.stepKey && s.round === payload.round);
-        const next: RunStepLive = { stepKey: payload.stepKey ?? '', round: payload.round, type: payload.type, phase: payload.phase };
-        if (idx >= 0) list[idx] = next;
-        else list.push(next);
-        return { ...prev, [rid]: list };
-      });
-    } else if (topic === 'run.finished') {
-      const finalStatus = payload.status ?? 'SUCCEEDED';
-      setRunStatusById((prev) => ({ ...prev, [rid]: finalStatus }));
-      qc.invalidateQueries({ queryKey: ['agent-workflows', agent.id] });
-      const entry = Object.entries(runByWorkflow).find(([, r]) => r === rid);
-      if (entry) {
-        // Pull the final snapshot so the timeline can show the actual step
-        // OUTPUT (the run result), not just the status — WS frames carry no
-        // output payload.
-        API.get<RunSnapshot>(`/api/runs/${rid}`)
-          .then((data) => applyRunSnapshot(entry[0], rid, data))
-          .catch(() => {});
-        if (TERMINAL_RUN_STATUSES.has(finalStatus)) clearStoredActiveRun(entry[0]);
-      }
-    }
-  });
-
-  function trackRun(workflowId: string, runId: string) {
-    setRunByWorkflow((prev) => ({ ...prev, [workflowId]: runId }));
-    setRunStatusById((prev) => ({ ...prev, [runId]: 'RUNNING' }));
-    setRunStepsById((prev) => ({ ...prev, [runId]: [] }));
-    writeStoredActiveRun(workflowId, runId);
-  }
-
-  const testMutation = useMutation({
-    mutationFn: ({ workflowId, message }: { workflowId: string; message?: string }) =>
-      API.post<{ runId: string }>(`/api/workflows/${workflowId}/test`, message ? { message } : {}),
-    onSuccess: (data, vars) => trackRun(vars.workflowId, data.runId),
-  });
-
-  const runMutation = useMutation({
-    mutationFn: (workflowId: string) => API.post<{ runId: string }>(`/api/workflows/${workflowId}/run`, {}),
-    onSuccess: (data, workflowId) => trackRun(workflowId, data.runId),
-  });
-
-  const toggleMutation = useMutation({
-    mutationFn: ({ workflowId, enabled }: { workflowId: string; enabled: boolean }) => API.patch(`/api/workflows/${workflowId}`, { enabled }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['agent-workflows', agent.id] }),
-  });
-
-  function resetCreateForm() {
-    setName('');
-    setDescription('');
-    setMode('manual');
-    setCronPreset(CRON_PRESETS[2]!.value);
-    setCustomCron('');
-    setKeywordsText('');
-    setSelectedFileIds([]);
-    setPrompt('');
-    setVerifyRubric('');
-  }
-
-  const createMutation = useMutation({
-    mutationFn: async () => {
-      const trigger: WorkflowTrigger =
-        mode === 'schedule'
-          ? { type: 'schedule', cron: (cronPreset === 'custom' ? customCron : cronPreset).trim() }
-          : mode === 'keyword'
-            ? { type: 'keyword', keywords: keywordsText.split(',').map((k) => k.trim()).filter(Boolean) }
-            : { type: 'manual' };
-
-      const created = await API.post<{ id: string }>(`/api/agents/${agent.id}/workflows`, { name, description, trigger });
-
-      const chosenNames = agent.fileTargets
-        .filter((t) => selectedFileIds.includes(t.cloudFileRefId))
-        .map((t) => t.cloudFileRef?.name ?? t.cloudFileRefId);
-      const fileNote = chosenNames.length ? `\n\n附掛檔案：${chosenNames.join('、')}` : '';
-      const finalPrompt = (prompt.trim() || '請依照這位員工的角色設定，完成這個工作流的任務。') + fileNote;
-
-      await API.put(`/api/workflows/${created.id}/steps`, {
-        steps: [{ stepKey: 'main', type: 'DO', config: { prompt: finalPrompt }, verifyRubric: verifyRubric.trim() || null }],
-      });
-      return created;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['agent-workflows', agent.id] });
-      qc.invalidateQueries({ queryKey: ['agent', agent.id] });
-      setCreating(false);
-      resetCreateForm();
-    },
-  });
-
-  function toggleFileSelection(cloudFileRefId: string) {
-    setSelectedFileIds((prev) => (prev.includes(cloudFileRefId) ? prev.filter((id) => id !== cloudFileRefId) : [...prev, cloudFileRefId]));
-  }
-
-  const list = workflows ?? [];
-
-  return (
-    <div className="max-w-3xl space-y-4">
-      <div className="flex justify-end">
-        <button className="btn-primary" onClick={() => setCreating((v) => !v)}>
-          <Plus className="h-4 w-4" /> {creating ? '取消新增' : '新增工作流'}
-        </button>
-      </div>
-
-      {creating && (
-        <div className="card space-y-4 p-5">
-          <Field label="名稱">
-            <input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
-          </Field>
-          <Field label="描述">
-            <input className="input" value={description} onChange={(e) => setDescription(e.target.value)} />
-          </Field>
-
-          <div>
-            <span className="label mb-1.5 block">執行模式</span>
-            <div className="flex flex-wrap gap-4">
-              <label className="flex items-center gap-1.5 text-sm">
-                <input type="radio" checked={mode === 'schedule'} onChange={() => setMode('schedule')} /> 定期
-              </label>
-              <label className="flex items-center gap-1.5 text-sm">
-                <input type="radio" checked={mode === 'manual'} onChange={() => setMode('manual')} /> 手動
-              </label>
-              <label className="flex items-center gap-1.5 text-sm">
-                <input type="radio" checked={mode === 'keyword'} onChange={() => setMode('keyword')} /> 關鍵字觸發
-              </label>
-            </div>
-          </div>
-
-          {mode === 'schedule' && (
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="排程頻率">
-                <select className="input" value={cronPreset} onChange={(e) => setCronPreset(e.target.value)}>
-                  {CRON_PRESETS.map((p) => (
-                    <option key={p.value} value={p.value}>
-                      {p.label}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-              {cronPreset === 'custom' && (
-                <Field label="自訂 Cron 表達式">
-                  <input className="input font-mono" placeholder="0 9 * * *" value={customCron} onChange={(e) => setCustomCron(e.target.value)} />
-                </Field>
-              )}
-            </div>
-          )}
-
-          {mode === 'keyword' && (
-            <Field label="關鍵字（以逗號分隔）">
-              <input
-                className="input"
-                placeholder="例如：發票, 對帳"
-                value={keywordsText}
-                onChange={(e) => setKeywordsText(e.target.value)}
-              />
-            </Field>
-          )}
-
-          <div>
-            <span className="label mb-1.5 block">附掛檔案（執行時會自動讀取這位員工的檔案目標）</span>
-            {agent.fileTargets.length === 0 ? (
-              <p className="text-sm text-muted">此員工尚未設定任何雲端檔案目標</p>
-            ) : (
-              <div className="grid gap-1.5 sm:grid-cols-2">
-                {agent.fileTargets.map((t) => (
-                  <label key={t.cloudFileRefId} className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={selectedFileIds.includes(t.cloudFileRefId)}
-                      onChange={() => toggleFileSelection(t.cloudFileRefId)}
-                    />
-                    <span className="truncate">{t.cloudFileRef?.name ?? t.cloudFileRefId}</span>
-                  </label>
-                ))}
+      <p className="text-xs text-muted">此處唯讀。新增、測試、啟停請到工作流頁。</p>
+      {list.length === 0 ? (
+        <p className="text-sm text-muted">尚未建立工作流</p>
+      ) : (
+        <ul className="divide-y divide-border">
+          {list.map((w) => (
+            <li key={w.id} className="flex items-center justify-between gap-3 py-2.5">
+              <span className="truncate text-sm font-medium">{w.name}</span>
+              <div className="flex shrink-0 items-center gap-2">
+                <StatusBadge status={w.enabled ? 'ENABLED' : 'DISABLED'} />
+                <Link href={`/workflows/${w.id}`} className="text-xs text-brand hover:underline">
+                  查看
+                </Link>
               </div>
-            )}
-          </div>
-
-          <Field label="這個工作流要做什麼">
-            <textarea
-              className="input min-h-[100px] resize-y"
-              placeholder="例如：讀取指定資料夾中的發票 PDF，擷取品項與金額，彙整成一份應收帳款清單 Excel，欄位包含單號、對象、金額、到期日，完成後上傳到雲端的 AIOS 資料夾"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-            />
-            <p className="mt-1 text-xs text-muted">
-              這段指示會連同員工的角色設定與附掛檔案一起送出執行；描述「要做什麼、產出什麼、放到哪」，留白時會改用員工的角色設定預設任務。
-            </p>
-          </Field>
-          <Field label="驗證標準（選填）">
-            <textarea
-              className="input min-h-[70px] resize-y"
-              placeholder="例如：輸出必須包含結案摘要與金額"
-              value={verifyRubric}
-              onChange={(e) => setVerifyRubric(e.target.value)}
-            />
-          </Field>
-
-          {createMutation.error instanceof Error && <p className="text-sm text-rose-400">{createMutation.error.message}</p>}
-          <div className="flex justify-end gap-2">
-            <button
-              className="btn-ghost"
-              onClick={() => {
-                setCreating(false);
-                resetCreateForm();
-              }}
-            >
-              取消
-            </button>
-            <button className="btn-primary" disabled={!name || createMutation.isPending} onClick={() => createMutation.mutate()}>
-              {createMutation.isPending && <Spinner className="border-white/40 border-t-white" />} 建立
-            </button>
-          </div>
-        </div>
-      )}
-
-      {isLoading && (
-        <div className="flex justify-center py-8">
-          <Spinner className="h-5 w-5" />
-        </div>
-      )}
-
-      {!isLoading && list.length === 0 && <EmptyState title="尚未建立工作流" />}
-
-      {!isLoading && list.length > 0 && (
-        <div className="space-y-3">
-          {list.map((w) => {
-            const runId = runByWorkflow[w.id];
-            return (
-              <WorkflowCard
-                key={w.id}
-                w={w}
-                runId={runId}
-                runStatus={runId ? runStatusById[runId] : undefined}
-                runSteps={runId ? runStepsById[runId] ?? [] : []}
-                onTest={(message) => testMutation.mutate({ workflowId: w.id, message })}
-                onRun={() => runMutation.mutate(w.id)}
-                onToggleEnabled={() => toggleMutation.mutate({ workflowId: w.id, enabled: !w.enabled })}
-                toggling={toggleMutation.isPending}
-              />
-            );
-          })}
-        </div>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
@@ -2085,7 +1470,7 @@ function RunsTab({ agent }: { agent: AgentDetail }) {
       )}
 
       {!isLoading && list.length === 0 && (
-        <EmptyState title="尚無執行紀錄" hint="可在「工作流」分頁按「測試」立即產生一筆。" />
+        <EmptyState title="尚無執行紀錄" hint="可在工作流頁按「測試」立即產生一筆。" />
       )}
 
       {!isLoading && list.length > 0 && (
@@ -2099,769 +1484,26 @@ function RunsTab({ agent }: { agent: AgentDetail }) {
   );
 }
 
-// ---------- 訓練 Training（聊天式技能工廠） ----------
-
-interface TrainMessageResult {
-  skillId: string;
-  contentMd: string;
-  reviewStatus: string;
-  understanding: SkillUnderstanding | null;
-}
-
-interface AgentFlows {
-  skills: Array<{ id: string; name: string; summary: string; reviewStatus: string }>;
-  workflows: Array<{ id: string; name: string; trigger: string }>;
-}
-
-interface RecordingStatus {
-  recording?: boolean;
-  isRecording?: boolean;
-  active?: boolean;
-  status?: string;
-  [key: string]: unknown;
-}
-
-type ChatMsg =
-  | { id: string; kind: 'user'; text: string }
-  | { id: string; kind: 'system'; text: string }
-  | { id: string; kind: 'drafting' }
-  | {
-      id: string;
-      kind: 'draft';
-      skillId: string;
-      name: string;
-      reviewStatus: string;
-      understanding: SkillUnderstanding | null;
-      statusNote?: string;
-    }
-  | {
-      id: string;
-      kind: 'flows';
-      skills: AgentFlows['skills'];
-      workflows: AgentFlows['workflows'];
-    }
-  | { id: string; kind: 'error'; text: string };
-
-function normalizeUnderstanding(raw: unknown): SkillUnderstanding | null {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-  const o = raw as Record<string, unknown>;
-  const arr = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
-  return {
-    summary: typeof o.summary === 'string' ? o.summary : '',
-    capabilities: arr(o.capabilities),
-    data_read: arr(o.data_read),
-    data_written: arr(o.data_written),
-    external_calls: arr(o.external_calls),
-    irreversible_actions: arr(o.irreversible_actions),
-    risks: arr(o.risks),
-  };
-}
-
-function parseSkillNameFromMd(md: string): string {
-  const m = md.match(/^---\r?\n[\s\S]*?^name:\s*["']?(.+?)["']?\s*$/m);
-  return m?.[1]?.trim() || '技能草稿';
-}
-
-function isRecordingActive(s: RecordingStatus | undefined): boolean {
-  if (!s) return false;
-  if (s.recording === true || s.isRecording === true || s.active === true) return true;
-  if (typeof s.status === 'string' && /record|active|running/i.test(s.status)) return true;
-  return false;
-}
-
-function VoiceInput({
-  onTranscript,
-  disabled,
-}: {
-  onTranscript: (text: string) => void;
-  disabled?: boolean;
-}) {
-  const [recording, setRecording] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const mediaRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const streamRef = useRef<MediaStream | null>(null);
-
-  useEffect(() => {
-    return () => {
-      mediaRef.current?.stop();
-      streamRef.current?.getTracks().forEach((t) => t.stop());
-    };
-  }, []);
-
-  async function start() {
-    setError(null);
-    if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      setError('此瀏覽器不支援麥克風錄音');
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      chunksRef.current = [];
-      const mime = MediaRecorder.isTypeSupported('audio/webm')
-        ? 'audio/webm'
-        : MediaRecorder.isTypeSupported('audio/mp4')
-          ? 'audio/mp4'
-          : '';
-      const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
-      mediaRef.current = rec;
-      rec.ondataavailable = (ev) => {
-        if (ev.data.size > 0) chunksRef.current.push(ev.data);
-      };
-      rec.onstop = async () => {
-        stream.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
-        const blob = new Blob(chunksRef.current, { type: rec.mimeType || 'audio/webm' });
-        chunksRef.current = [];
-        if (!blob.size) {
-          setError('沒有錄到音訊');
-          setBusy(false);
-          setRecording(false);
-          return;
-        }
-        setBusy(true);
-        try {
-          const form = new FormData();
-          const ext = blob.type.includes('mp4') ? 'm4a' : 'webm';
-          form.append('file', blob, `voice.${ext}`);
-          const res = await API.upload<{ text: string }>('/api/voice/transcribe', form);
-          const text = (res.text ?? '').trim();
-          if (!text) setError('轉錄結果為空');
-          else onTranscript(text);
-        } catch (e) {
-          setError(e instanceof Error ? e.message : String(e));
-        } finally {
-          setBusy(false);
-          setRecording(false);
-        }
-      };
-      rec.start();
-      setRecording(true);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '無法開啟麥克風');
-    }
-  }
-
-  function stop() {
-    const rec = mediaRef.current;
-    if (rec && rec.state !== 'inactive') {
-      setBusy(true);
-      rec.stop();
-    }
-    mediaRef.current = null;
-  }
-
-  return (
-    <div className="flex flex-col items-end gap-1">
-      <button
-        type="button"
-        className={cn(
-          'btn-ghost h-9 w-9 shrink-0 p-0',
-          recording && 'bg-rose-500/15 text-rose-400',
-        )}
-        title={recording ? '停止錄音並轉錄' : '語音輸入（音訊會送往 OpenAI 轉錄）'}
-        disabled={disabled || busy}
-        onClick={() => (recording ? stop() : void start())}
-      >
-        {busy ? (
-          <Spinner className="h-4 w-4" />
-        ) : recording ? (
-          <MicOff className="h-4 w-4" />
-        ) : (
-          <Mic className="h-4 w-4" />
-        )}
-      </button>
-      <p className="max-w-[10rem] text-right text-[10px] leading-tight text-muted">
-        音訊會送往 OpenAI 轉錄
-      </p>
-      {error && <p className="max-w-[12rem] text-right text-[10px] text-rose-400">{error}</p>}
-    </div>
-  );
-}
-
-function TrainingTab({ agent }: { agent: AgentDetail }) {
-  const qc = useQueryClient();
-  const { user } = useAuth();
-  const isFde = isFdeRole(user?.role);
-  const [input, setInput] = useState('');
-  const [messages, setMessages] = useState<ChatMsg[]>([
-    {
-      id: 'welcome',
-      kind: 'system',
-      text: '用聊天描述要教這位員工的流程，或按「有哪些流程？」查看現況。也可開始錄製桌面操作。若流程含 COMPUTER_CONTROL 或 device-mcp:line-desktop，請先在「裝置」分頁綁定裝置，並於工作流步驟明確選擇線上可用裝置。',
-    },
-  ]);
-  const [draftSkillId, setDraftSkillId] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  const [proposingId, setProposingId] = useState<string | null>(null);
-  const listEndRef = useRef<HTMLDivElement | null>(null);
-
-  // Recording state: poll status ≥3s while active or after start.
-  const [recordingWanted, setRecordingWanted] = useState(false);
-  const [recBusy, setRecBusy] = useState(false);
-
-  const recStatusQ = useQuery({
-    queryKey: ['recording-status'],
-    queryFn: () => API.get<RecordingStatus>('/api/recording/status'),
-    refetchInterval: (q) => {
-      const active = recordingWanted || isRecordingActive(q.state.data);
-      return active ? 3000 : false;
-    },
-    retry: false,
-  });
-  const recordingOn = recordingWanted || isRecordingActive(recStatusQ.data);
-
-  useAwp(['skill.review_ready'], (frame) => {
-    const payload = (frame.payload ?? {}) as { skillId?: string };
-    if (payload.skillId) {
-      qc.invalidateQueries({ queryKey: ['agent', agent.id] });
-      qc.invalidateQueries({ queryKey: ['building-skill', payload.skillId] });
-    }
-  });
-
-  useEffect(() => {
-    listEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, sending]);
-
-  function pushMsg(msg: ChatMsg) {
-    setMessages((prev) => [...prev, msg]);
-  }
-
-  function isFlowsIntent(text: string): boolean {
-    const t = text.trim();
-    return /有哪些流程|目前有哪些流程|流程清單|list\s*flows/i.test(t);
-  }
-
-  async function loadFlows() {
-    setSending(true);
-    setActionError(null);
-    pushMsg({ id: crypto.randomUUID(), kind: 'user', text: '有哪些流程？' });
-    try {
-      const flows = await API.get<AgentFlows>(`/api/agents/${agent.id}/flows`);
-      pushMsg({
-        id: crypto.randomUUID(),
-        kind: 'flows',
-        skills: flows.skills ?? [],
-        workflows: flows.workflows ?? [],
-      });
-    } catch (e) {
-      pushMsg({
-        id: crypto.randomUUID(),
-        kind: 'error',
-        text: e instanceof Error ? e.message : String(e),
-      });
-    } finally {
-      setSending(false);
-    }
-  }
-
-  async function sendTrainMessage(raw: string) {
-    const message = raw.trim();
-    if (!message || sending) return;
-    if (isFlowsIntent(message)) {
-      setInput('');
-      await loadFlows();
-      return;
-    }
-
-    setSending(true);
-    setActionError(null);
-    setInput('');
-    pushMsg({ id: crypto.randomUUID(), kind: 'user', text: message });
-    const draftingId = crypto.randomUUID();
-    pushMsg({ id: draftingId, kind: 'drafting' });
-
-    try {
-      const result = await API.post<TrainMessageResult>(`/api/agents/${agent.id}/train/message`, {
-        message,
-        skillId: draftSkillId ?? undefined,
-      });
-      const understanding = normalizeUnderstanding(result.understanding);
-      let name = parseSkillNameFromMd(result.contentMd ?? '');
-      try {
-        const detail = await API.get<SkillDetail>(`/api/skills/${result.skillId}`);
-        if (detail.name) name = detail.name;
-      } catch {
-        /* name from md is fine */
-      }
-      setDraftSkillId(result.skillId);
-      setMessages((prev) =>
-        prev
-          .filter((m) => m.id !== draftingId)
-          .concat({
-            id: crypto.randomUUID(),
-            kind: 'draft',
-            skillId: result.skillId,
-            name,
-            reviewStatus: result.reviewStatus,
-            understanding,
-          }),
-      );
-      qc.invalidateQueries({ queryKey: ['agent', agent.id] });
-    } catch (e) {
-      setMessages((prev) =>
-        prev
-          .filter((m) => m.id !== draftingId)
-          .concat({
-            id: crypto.randomUUID(),
-            kind: 'error',
-            text: e instanceof Error ? e.message : String(e),
-          }),
-      );
-    } finally {
-      setSending(false);
-    }
-  }
-
-  async function confirmSkill(skillId: string) {
-    setConfirmingId(skillId);
-    setActionError(null);
-    try {
-      await API.post(`/api/skills/${skillId}/confirm`);
-      // Pre-linked drafts: attach is idempotent. Only ignore exact CONFLICT (duplicate link).
-      // Surface CODEX gate / other errors — never claim attached after a real failure.
-      try {
-        await API.post(`/api/agents/${agent.id}/skills`, { skillId });
-      } catch (e) {
-        if (e instanceof ApiError && e.code === 'CONFLICT') {
-          // already linked
-        } else {
-          throw e;
-        }
-      }
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.kind === 'draft' && m.skillId === skillId
-            ? { ...m, reviewStatus: 'CONFIRMED', statusNote: '已確認並掛載' }
-            : m,
-        ),
-      );
-      setDraftSkillId(null);
-      qc.invalidateQueries({ queryKey: ['agent', agent.id] });
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setConfirmingId(null);
-    }
-  }
-
-  async function proposeSkill(skillId: string, name: string) {
-    setProposingId(skillId);
-    setActionError(null);
-    try {
-      await API.post(`/api/agents/${agent.id}/proposals`, {
-        targetType: 'SKILL',
-        targetId: skillId,
-        proposedChange: {
-          action: 'confirm_skill',
-          skillId,
-          name,
-          note: '操作者從訓練頁送出：請 FDE 確認並掛載此技能草稿',
-        },
-        severity: 'medium',
-      });
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.kind === 'draft' && m.skillId === skillId
-            ? { ...m, statusNote: '已送出提案，等待 FDE 審核' }
-            : m,
-        ),
-      );
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setProposingId(null);
-    }
-  }
-
-  async function startRecording() {
-    setRecBusy(true);
-    setActionError(null);
-    try {
-      await API.post('/api/recording/start', { agentId: agent.id });
-      setRecordingWanted(true);
-      pushMsg({
-        id: crypto.randomUUID(),
-        kind: 'system',
-        text: '已開始錄製。請在桌面完成一次操作後按「結束錄製」。單次上限 30 分鐘。',
-      });
-      void recStatusQ.refetch();
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRecBusy(false);
-    }
-  }
-
-  async function stopRecordingAndImport() {
-    setRecBusy(true);
-    setActionError(null);
-    try {
-      const stopped = await API.post<{ sessionId: string }>('/api/recording/stop');
-      setRecordingWanted(false);
-      pushMsg({ id: crypto.randomUUID(), kind: 'system', text: '錄製已停止，正在匯入為技能草稿…' });
-      const draftingId = crypto.randomUUID();
-      pushMsg({ id: draftingId, kind: 'drafting' });
-      const result = await API.post<{
-        skillId?: string;
-        id?: string;
-        name?: string;
-        reviewStatus?: string;
-        understanding?: unknown;
-        contentMd?: string;
-      }>(`/api/agents/${agent.id}/recording/to-skill`, { sessionId: stopped.sessionId });
-      const skillId = result.skillId ?? result.id;
-      if (!skillId) throw new Error('recording/to-skill 未回傳 skillId');
-      let name = result.name ?? parseSkillNameFromMd(result.contentMd ?? '');
-      let understanding = normalizeUnderstanding(result.understanding);
-      let reviewStatus = result.reviewStatus ?? 'AWAITING_USER_CONFIRM';
-      try {
-        const detail = await API.get<SkillDetail>(`/api/skills/${skillId}`);
-        name = detail.name || name;
-        understanding = detail.understanding ?? understanding;
-        reviewStatus = detail.reviewStatus || reviewStatus;
-      } catch {
-        /* use payload */
-      }
-      setDraftSkillId(skillId);
-      setMessages((prev) =>
-        prev
-          .filter((m) => m.id !== draftingId)
-          .concat({
-            id: crypto.randomUUID(),
-            kind: 'draft',
-            skillId,
-            name: name || '錄製技能草稿',
-            reviewStatus,
-            understanding,
-          }),
-      );
-      qc.invalidateQueries({ queryKey: ['agent', agent.id] });
-      void recStatusQ.refetch();
-    } catch (e) {
-      setRecordingWanted(false);
-      pushMsg({
-        id: crypto.randomUUID(),
-        kind: 'error',
-        text: e instanceof Error ? e.message : String(e),
-      });
-    } finally {
-      setRecBusy(false);
-    }
-  }
-
-  return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-4">
-      {/* Recording bar */}
-      <div className="card space-y-3 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="text-sm font-medium">桌面操作錄製</div>
-          <div className="flex items-center gap-2">
-            {!recordingOn ? (
-              <button
-                type="button"
-                className="btn-primary"
-                disabled={recBusy || sending}
-                onClick={() => void startRecording()}
-              >
-                {recBusy ? <Spinner className="border-white/40 border-t-white" /> : <Circle className="h-3.5 w-3.5 fill-rose-500 text-rose-500" />}
-                開始錄製
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="btn-primary bg-rose-600 hover:bg-rose-500"
-                disabled={recBusy}
-                onClick={() => void stopRecordingAndImport()}
-              >
-                {recBusy ? <Spinner className="border-white/40 border-t-white" /> : <Square className="h-3.5 w-3.5" />}
-                結束錄製
-              </button>
-            )}
-          </div>
-        </div>
-        {recordingOn && (
-          <div className="flex items-center gap-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm font-medium text-rose-300">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-rose-500" />
-            </span>
-            🔴 正在錄製中 — 單次上限 30 分鐘
-          </div>
-        )}
-        <p className="text-xs text-muted">
-          錄製完成後會委派 Codex 匯入為技能草稿，再走理解閘與確認流程（不會自動掛載）。
-        </p>
-      </div>
-
-      {/* Chat transcript */}
-      <div className="card flex max-h-[min(60vh,560px)] min-h-[320px] flex-col overflow-hidden p-0">
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <GraduationCap className="h-4 w-4 text-brand" /> 聊天式技能工廠
-          </div>
-          <button
-            type="button"
-            className="btn-ghost text-xs"
-            disabled={sending}
-            onClick={() => void loadFlows()}
-          >
-            <List className="h-3.5 w-3.5" /> 有哪些流程？
-          </button>
-        </div>
-
-        <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
-          {messages.map((m) => {
-            if (m.kind === 'user') {
-              return (
-                <div key={m.id} className="flex justify-end">
-                  <div className="max-w-[85%] rounded-2xl rounded-br-md bg-brand/20 px-3 py-2 text-sm">
-                    {m.text}
-                  </div>
-                </div>
-              );
-            }
-            if (m.kind === 'system') {
-              return (
-                <div key={m.id} className="text-center text-xs text-muted">
-                  {m.text}
-                </div>
-              );
-            }
-            if (m.kind === 'drafting') {
-              return (
-                <div key={m.id} className="flex items-center gap-2 text-sm text-muted">
-                  <Spinner className="h-4 w-4" /> 草擬中…
-                </div>
-              );
-            }
-            if (m.kind === 'error') {
-              return (
-                <div key={m.id} className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
-                  {m.text}
-                </div>
-              );
-            }
-            if (m.kind === 'flows') {
-              return (
-                <div key={m.id} className="card space-y-3 border-border/80 bg-black/10 p-4">
-                  <div className="text-sm font-medium">目前流程清單（免 LLM）</div>
-                  <div>
-                    <div className="mb-1 text-xs font-medium text-muted">技能</div>
-                    {m.skills.length === 0 ? (
-                      <p className="text-sm text-muted">尚無掛載技能</p>
-                    ) : (
-                      <ul className="space-y-2">
-                        {m.skills.map((s) => (
-                          <li key={s.id} className="flex items-start justify-between gap-2 text-sm">
-                            <div className="min-w-0">
-                              <div className="font-medium">{s.name}</div>
-                              {s.summary && <div className="text-xs text-muted">{s.summary}</div>}
-                            </div>
-                            <StatusBadge status={s.reviewStatus} />
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                  <div>
-                    <div className="mb-1 text-xs font-medium text-muted">工作流</div>
-                    {m.workflows.length === 0 ? (
-                      <p className="text-sm text-muted">尚無工作流</p>
-                    ) : (
-                      <ul className="space-y-2">
-                        {m.workflows.map((w) => (
-                          <li key={w.id} className="flex items-center justify-between gap-2 text-sm">
-                            <span className="font-medium">{w.name}</span>
-                            <span className="badge bg-black/10 text-muted dark:bg-white/10">{w.trigger}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                </div>
-              );
-            }
-            // draft card
-            const u = m.understanding;
-            return (
-              <div key={m.id} className="card space-y-3 border-brand/20 p-4">
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="font-medium">{m.name}</h3>
-                  <StatusBadge status={m.reviewStatus} />
-                </div>
-                {u?.summary && <p className="text-sm">{u.summary}</p>}
-                {u && (
-                  <>
-                    <UnderstandingList title="能力" items={u.capabilities} />
-                    <UnderstandingList title="讀取資料" items={u.data_read} />
-                    <UnderstandingList title="寫入/修改資料" items={u.data_written} />
-                    <UnderstandingList title="外部呼叫" items={u.external_calls} />
-                    {u.irreversible_actions.length > 0 && (
-                      <UnderstandingList
-                        title="不可逆動作"
-                        items={u.irreversible_actions}
-                        icon={<AlertTriangle className="h-3.5 w-3.5 text-rose-400" />}
-                      />
-                    )}
-                    {u.risks.length > 0 && (
-                      <UnderstandingList
-                        title="風險"
-                        items={u.risks}
-                        icon={<AlertTriangle className="h-3.5 w-3.5 text-amber-400" />}
-                      />
-                    )}
-                  </>
-                )}
-                {m.statusNote && <p className="text-sm text-emerald-400">{m.statusNote}</p>}
-                {m.reviewStatus !== 'CONFIRMED' && !m.statusNote?.includes('提案') && (
-                  <div className="flex justify-end gap-2 pt-1">
-                    {isFde ? (
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        disabled={confirmingId === m.skillId}
-                        onClick={() => void confirmSkill(m.skillId)}
-                      >
-                        {confirmingId === m.skillId && (
-                          <Spinner className="border-white/40 border-t-white" />
-                        )}
-                        ✅ 確認掛載
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        disabled={proposingId === m.skillId}
-                        onClick={() => void proposeSkill(m.skillId, m.name)}
-                      >
-                        {proposingId === m.skillId && (
-                          <Spinner className="border-white/40 border-t-white" />
-                        )}
-                        送出提案
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          <div ref={listEndRef} />
-        </div>
-
-        {/* Composer */}
-        <div className="border-t border-border px-3 py-3">
-          {actionError && <p className="mb-2 text-sm text-rose-400">{actionError}</p>}
-          <div className="flex items-end gap-2">
-            <textarea
-              className="input min-h-[44px] max-h-32 flex-1 resize-y"
-              placeholder="描述要教的流程，或問「有哪些流程？」…"
-              value={input}
-              rows={2}
-              disabled={sending}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  void sendTrainMessage(input);
-                }
-              }}
-            />
-            <VoiceInput
-              disabled={sending}
-              onTranscript={(text) => {
-                setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
-              }}
-            />
-            <button
-              type="button"
-              className="btn-primary h-9 shrink-0"
-              disabled={!input.trim() || sending}
-              onClick={() => void sendTrainMessage(input)}
-            >
-              {sending ? <Spinner className="border-white/40 border-t-white" /> : <Send className="h-4 w-4" />}
-              送出
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Mounted skills summary (kept for orientation) */}
-      <div className="card space-y-3 p-5">
-        <div className="text-sm font-medium">已掛載的技能</div>
-        {agent.skills.length === 0 ? (
-          <p className="text-sm text-muted">尚未掛載任何技能</p>
-        ) : (
-          <div className="divide-y divide-border">
-            {agent.skills.map((s) => (
-              <div key={s.skillId} className="flex items-center justify-between gap-3 py-2.5">
-                <div className="flex items-center gap-3">
-                  <Wrench className="h-4 w-4 text-muted" />
-                  <span className="text-sm font-medium">{s.skill?.name ?? s.skillId}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {s.skill?.executionEnv && (
-                    <span className="badge bg-black/10 text-muted dark:bg-white/10">{s.skill.executionEnv}</span>
-                  )}
-                  <StatusBadge status={s.skill?.reviewStatus ?? 'UNKNOWN'} />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function UnderstandingList({ title, items, icon }: { title: string; items: string[]; icon?: React.ReactNode }) {
-  if (items.length === 0) return null;
-  return (
-    <div className="space-y-1">
-      <div className="text-xs font-medium text-muted">{title}</div>
-      <ul className="space-y-1">
-        {items.map((item, idx) => (
-          <li key={idx} className="flex items-start gap-1.5 text-sm">
-            {icon ?? <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-muted" />}
-            <span>{item}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-// ---------- 記憶 Memory (L1 wiki + L3 semantic search) ----------
+// ---------- 記憶 Memory（概況卡：最近 10 筆） ----------
 
 interface MemoryFileEntry {
   path: string;
   size: number;
   mtime: string;
 }
-interface MemorySearchHit {
-  text: string;
-  path: string;
-  score: number;
-  sourceType?: string;
-}
 
-function MemoryTab({ agentId }: { agentId: string }) {
+function MemoryCard({ agentId }: { agentId: string }) {
   const qc = useQueryClient();
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [query, setQuery] = useState('');
-  const [hits, setHits] = useState<MemorySearchHit[] | null>(null);
-  const [searching, setSearching] = useState(false);
-  const [searchError, setSearchError] = useState<string | null>(null);
 
   const { data: filesData, isLoading: filesLoading } = useQuery({
     queryKey: ['memory-files', agentId],
     queryFn: () => API.get<{ files: MemoryFileEntry[] }>(`/api/agents/${agentId}/memory/files`),
   });
-  const files = filesData?.files ?? [];
+  const files = (filesData?.files ?? [])
+    .slice()
+    .sort((a, b) => new Date(b.mtime).getTime() - new Date(a.mtime).getTime())
+    .slice(0, 10);
 
   const { data: fileData, isLoading: fileLoading } = useQuery({
     queryKey: ['memory-file', agentId, selectedPath],
@@ -2883,157 +1525,74 @@ function MemoryTab({ agentId }: { agentId: string }) {
     },
   });
 
-  async function runSearch() {
-    const q = query.trim();
-    if (!q) return;
-    setSearching(true);
-    setSearchError(null);
-    try {
-      const res = await API.post<{ query: string; hits: MemorySearchHit[] }>(
-        `/api/agents/${agentId}/memory/search`,
-        { query: q, topK: 6 },
-      );
-      setHits(res.hits);
-    } catch (e) {
-      setHits(null);
-      setSearchError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSearching(false);
-    }
-  }
-
   return (
-    <div className="space-y-6">
-      <div className="card space-y-3 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 font-medium">
-            <BookOpen className="h-4 w-4 text-brand" /> Wiki 檔案
-          </div>
-          <button
-            type="button"
-            className="btn-secondary inline-flex items-center gap-1.5 text-sm"
-            disabled={reindexMutation.isPending}
-            onClick={() => reindexMutation.mutate()}
-          >
-            {reindexMutation.isPending ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RefreshCw className="h-3.5 w-3.5" />
-            )}
-            重新索引
-          </button>
-        </div>
-        <p className="text-xs text-muted">
-          L1 真相來源：MyAgent/…/memory/wiki/。此頁唯讀；執行引擎可寫入 facts.md / log.md。語意索引（Qdrant）可重建。
-        </p>
-        {reindexMutation.isSuccess && (
-          <p className="text-xs text-muted">
-            索引完成：indexed={reindexMutation.data.indexed}，skipped={reindexMutation.data.skipped}，failed=
-            {reindexMutation.data.failed}
-            {reindexMutation.data.failed > 0 && '（若無 OPENROUTER_API_KEY，failed 屬預期）'}
-          </p>
-        )}
-        {reindexMutation.error instanceof Error && (
-          <p className="text-sm text-rose-400">{reindexMutation.error.message}</p>
-        )}
-
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="min-h-[220px] rounded-lg border border-border">
-            {filesLoading && (
-              <div className="flex justify-center py-10">
-                <Spinner className="h-5 w-5" />
-              </div>
-            )}
-            {!filesLoading && files.length === 0 && (
-              <EmptyState title="尚無 wiki 檔案" hint="執行一次 run 或重新 materialize 後會建立骨架。" />
-            )}
-            {!filesLoading && files.length > 0 && (
-              <ul className="divide-y divide-border">
-                {files.map((f) => (
-                  <li key={f.path}>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedPath(f.path)}
-                      className={cn(
-                        'flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted/40',
-                        selectedPath === f.path && 'bg-brand/10 text-brand',
-                      )}
-                    >
-                      <FileIcon className="h-3.5 w-3.5 shrink-0" />
-                      <span className="min-w-0 flex-1 truncate font-mono text-xs">{f.path}</span>
-                      <span className="shrink-0 text-xs text-muted">{f.size} B</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-
-          <div className="min-h-[220px] rounded-lg border border-border p-3">
-            {!selectedPath && <p className="py-8 text-center text-sm text-muted">點選左側檔案檢視內容（唯讀）</p>}
-            {selectedPath && fileLoading && (
-              <div className="flex justify-center py-10">
-                <Spinner className="h-5 w-5" />
-              </div>
-            )}
-            {selectedPath && !fileLoading && fileData && (
-              <>
-                <div className="mb-2 font-mono text-xs text-muted">{fileData.path}</div>
-                <pre className="max-h-[360px] overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/30 p-3 text-xs leading-relaxed">
-                  {fileData.content}
-                </pre>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="card space-y-3 p-5">
+    <div className="card space-y-3 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 font-medium">
-          <Search className="h-4 w-4 text-brand" /> 語意搜尋
+          <BookOpen className="h-4 w-4 text-brand" /> 記憶
         </div>
-        <p className="text-xs text-muted">
-          POST /memory/search — 需要 OPENROUTER_API_KEY 與 Qdrant 中的向量。無金鑰時 hits 為空屬正常。
-        </p>
-        <div className="flex gap-2">
-          <input
-            className="input flex-1"
-            placeholder="例如：報價單幣別、上次約定…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') void runSearch();
-            }}
-          />
-          <button
-            type="button"
-            className="btn-primary inline-flex items-center gap-1.5"
-            disabled={searching || !query.trim()}
-            onClick={() => void runSearch()}
-          >
-            {searching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-            搜尋
-          </button>
-        </div>
-        {searchError && <p className="text-sm text-rose-400">{searchError}</p>}
-        {hits && hits.length === 0 && (
-          <p className="text-sm text-muted">沒有命中片段（可能尚未索引，或缺少 embedding 金鑰）。</p>
-        )}
-        {hits && hits.length > 0 && (
-          <ul className="space-y-3">
-            {hits.map((h, i) => (
-              <li key={`${h.path}-${i}`} className="rounded-lg border border-border p-3">
-                <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-muted">
-                  <span className="font-mono text-fg">{h.path}</span>
-                  <span>score {typeof h.score === 'number' ? h.score.toFixed(3) : h.score}</span>
-                  {h.sourceType && <StatusBadge status={h.sourceType} />}
-                </div>
-                <pre className="whitespace-pre-wrap break-words text-sm leading-relaxed">{h.text}</pre>
-              </li>
-            ))}
-          </ul>
-        )}
+        <button
+          type="button"
+          className="btn-ghost text-xs"
+          disabled={reindexMutation.isPending}
+          onClick={() => reindexMutation.mutate()}
+        >
+          {reindexMutation.isPending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <RefreshCw className="h-3.5 w-3.5" />
+          )}
+          重新索引
+        </button>
       </div>
+      <p className="text-xs text-muted">最近 10 筆 wiki 檔。點選檔名檢視內容（唯讀）。</p>
+      {reindexMutation.isSuccess && (
+        <p className="text-xs text-muted">
+          索引完成：indexed={reindexMutation.data.indexed}，skipped={reindexMutation.data.skipped}，failed=
+          {reindexMutation.data.failed}
+        </p>
+      )}
+      {reindexMutation.error instanceof Error && (
+        <p className="text-sm text-rose-400">{reindexMutation.error.message}</p>
+      )}
+      {filesLoading && (
+        <div className="flex justify-center py-6">
+          <Spinner className="h-5 w-5" />
+        </div>
+      )}
+      {!filesLoading && files.length === 0 && (
+        <p className="text-sm text-muted">尚無 wiki 檔案</p>
+      )}
+      {!filesLoading && files.length > 0 && (
+        <ul className="divide-y divide-border rounded-lg border border-border">
+          {files.map((f) => (
+            <li key={f.path}>
+              <button
+                type="button"
+                onClick={() => setSelectedPath(f.path)}
+                className={cn(
+                  'flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/40',
+                  selectedPath === f.path && 'bg-brand/10 text-brand',
+                )}
+              >
+                <FileIcon className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 flex-1 truncate font-mono text-xs">{f.path}</span>
+                <span className="shrink-0 text-xs text-muted">{f.size} B</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {selectedPath && fileLoading && (
+        <div className="flex justify-center py-4">
+          <Spinner className="h-4 w-4" />
+        </div>
+      )}
+      {selectedPath && !fileLoading && fileData && (
+        <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/30 p-3 text-xs leading-relaxed">
+          {fileData.content}
+        </pre>
+      )}
     </div>
   );
 }
