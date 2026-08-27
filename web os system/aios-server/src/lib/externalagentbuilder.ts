@@ -130,17 +130,45 @@ const MAX_TRANSCRIPT_ENTRIES = 1_000;
 const MAX_MEMORY_DOCUMENTS = 24;
 const MAX_WORKFLOWS = 12;
 
+/** Internal compiler/test prompts must never recursively open a Builder session. */
+const AGENT_BUILD_INTERNAL_RE =
+  /(?:^|\n)\s*(?:你是\s*AIOS\s*的「員工演進建築師」|你是企業\s*AI\s*員工的\s*Grill\s*訪談顧問)|【Agent Builder 試跑】|Harness\s*是\s*shadow draft|輸出純\s*JSON[^\n]{0,160}(?:understanding|harness|suggestTest)/iu;
 /** Execution / schedule instructions must never open a new Agent Builder session. */
 const AGENT_BUILD_EXECUTION_RE =
-  /(?:^|\n)\s*(?:執行|跑一次|立即執行)|凌晨\s*\d|每日|每週|排程|cron|【步驟\s*\d】|```bash/;
-const AGENT_BUILD_ACTION_RE = /建立|新增|打造|訓練|教會|建置|create|build|train|teach|design/i;
-const AGENT_BUILD_OBJECT_RE = /AI(?:OS)?\s*(?:員工|助理|代理)|agent|bot|機器人|技能|skill/i;
+  /(?:^|\n)\s*(?:執行|跑一次|立即執行|現在是|凌晨\s*\d)|(?:每日|每週|每月)\s*(?:自我)?(?:執行|進化|排程)|cron|【步驟\s*\d】|```bash/iu;
+/** Explicit refusal/discussion of creation is not permission to create anything. */
+const AGENT_BUILD_NEGATED_RE =
+  /(?:不要|不需要|無需|毋須|禁止|別)\s*.{0,18}(?:建立|新增|打造|訓練|教會|建置|create|build|train|teach|design)\s*.{0,24}(?:AI(?:OS)?\s*(?:員工|助理|代理)|agent|bot|機器人|技能|skill)/iu;
+/** Architecture/research requests often quote build examples but ask only for analysis. */
+const AGENT_BUILD_META_ONLY_RE =
+  /(?:幫我|請你|麻煩你).{0,24}(?:分析|研究|評估|瞭解|了解|閱讀|檢查).{0,120}(?:系統|程式碼|架構|現況|問題).{0,240}(?:報告|規劃|建議|看法)/iu;
+// English tokens must be complete words. Matching `build` inside the product
+// noun `Builder` / `agentbuilder` causes unrelated coding chats (edit a .ts
+// file, `npm run build` in an agent package) to look like Agent-build intent.
+// Chinese verbs/nouns are unaffected by `\b`.
+export const AGENT_BUILD_ACTION_RE =
+  /建立|新增|打造|訓練|教會|建置|\b(?:create|build|train|teach|design)\b/i;
+export const AGENT_BUILD_OBJECT_RE =
+  /AI(?:OS)?\s*(?:員工|助理|代理)|\bagent\b|\bbot\b|機器人|技能|\bskill\b/i;
+/** Locative English prepositions: `build in the agent package` is a compile, not a hire. */
+const ENGLISH_LOCATIVE_RE = /\b(?:in|on|at|into|onto|within|inside|from|via|through|of)\b/i;
 
-function sentenceHasBuildIntent(sentence: string): boolean {
-  return AGENT_BUILD_ACTION_RE.test(sentence) && AGENT_BUILD_OBJECT_RE.test(sentence);
+export const AGENT_BUILD_CONFIRM_START_HINT =
+  '偵測到可能的建置意圖，請與使用者確認後呼叫 start_agent_build';
+
+function isPureEnglishToken(value: string): boolean {
+  return /^[a-z]+$/i.test(value);
 }
 
-function nearbyBuildIntent(text: string, maxGap = 24): boolean {
+function englishActionObjectIsLocative(text: string, action: RegExpMatchArray, object: RegExpMatchArray): boolean {
+  if (!isPureEnglishToken(action[0] ?? '') || !isPureEnglishToken(object[0] ?? '')) return false;
+  const actionEnd = (action.index ?? 0) + action[0].length;
+  const objectStart = object.index ?? 0;
+  if (actionEnd > objectStart) return false;
+  return ENGLISH_LOCATIVE_RE.test(text.slice(actionEnd, objectStart));
+}
+
+function pairsIndicateBuildIntent(text: string, maxGap?: number): boolean {
   const actions = [...text.matchAll(new RegExp(AGENT_BUILD_ACTION_RE.source, 'gi'))];
   const objects = [...text.matchAll(new RegExp(AGENT_BUILD_OBJECT_RE.source, 'gi'))];
   for (const action of actions) {
@@ -154,17 +182,30 @@ function nearbyBuildIntent(text: string, maxGap = 24): boolean {
         : objectEnd <= actionStart
           ? actionStart - objectEnd
           : 0;
-      if (gap <= maxGap) return true;
+      if (maxGap !== undefined && gap > maxGap) continue;
+      if (englishActionObjectIsLocative(text, action, object)) continue;
+      return true;
     }
   }
   return false;
+}
+
+function sentenceHasBuildIntent(sentence: string): boolean {
+  return pairsIndicateBuildIntent(sentence);
+}
+
+function nearbyBuildIntent(text: string, maxGap = 24): boolean {
+  return pairsIndicateBuildIntent(text, maxGap);
 }
 
 /** Conservative hook activation: unrelated Claude Code chats must remain no-op. */
 export function isExplicitAgentBuildPrompt(prompt: string): boolean {
   const normalized = cleanString(prompt, 12_000);
   if (!normalized) return false;
+  if (AGENT_BUILD_INTERNAL_RE.test(normalized)) return false;
   if (AGENT_BUILD_EXECUTION_RE.test(normalized)) return false;
+  if (AGENT_BUILD_NEGATED_RE.test(normalized)) return false;
+  if (AGENT_BUILD_META_ONLY_RE.test(normalized)) return false;
   const sentences = normalized.split(/[。！？!?\n]+/).filter((sentence) => sentence.trim());
   if (sentences.some(sentenceHasBuildIntent)) return true;
   return nearbyBuildIntent(normalized);
@@ -534,7 +575,23 @@ function hookContext(sessionId: string, status: AgentBuildSessionStatus): string
   ].join('\n');
 }
 
-/** Claude Code UserPromptSubmit hook: start/resume and persist the user turn. */
+/**
+ * UserPromptSubmit without an existing session: never create a build file here.
+ * Only an explicit `start_agent_build` call may persist a new AgentBuildSession.
+ * Existing sessions keep synchronizing (see prepareExternalBuilderPrompt below).
+ */
+export function hookResultForUnstartedBuild(prompt: string): ExternalPromptHookResult {
+  if (!isExplicitAgentBuildPrompt(prompt)) return { matched: false };
+  return {
+    matched: true,
+    created: false,
+    userMessageSynced: false,
+    backgroundBuildQueued: false,
+    additionalContext: AGENT_BUILD_CONFIRM_START_HINT,
+  };
+}
+
+/** Claude Code UserPromptSubmit hook: resume and persist the user turn. */
 export async function prepareExternalBuilderPrompt(opts: {
   userId: string;
   source: ExternalBuilderSource;
@@ -547,22 +604,9 @@ export async function prepareExternalBuilderPrompt(opts: {
 
   let row = await findExternalSession(opts.userId, conversationId, opts.source);
   if (!row) {
-    if (!isExplicitAgentBuildPrompt(prompt)) return { matched: false };
-    const created = await createExternalBuilderSession({
-      userId: opts.userId,
-      source: opts.source,
-      initialRequest: prompt,
-      externalConversationId: conversationId,
-    });
-    return {
-      matched: true,
-      sessionId: created.session.id,
-      status: created.session.status,
-      created: true,
-      userMessageSynced: true,
-      backgroundBuildQueued: Boolean(created.session.latestIteration),
-      additionalContext: hookContext(created.session.id, created.session.status),
-    };
+    // Possible build intent is a hint only. Creating a session here made every
+    // classifier false-positive durable. start_agent_build is the sole create path.
+    return hookResultForUnstartedBuild(prompt);
   }
 
   if (!['DISCOVERY', 'PLAN_READY', 'ACTIVE'].includes(row.status)) {

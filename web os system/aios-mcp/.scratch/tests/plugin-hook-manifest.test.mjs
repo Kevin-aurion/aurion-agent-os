@@ -7,18 +7,11 @@ const hooksPath = new URL(
   import.meta.url,
 );
 
-test('plugin declares the complete command-hook lifecycle', async () => {
+test('plugin keeps only the inert SessionStart hook in the stage-0 client', async () => {
   const manifest = JSON.parse(await readFile(hooksPath, 'utf8'));
   const hooks = manifest.hooks;
 
-  assert.deepEqual(Object.keys(hooks).sort(), [
-    'PermissionRequest',
-    'PostToolUse',
-    'PreToolUse',
-    'SessionStart',
-    'Stop',
-    'UserPromptSubmit',
-  ]);
+  assert.deepEqual(Object.keys(hooks), ['SessionStart']);
   for (const event of Object.values(hooks)) {
     for (const group of event) {
       for (const hook of group.hooks) {
@@ -30,22 +23,6 @@ test('plugin declares the complete command-hook lifecycle', async () => {
       }
     }
   }
-  assert.match(hooks.PostToolUse[0].matcher, /start_agent_build/);
-  assert.match(hooks.PostToolUse[0].matcher, /prepare_agent_build_prompt/);
-  assert.match(hooks.PostToolUse[0].matcher, /guard_agent_build_stop/);
-  assert.equal(hooks.PermissionRequest[0].matcher, hooks.PostToolUse[0].matcher);
-  assert.equal(hooks.PreToolUse[0].matcher, hooks.PostToolUse[0].matcher);
-  assert.match(hooks.PreToolUse[1].matcher, /sync_agent_build_turn/);
-  assert.match(hooks.PreToolUse[1].matcher, /sync_agent_build_artifact/);
-  assert.match(hooks.PreToolUse[1].matcher, /upsert_agent_build_snapshot/);
-  assert.doesNotMatch(hooks.PreToolUse[1].matcher, /upload_agent_build_file/);
-  assert.doesNotMatch(hooks.PreToolUse[1].matcher, /submit_agent_build_for_fde_review/);
-  assert.equal(hooks.PermissionRequest[1].matcher, hooks.PreToolUse[1].matcher);
-  for (const event of Object.values(hooks)) {
-    for (const group of event) {
-      if (!group.matcher) continue;
-      assert.match(group.matcher, /aurion_aios/);
-      assert.doesNotMatch(group.matcher, /plugin_aurion-aios-builder_aios\|/);
-    }
-  }
+  assert.equal(hooks.SessionStart[0].matcher, undefined);
+  assert.doesNotMatch(JSON.stringify(manifest), /UserPromptSubmit|PermissionRequest|PostToolUse|PreToolUse|"Stop"/);
 });

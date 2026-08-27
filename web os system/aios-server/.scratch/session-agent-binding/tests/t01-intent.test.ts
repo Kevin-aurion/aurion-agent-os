@@ -95,6 +95,26 @@ assert(
   isExplicitAgentBuildPrompt('請解釋 agent 這個英文單字') === false,
   'unrelated agent mention must stay false',
 );
+assert(
+  isExplicitAgentBuildPrompt('幫我建立一位每天整理客戶回饋的 AI 員工') === true,
+  'a requested daily employee is a build, not a schedule execution prompt',
+);
+assert(
+  isExplicitAgentBuildPrompt('不要建立新的 Agent，我只是在討論設計。') === false,
+  'negated creation must not open a build',
+);
+assert(
+  isExplicitAgentBuildPrompt('凌晨 4:30，執行 Savia 每日自我進化，更新技能 playbook。') === false,
+  'scheduled maintenance must not open a build',
+);
+assert(
+  isExplicitAgentBuildPrompt('你是 AIOS 的「員工演進建築師」。請把本輪新理解編譯成下一版非生效 Agent 草稿。Harness 是 shadow draft。輸出純 JSON，鍵為 understanding、harness、suggestTest。') === false,
+  'internal evolution prompts must not recursively open a build',
+);
+assert(
+  isExplicitAgentBuildPrompt('請幫我分析目前 Agent Builder 系統架構與程式碼，最後整理成 HTML 報告與規劃。') === false,
+  'architecture analysis must not be treated as employee creation',
+);
 
 console.log(JSON.stringify({
   passed: true,

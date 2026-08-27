@@ -9,7 +9,7 @@
     {
       "name": "aurion-aios-builder",
       "description": "Build AI employees, try READY employees, invoke approved employees, and request FDE-governed schedules or archival over the hosted Aurion AIOS OAuth Remote MCP.",
-      "version": "1.6.0",
+      "version": "1.6.1",
       "author": {
         "name": "Aurion"
       },

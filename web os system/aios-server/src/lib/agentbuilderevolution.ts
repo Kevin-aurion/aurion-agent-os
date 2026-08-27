@@ -331,12 +331,26 @@ export function toIterationDto(row: AgentBuildIteration): IterationDto {
   };
 }
 
-function fallbackPayload(session: {
+const FALLBACK_PROMPT_LIMIT = 200;
+const FALLBACK_SOURCE_MARK = "source:'fallback'";
+const FALLBACK_RERUN_MARK = '待模型重跑';
+
+/** Truncate a raw prompt so fallback artifacts never dump the full user text. */
+export function fallbackPromptExcerpt(text: string): string {
+  const normalized = String(text ?? '').trim().replace(/\s+/g, ' ');
+  const truncated = normalized.length > FALLBACK_PROMPT_LIMIT
+    ? `${normalized.slice(0, FALLBACK_PROMPT_LIMIT)}…`
+    : normalized;
+  return truncated ? `${truncated}（${FALLBACK_RERUN_MARK}）` : `（${FALLBACK_RERUN_MARK}）`;
+}
+
+export function fallbackPayload(session: {
   brief: unknown;
   transcript: unknown;
 }, previous: AgentBuildIteration | null, triggerSummary: string, triggerKind: string): EvolutionPayload {
   const brief = asObject(session.brief) ?? {};
-  const objective = String(brief.objective ?? triggerSummary).trim().slice(0, 1200);
+  const excerpt = fallbackPromptExcerpt(triggerSummary);
+  const objective = String(brief.objective ?? excerpt).trim().slice(0, 1200);
   const name = String(brief.requestedAgentName ?? '持續學習中的 AI 員工').trim().slice(0, 120);
   const priorHarness = previous?.artifactSnapshot as HarnessSnapshot | null;
   const priorGraph = previous?.understanding as DecisionGraph | null;
@@ -344,14 +358,18 @@ function fallbackPayload(session: {
   const isReflection = triggerKind === 'reflection' && previous !== null;
   const asksForTest = triggerKind === 'test' || /(?:測試|試跑|跑跑看)/.test(triggerSummary);
   const previousDecisions = priorGraph?.decisions ?? [];
+  const processInstruction = String(brief.process ?? '依目前對話理解處理，遇到不確定處停下確認');
+  const clippedProcessInstruction = processInstruction.length > FALLBACK_PROMPT_LIMIT
+    ? fallbackPromptExcerpt(processInstruction)
+    : processInstruction;
   const graph: DecisionGraph = {
     northStar: objective,
     painPoints: priorGraph?.painPoints ?? [objective],
     facts: [
       ...(priorGraph?.facts ?? []),
       {
-        statement: triggerSummary.slice(0, 600),
-        source: isReflection ? '本輪完整對話反思' : '本輪使用者對話',
+        statement: excerpt,
+        source: 'fallback',
       },
     ].slice(-20),
     hypotheses: priorGraph?.hypotheses ?? [],
@@ -360,13 +378,13 @@ function fallbackPayload(session: {
           ...previousDecisions.map((decision) => decision.status !== 'revised'
             ? { ...decision, status: 'revised' as const }
             : decision),
-          { topic: '使用者修正', decision: triggerSummary.slice(0, 800), status: 'confirmed' as const },
+          { topic: '使用者修正', decision: excerpt, status: 'confirmed' as const },
         ].slice(-24)
       : [
           ...previousDecisions,
           {
             topic: isReflection ? '對話後反思' : asksForTest ? '測試方向' : '本輪理解',
-            decision: triggerSummary.slice(0, 800),
+            decision: excerpt,
             status: asksForTest ? 'confirmed' as const : 'provisional' as const,
           },
         ].slice(-24),
@@ -379,14 +397,14 @@ function fallbackPayload(session: {
     skills: [{
       name: `${name}核心能力`,
       purpose: String(brief.process ?? objective).slice(0, 800),
-      instructions: [String(brief.process ?? '依目前對話理解處理，遇到不確定處停下確認')],
+      instructions: [clippedProcessInstruction],
       inputs: [String(brief.inputs ?? brief.sources ?? '依使用者當次提供的資訊')],
       outputs: [String(brief.outputs ?? '提供可人工覆核的結果')],
       edgeCases: [String(brief.exceptions ?? '資料不足或結果不確定時標示待確認')],
       status: 'DRAFT',
     }],
     memory: {
-      facts: [objective],
+      facts: [excerpt],
       preferences: [String(brief.outputs ?? '輸出形式仍可在後續對話調整')],
       glossary: [],
     },
@@ -403,7 +421,7 @@ function fallbackPayload(session: {
       testIdeas: [],
     }),
   };
-  const learningInstruction = `${isCorrection ? '目前有效規則' : isReflection ? '對話反思後的 Shadow 規則' : '本輪補充'}：${triggerSummary.slice(0, 900)}`;
+  const learningInstruction = `${isCorrection ? '目前有效規則' : isReflection ? '對話反思後的 Shadow 規則' : '本輪補充'}：${excerpt}`;
   const harness: HarnessSnapshot = {
     ...baseHarness,
     identity: { ...baseHarness.identity },
@@ -416,9 +434,9 @@ function fallbackPayload(session: {
       : { ...skill, status: 'DRAFT' as const }),
     memory: {
       ...baseHarness.memory,
-      facts: [...baseHarness.memory.facts.filter((item) => item !== triggerSummary), triggerSummary.slice(0, 900)].slice(-30),
+      facts: [...baseHarness.memory.facts.filter((item) => item !== triggerSummary && item !== excerpt), excerpt].slice(-30),
       preferences: isCorrection
-        ? [...baseHarness.memory.preferences, `以最新規則為準：${triggerSummary.slice(0, 700)}`].slice(-20)
+        ? [...baseHarness.memory.preferences, `以最新規則為準：${excerpt}`].slice(-20)
         : [...baseHarness.memory.preferences],
     },
     tools: baseHarness.tools.map((tool) => ({ ...tool })),
@@ -450,17 +468,18 @@ function fallbackPayload(session: {
         }),
   };
   const changeArea = isReflection ? 'skill' : isCorrection ? 'workflow' : asksForTest ? 'test' : previous ? 'memory' : 'identity';
+  const changeSummary = isCorrection
+    ? '依使用者最新說法修正先前的工作方式'
+    : isReflection ? '依完整對話反思並更新 Shadow Skill 規則'
+    : asksForTest ? '建立核心規則測試案例'
+    : previous ? '把本輪新資訊加入員工草稿' : '建立第一版員工草稿';
   return {
     understanding: graph,
     changes: [{
       area: changeArea,
       action: previous ? 'updated' : 'added',
-      summary: isCorrection
-        ? '依使用者最新說法修正先前的工作方式'
-        : isReflection ? '依完整對話反思並更新 Shadow Skill 規則'
-        : asksForTest ? '建立核心規則測試案例'
-        : previous ? '把本輪新資訊加入員工草稿' : '建立第一版員工草稿',
-      reason: triggerSummary.slice(0, 500),
+      summary: `${FALLBACK_SOURCE_MARK}。${changeSummary}`,
+      reason: excerpt,
     }],
     harness,
     userSummary: previous ? '我已把你剛補充的內容整理進這位員工的學習草稿。' : '我已先建立這位員工的第一版學習草稿，後續對話會持續更新。',

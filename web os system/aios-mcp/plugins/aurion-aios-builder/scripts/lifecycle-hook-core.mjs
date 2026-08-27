@@ -5,7 +5,10 @@ import { createHash } from 'node:crypto';
 // activate this plugin and replace the actual test result with sync chatter.
 const BUILD_ACTION_RE = /(?:建立|建構|建置|新增|設計|製作|訓練|教(?:會|導)?|修改|更新|調整|改善|優化|重寫|繼續|恢復|續接|\b(?:build|create|design|train|teach|revise|update|improve|resume|continue)\b)/iu;
 const BUILD_OBJECT_RE = /(?:agent|ai\s*(?:employee|assistant|agent)|人工智慧(?:員工|助理|代理)|ai\s*員工|智能體|代理人|技能|skill|工作流|workflow)/iu;
-const INTERNAL_SANDBOX_PROMPT_RE = /^\s*【Agent Builder 試跑】/u;
+const INTERNAL_BUILD_PROMPT_RE = /(?:^|\n)\s*(?:你是\s*AIOS\s*的「員工演進建築師」|你是企業\s*AI\s*員工的\s*Grill\s*訪談顧問)|【Agent Builder 試跑】|Harness\s*是\s*shadow draft|輸出純\s*JSON[^\n]{0,160}(?:understanding|harness|suggestTest)/iu;
+const EXECUTION_OR_SCHEDULE_RE = /(?:^|\n)\s*(?:執行|跑一次|立即執行|現在是|凌晨\s*\d)|(?:每日|每週|每月)\s*(?:自我)?(?:執行|進化|排程)|cron|【步驟\s*\d】|```bash/iu;
+const NEGATED_BUILD_RE = /(?:不要|不需要|無需|毋須|禁止|別)\s*.{0,18}(?:建立|建構|建置|新增|設計|製作|訓練|教(?:會|導)?|修改|更新|調整|改善|優化|重寫)\s*.{0,24}(?:agent|ai\s*(?:employee|assistant|agent)|人工智慧(?:員工|助理|代理)|ai\s*員工|智能體|代理人|技能|skill|工作流|workflow)/iu;
+const META_ANALYSIS_ONLY_RE = /(?:幫我|請你|麻煩你).{0,24}(?:分析|研究|評估|瞭解|了解|閱讀|檢查).{0,120}(?:系統|程式碼|架構|現況|問題).{0,240}(?:報告|規劃|建議|看法)/iu;
 const SAFE_SESSION_ID_RE = /^[A-Za-z0-9._:-]{1,160}$/u;
 const SAFE_PROMPT_ID_RE = /^[A-Za-z0-9._:-]{1,160}$/u;
 // Use a product-specific server id. A generic `aios` connector can remain in
@@ -15,11 +18,21 @@ const LIFECYCLE_TOOL_RE = new RegExp(`^mcp__${AURION_SERVER_RE}__(start_agent_bu
 const DRAFT_SYNC_TOOL_RE = new RegExp(`^mcp__${AURION_SERVER_RE}__(sync_agent_build_turn|sync_agent_build_artifact|upsert_agent_build_snapshot)$`, 'u');
 const MAX_STOP_ATTEMPTS = 2;
 const MAX_TOOL_RESPONSE_TEXT = 1_000_000;
+// Cross-turn latch: keep treating follow-up prompts as Agent-build turns even
+// when they no longer restate 建立/agent. Do NOT clear this in resetTurn —
+// that would make the latch dead (UserPromptSubmit is the start of each turn).
+// Exit condition: 3 consecutive UserPromptSubmit events that miss
+// isAgentBuildPrompt automatically release the latch so unrelated coding
+// chats after a build conversation become no-ops again.
+const MAX_AGENT_BUILD_MISS_STREAK = 3;
 
 export function isAgentBuildPrompt(prompt) {
   return typeof prompt === 'string'
     && prompt.length > 0
-    && !INTERNAL_SANDBOX_PROMPT_RE.test(prompt)
+    && !INTERNAL_BUILD_PROMPT_RE.test(prompt)
+    && !EXECUTION_OR_SCHEDULE_RE.test(prompt)
+    && !NEGATED_BUILD_RE.test(prompt)
+    && !META_ANALYSIS_ONLY_RE.test(prompt)
     && BUILD_ACTION_RE.test(prompt)
     && BUILD_OBJECT_RE.test(prompt);
 }
@@ -45,6 +58,7 @@ export function createEmptyState(sessionId) {
     version: 2,
     sessionId: safe,
     agentBuildActive: false,
+    agentBuildMissStreak: 0,
     sessionHandshakeSynced: false,
     agentTurnActive: false,
     turnSequence: 0,
@@ -68,6 +82,9 @@ function normalizeState(previous, sessionId) {
   return {
     ...empty,
     agentBuildActive: previous.agentBuildActive === true,
+    agentBuildMissStreak: Number.isSafeInteger(previous.agentBuildMissStreak) && previous.agentBuildMissStreak >= 0
+      ? Math.min(previous.agentBuildMissStreak, MAX_AGENT_BUILD_MISS_STREAK)
+      : 0,
     sessionHandshakeSynced: previous.sessionHandshakeSynced === true,
     agentTurnActive: previous.agentTurnActive === true,
     turnSequence: Number.isSafeInteger(previous.turnSequence) && previous.turnSequence >= 0
@@ -145,6 +162,8 @@ function stopContext(state) {
 }
 
 function resetTurn(state, failure = null) {
+  // Intentionally keep agentBuildActive / agentBuildMissStreak. The latch is
+  // cross-turn (follow-ups after Stop); clearing it here would make it dead.
   return {
     ...state,
     agentTurnActive: false,
@@ -225,7 +244,18 @@ export function transitionLifecycle(previous, input) {
       return { state, output: {} };
     }
     case 'UserPromptSubmit': {
-      const relevant = isAgentBuildPrompt(input.prompt) || state.agentBuildActive;
+      const promptHit = typeof input.prompt === 'string' && isAgentBuildPrompt(input.prompt);
+      if (promptHit) {
+        state.agentBuildMissStreak = 0;
+      } else if (state.agentBuildActive) {
+        state.agentBuildMissStreak += 1;
+        if (state.agentBuildMissStreak >= MAX_AGENT_BUILD_MISS_STREAK) {
+          // Third consecutive miss: release the latch and treat this turn as unrelated.
+          state.agentBuildActive = false;
+          state.agentBuildMissStreak = 0;
+        }
+      }
+      const relevant = promptHit || state.agentBuildActive;
       if (!relevant || typeof input.prompt !== 'string') return { state, output: {} };
       const nextSequence = state.turnSequence + 1;
       const turnKey = safePromptId(input.prompt_id) ?? `turn-${nextSequence}`;

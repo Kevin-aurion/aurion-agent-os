@@ -1,7 +1,7 @@
 {
   "name": "aurion-aios-builder",
   "description": "Build AIOS employees naturally, try READY employees, invoke approved employees, and request FDE-governed schedules or archival through the hosted Aurion AIOS Remote MCP.",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "author": {
     "name": "Aurion"
   },

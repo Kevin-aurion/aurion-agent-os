@@ -16,6 +16,7 @@ function transition(state, input) {
 
 test('recognizes explicit Agent and Skill work but not ordinary chat', () => {
   assert.equal(isAgentBuildPrompt('幫我建立一個會整理客訴信的 AI 員工'), true);
+  assert.equal(isAgentBuildPrompt('幫我建立一位每天整理客戶回饋的 AI 員工'), true);
   assert.equal(isAgentBuildPrompt('訓練這個 Agent 每天九點收信'), true);
   assert.equal(isAgentBuildPrompt('修改客服 Skill，退款要主管核准'), true);
   assert.equal(isAgentBuildPrompt('今天天氣如何？'), false);
@@ -23,6 +24,10 @@ test('recognizes explicit Agent and Skill work but not ordinary chat', () => {
   assert.equal(isAgentBuildPrompt('【Agent Builder 試跑】請依技能處理含「系統建置」的逐字稿'), false);
   assert.equal(isAgentBuildPrompt('Validate the Agent Builder test fixture'), false);
   assert.equal(isAgentBuildPrompt('Build a customer support Agent'), true);
+  assert.equal(isAgentBuildPrompt('不要建立新的 Agent，我只是在討論設計。'), false);
+  assert.equal(isAgentBuildPrompt('凌晨 4:30，執行 Savia 每日自我進化，更新技能 playbook。'), false);
+  assert.equal(isAgentBuildPrompt('你是 AIOS 的「員工演進建築師」。請把本輪新理解編譯成下一版非生效 Agent 草稿。Harness 是 shadow draft。輸出純 JSON，鍵為 understanding、harness、suggestTest。'), false);
+  assert.equal(isAgentBuildPrompt('請幫我分析目前 Agent Builder 系統架構與程式碼，最後整理成 HTML 報告與規劃。'), false);
 });
 
 test('SessionStart initializes lifecycle state without contacting AIOS for ordinary sessions', () => {

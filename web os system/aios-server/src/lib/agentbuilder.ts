@@ -358,6 +358,15 @@ function splitTestDataAnswer(text: string): { data: string; expected: string } {
   };
 }
 
+/** Names must be business-facing. Verb remnants and bare classifiers are not names. */
+export function isMeaningfulRequestedName(name: string): boolean {
+  const trimmed = name.trim();
+  if (trimmed.length < 2) return false;
+  if (/^[出好成]?(?:一個|一位)$/.test(trimmed)) return false;
+  if (/^(?:這個|那個|新的|全新的?)$/.test(trimmed)) return false;
+  return true;
+}
+
 /**
  * Infer facts already stated in free text. Never invents decisions —
  * only fills fields when keywords + surrounding context support it.
@@ -379,13 +388,15 @@ export function inferFromPrompt(message: string): InferenceResult {
 
   // Preserve explicit naming and build intent. These are operator decisions,
   // not suggestions that the catalog/reuse heuristic may silently overwrite.
+  // `做` compounds (`做出`/`做好`/`做成`) must not leak 出/好/成 into the name
+  // capture: lazy `[^…]{2,80}?` used to turn「做出一個 agent」into「出一個」.
   const requestedName = [
-    /(?:建立|新增|訓練|打造|做)(?:一位|一個)?(?:全新(?:的)?|新的?)?(?:名為|叫做)?\s*[「『“"]([^」』”"]{2,80})[」』”"]/i,
+    /(?:建立|新增|訓練|打造|做(?:[出好成])?)(?:一位|一個)?(?:全新(?:的)?|新的?)?(?:名為|叫做)?\s*[「『“"]([^」』”"]{2,80})[」』”"]/i,
     /(?:Agent|AI\s*員工|員工)(?:名稱)?(?:是|為|叫做|名為)\s*[「『“"]?([^」』”"\n，。；;]{2,80})/i,
-    /(?:建立|新增|訓練|打造|做)(?:一位|一個)?\s*([^，。；;\n]{2,80}?)(?:的)?\s*(?:AI\s*員工|Agent|機器人)/i,
+    /(?:建立|新增|訓練|打造|做(?:[出好成])?)(?:一位|一個)?\s*([^，。；;\n]{2,80}?)(?:的)?\s*(?:AI\s*員工|Agent|機器人)/i,
   ]
     .map((pattern) => text.match(pattern)?.[1]?.trim())
-    .find((name): name is string => Boolean(name));
+    .find((name): name is string => typeof name === 'string' && isMeaningfulRequestedName(name));
   if (requestedName) brief.requestedAgentName = requestedName;
 
   const explicitlyRequiresCreate =
