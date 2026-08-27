@@ -31,6 +31,9 @@ import { AppShell } from '@/components/AppShell';
 import { EmptyState, PageHeader, Spinner } from '@/components/ui';
 import {
   builderStatusLabel,
+  draftGeneratedBy,
+  generatedByBadgeClass,
+  generatedByLabel,
   type BuilderHarnessSnapshot,
   type BuilderIteration,
   type BuilderSession,
@@ -472,6 +475,8 @@ function BuildCard({ session, open, onToggle, isFde }: { session: BuilderSession
   const source = sourceOf(session);
   const latest = session.latestIteration;
   const working = latest ? ['QUEUED', 'ANALYZING', 'BUILDING'].includes(latest.status) : false;
+  const generatedBy = draftGeneratedBy(session);
+  const generatedByText = generatedByLabel(generatedBy);
   const memoryCount = (harness?.memory.documents?.length ?? 0)
     + (harness?.memory.facts.length ?? 0)
     + (harness?.memory.preferences.length ?? 0)
@@ -493,6 +498,9 @@ function BuildCard({ session, open, onToggle, isFde }: { session: BuilderSession
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="truncate text-base font-semibold">{displayNameOf(session)}</h2>
               <span className={cn('badge', sourceClass(source))}>{SOURCE_LABELS[source]}</span>
+              {generatedByText && (
+                <span className={cn('badge', generatedByBadgeClass(generatedBy))}>{generatedByText}</span>
+              )}
               <span className={cn('badge', sessionStatusClass(session.status))}>{builderStatusLabel(session.status)}</span>
               {working && <span className="badge bg-amber-500/15 text-amber-500">正在更新</span>}
             </div>
@@ -587,6 +595,11 @@ function BuildCard({ session, open, onToggle, isFde }: { session: BuilderSession
                       <CircleDot className="h-3.5 w-3.5 text-brand" />
                       <span className="text-sm font-medium">第 {iteration.sequence} 版</span>
                       <span className="badge bg-black/5 text-muted dark:bg-white/5">{TRIGGER_LABELS[iteration.triggerKind] ?? iteration.triggerKind}</span>
+                      {generatedByLabel(iteration.generatedBy ?? iteration.harness?.generatedBy) && (
+                        <span className={cn('badge', generatedByBadgeClass(iteration.generatedBy ?? iteration.harness?.generatedBy))}>
+                          {generatedByLabel(iteration.generatedBy ?? iteration.harness?.generatedBy)}
+                        </span>
+                      )}
                       <span className={cn('badge', iterationStatusClass(iteration.status))}>{ITERATION_STATUS_LABELS[iteration.status] ?? iteration.status}</span>
                       <span className="ml-auto text-xs text-muted">{formatTime(iteration.updatedAt)}</span>
                     </div>

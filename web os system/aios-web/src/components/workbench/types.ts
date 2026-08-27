@@ -225,6 +225,32 @@ export type BuilderBriefFieldKey =
   | 'permissions'
   | 'testData';
 
+export type BuilderGeneratedBy = 'model' | 'fallback' | 'questionnaire';
+
+export function generatedByLabel(value?: string | null): string | null {
+  if (value === 'fallback') return '規則兜底';
+  if (value === 'questionnaire') return '固定問卷';
+  if (value === 'model') return '模型產生';
+  return null;
+}
+
+export function generatedByBadgeClass(value?: string | null): string {
+  if (value === 'fallback') return 'bg-amber-500/15 text-amber-600 dark:text-amber-300';
+  if (value === 'questionnaire') return 'bg-zinc-500/15 text-zinc-500';
+  if (value === 'model') return 'bg-sky-500/15 text-sky-600 dark:text-sky-300';
+  return 'bg-black/5 text-muted';
+}
+
+export function draftGeneratedBy(session: { iterations: BuilderIteration[] }): BuilderGeneratedBy | undefined {
+  const ranked = [...session.iterations].sort((a, b) => b.sequence - a.sequence);
+  const latest = ranked.find((iteration) => iteration.status === 'READY')
+    ?? ranked.find((iteration) => iteration.harness || iteration.generatedBy);
+  const value = latest?.generatedBy ?? latest?.harness?.generatedBy;
+  if (value === 'model' || value === 'fallback' || value === 'questionnaire') return value;
+  if (latest?.changes.some((change) => change.summary.includes("source:'fallback'"))) return 'fallback';
+  return undefined;
+}
+
 export type BuilderProgress = {
   answeredKeys: BuilderBriefFieldKey[] | string[];
   currentKey: BuilderBriefFieldKey | string | null;
@@ -242,6 +268,7 @@ export type BuilderProgress = {
       mode: 'hidden' | 'optional' | 'recommended';
       reason: string;
     };
+    generatedBy?: BuilderGeneratedBy;
   } | null;
   mode?: 'grill';
 };
@@ -306,6 +333,7 @@ export type BuilderHarnessSnapshot = {
     externalEventId: string;
     syncedAt: string;
   };
+  generatedBy?: BuilderGeneratedBy;
 };
 
 export type BuilderTestInputRequirement = {
@@ -339,6 +367,7 @@ export type BuilderIteration = {
   understanding: BuilderDecisionGraph | null;
   changes: BuilderEvolutionChange[];
   harness: BuilderHarnessSnapshot | null;
+  generatedBy?: BuilderGeneratedBy | null;
   userSummary: string | null;
   fdeSummary: string | null;
   error: string | null;

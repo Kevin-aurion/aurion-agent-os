@@ -11,6 +11,9 @@ import { PageHeader, Spinner, EmptyState } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import {
   builderStatusLabel,
+  draftGeneratedBy,
+  generatedByBadgeClass,
+  generatedByLabel,
   type BuilderHarnessSnapshot,
   type BuilderMessageResult,
   type BuilderSession,
@@ -330,6 +333,8 @@ export default function ProposalsPage() {
               const buildApproval = review.status === 'AWAITING_FDE';
               const finalApproval = review.status === 'PASSED';
               const busy = busyId === review.id;
+              const generatedBy = draftGeneratedBy(review);
+              const generatedByText = generatedByLabel(generatedBy);
               return (
                 <article key={review.id} className="card space-y-4 border-brand/20 p-5">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -342,7 +347,12 @@ export default function ProposalsPage() {
                         建立流程 {review.id.slice(0, 10)} · {new Date(review.updatedAt ?? '').toLocaleString('zh-Hant-TW')}
                       </div>
                     </div>
-                    <span className="badge bg-brand/10 text-brand">{builderStatusLabel(review.status)}</span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {generatedByText && (
+                        <span className={cn('badge', generatedByBadgeClass(generatedBy))}>{generatedByText}</span>
+                      )}
+                      <span className="badge bg-brand/10 text-brand">{builderStatusLabel(review.status)}</span>
+                    </div>
                   </div>
 
                   <div className="grid gap-3 md:grid-cols-2">

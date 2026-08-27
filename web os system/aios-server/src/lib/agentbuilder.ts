@@ -26,9 +26,17 @@ import { guardBudget, recordCost } from '../engine/cost.js';
 import {
   createBuilderEvolutionIteration,
   toIterationDto,
+  type BuilderGeneratedBy,
   type HarnessSnapshot,
   type IterationDto,
 } from './agentbuilderevolution.js';
+import {
+  abortBuilderSessionWork,
+  beginBuilderInterviewCall,
+  combineAbortSignals,
+  finishBuilderInterviewCall,
+  type BuilderClaudeFn,
+} from './builderabort.js';
 import {
   createExternalBuilderWorkflows,
   materializeExternalBuilderFiles,
@@ -135,6 +143,12 @@ export type InterviewTurn = {
     mode: 'hidden' | 'optional' | 'recommended';
     reason: string;
   };
+  /**
+   * How this turn was produced. Stored on the existing `progress` JSON column.
+   * `model` = Claude succeeded; `fallback` = Grill rules after model failure;
+   * `questionnaire` = AIOS_BUILDER_ADAPTIVE_MODEL=off (Tier-1 fixed questions).
+   */
+  generatedBy?: BuilderGeneratedBy;
 };
 
 export type ConnectionGap = {
@@ -594,6 +608,7 @@ export function buildContextualInterviewTurn(
           ? ['每天找到不重複、附原文連結的重點消息', '只保留可信來源，並說明為什麼值得看', '先做一份可人工檢查的研究摘要']
           : ['產出一份可直接人工覆核的結果', '省下目前最花時間的整理步驟', '把不確定項目清楚標示給我決定'],
         sourceAdvice,
+        generatedBy: 'questionnaire',
       };
     case 'inputs':
       return {
@@ -608,6 +623,7 @@ export function buildContextualInterviewTurn(
           ? ['先找生成式 AI、Agent 與企業應用；官方來源優先', '只看 OpenAI、Anthropic、Google DeepMind 等官方網站', '官方來源加主流科技媒體，排除內容農場', '我有指定網站，稍後提供']
           : ['由使用者每次下指令時提供', '從已連線的公司系統讀取', '沒有固定來源，依任務即時取得'],
         sourceAdvice,
+        generatedBy: 'questionnaire',
       };
     case 'outputs':
       return {
@@ -622,6 +638,7 @@ export function buildContextualInterviewTurn(
             ? ['差異清單＋金額與來源，交給財務覆核', '主管摘要＋待確認項目，不自動入帳', '沿用公司現有表格欄位']
             : ['一頁摘要＋來源與待確認事項', '先產出草稿，由我確認後再交付', '依使用者當次指定格式輸出'],
         sourceAdvice,
+        generatedBy: 'questionnaire',
       };
     case 'process':
       return {
@@ -634,6 +651,7 @@ export function buildContextualInterviewTurn(
           ? ['候選新聞先給我勾選，再做摘要', '系統可自行篩選，但低可信來源必須標示', '全程自動整理，最後由我一次覆核']
           : ['先提出草稿，最後一步由我確認', '不確定資料立即停下來問我', '照建議流程即可，之後用測試結果再調整'],
         sourceAdvice,
+        generatedBy: 'questionnaire',
       };
     case 'exceptions':
       return {
@@ -646,6 +664,7 @@ export function buildContextualInterviewTurn(
           ? ['保留不同說法並標註可信度，不自行下結論', '沒有重要新消息就明確回報「今日無重大更新」', '來源無法驗證就排除，並列在待確認區']
           : ['能標註的繼續，可能造成錯誤動作時停下來問我', '資料缺漏就產出待補清單', '任何不確定項目都不得自動對外送出'],
         sourceAdvice,
+        generatedBy: 'questionnaire',
       };
     case 'permissions':
       return {
@@ -658,6 +677,7 @@ export function buildContextualInterviewTurn(
           ? ['只讀公開網站並產出摘要，不登入、不發送', '可以下載公開附件，但任何發送都先問我', '先維持最小權限，之後再由 FDE 開通']
           : ['先維持只讀與草稿，任何寫入都要確認', '允許寫入指定位置，但寄送仍需確認', '所有不可逆操作都交給人工執行'],
         sourceAdvice,
+        generatedBy: 'questionnaire',
       };
     case 'testData':
       return {
@@ -670,8 +690,15 @@ export function buildContextualInterviewTurn(
           ? ['用「本週 AI Agent 產品更新」，請系統先產生模擬資料', '用三則內容重複的 AI 新聞測試去重', '我稍後提供真實但去識別的案例']
           : ['請系統先產生一組模擬測試資料', '我現在貼一個去識別案例', '我稍後上傳範本，但先完成需求規劃'],
         sourceAdvice,
+        generatedBy: 'questionnaire',
       };
   }
+}
+
+/** Stamp Grill-fallback provenance and redact every string leaf, including the
+ * uploaded-file excerpt that is copied into `context`. Matches the model path. */
+function finishFallbackTurn(turn: InterviewTurn): InterviewTurn {
+  return deepRedactSecrets({ ...turn, generatedBy: 'fallback' as const });
 }
 
 /** Offline Grill fallback. Unlike the legacy catalog it can revisit a branch,
@@ -694,7 +721,7 @@ export function buildGrillFallbackTurn(opts: {
   // A first-turn boundary such as "不要寄信" is a requirement, not a
   // correction. Conflict handling only makes sense after an earlier user turn.
   if (userTurnCount > 1 && EXPLICIT_CORRECTION_RE.test(latestUser)) {
-    return {
+    return finishFallbackTurn({
       key: opts.fallbackKey,
       intent: 'resolve_conflict',
       context: `我注意到你正在修正 ${subject} 先前的做法。新的說法應該優先，但我不會默默把兩套互相衝突的規則都留下。`,
@@ -703,11 +730,11 @@ export function buildGrillFallbackTurn(opts: {
       question: '我理解成「最新說法完整取代先前做法」對嗎？還是只有其中一部分要改？',
       suggestions: ['完整以最新說法取代', '只修改我剛提到的部分，其餘保留', '先列出新舊差異讓我確認'],
       sourceAdvice: { mode: 'hidden', reason: '這一輪要釐清的是決策變更，不需要另外提供檔案。' },
-    };
+    });
   }
 
   if (/(?:完整以最新說法取代|只修改我剛提到的部分|其餘保留)/.test(latestUser)) {
-    return {
+    return finishFallbackTurn({
       key: 'testData',
       intent: 'offer_test',
       context: '了解，現在的員工草稿會以你剛確認的最新規則為準；舊規則只留在歷史紀錄，不再參與目前判斷。',
@@ -716,14 +743,14 @@ export function buildGrillFallbackTurn(opts: {
       question: '要現在用最新版規則建立這三筆測試嗎？',
       suggestions: ['好，建立三筆測試', '再加一筆金額相同但客戶不同的案例', '先列出測試資料讓我確認', '先繼續補充其他例外'],
       sourceAdvice: { mode: 'hidden', reason: '目前可先用模擬資料驗證新版規則。' },
-    };
+    });
   }
 
   if (
     userTurnCount > 1
     && /(?:好|可以|確認|請).{0,8}(?:建立|採用|先建立).{0,8}(?:三筆|這三筆|測試)/.test(latestUser)
   ) {
-    return {
+    return finishFallbackTurn({
       key: 'testData',
       intent: 'clarify',
       context: '我已經把三筆測試寫進這位員工的學習草稿：唯一一對一、一對多候選，以及沒有交易序號但日期金額相近。',
@@ -732,14 +759,14 @@ export function buildGrillFallbackTurn(opts: {
       question: '這三筆測試的預期結果符合你的規則嗎？',
       suggestions: ['正確，採用這組測試', '案例 C 也要顯示信心分數', '再加入金額相同但客戶不同的案例', '先把完整測試資料列給我看'],
       sourceAdvice: { mode: 'hidden', reason: '測試使用模擬資料，不需要提供真實檔案。' },
-    };
+    });
   }
 
   if (
     userTurnCount > 1
     && /(?:測試|試跑|跑跑看)/.test(latestUser)
   ) {
-    return {
+    return finishFallbackTurn({
       key: 'testData',
       intent: 'offer_test',
       context: `可以。我已經有足夠資訊先驗證 ${subject} 最容易出錯的核心判斷，不必等所有細節都訪談完。`,
@@ -748,7 +775,7 @@ export function buildGrillFallbackTurn(opts: {
       question: '要先用這三種案例建立測試集嗎？',
       suggestions: ['好，先建立這三筆測試', '再加一筆金額相同但客戶不同的案例', '先把測試資料列給我確認', '這一輪先不測試，繼續補充流程'],
       sourceAdvice: { mode: 'hidden', reason: '可以先用去識別的模擬資料驗證規則，不需要真實檔案。' },
-    };
+    });
   }
 
   if (
@@ -756,7 +783,7 @@ export function buildGrillFallbackTurn(opts: {
     && /(?:銀行|收款|ERP|應收|交易序號|單號|日期|金額|比對|配對)/i.test(latestUser)
   ) {
     const hasAmbiguousMatch = /(?:一筆.{0,12}(?:兩|多)筆|一對多|多對一|候選|漏掉)/.test(latestUser);
-    return {
+    return finishFallbackTurn({
       key: 'exceptions',
       intent: 'clarify',
       context: hasAmbiguousMatch
@@ -767,13 +794,13 @@ export function buildGrillFallbackTurn(opts: {
       question: '遇到一筆銀行款可能對到多張發票時，你希望候選清單至少列出哪些資訊，才足夠讓你快速確認？',
       suggestions: ['交易序號、日期、金額、發票號碼', '再加上客戶名稱與未沖帳餘額', '先照你的建議建立一個測試案例給我看', '這種情況其實有另一套判斷規則'],
       sourceAdvice: { mode: 'hidden', reason: '這一輪可先從你描述的實務例外建立規則，不需要強迫上傳檔案。' },
-    };
+    });
   }
 
   if (files.length > 0) {
     const fileNames = files.map((file) => `「${file.name}」`).join('、');
     const sample = files[0]?.content.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(0, 3).join('／');
-    return {
+    return finishFallbackTurn({
       key: 'process',
       intent: 'clarify',
       context: `我已經讀過 ${fileNames}，會直接用裡面的內容更新員工草稿，不會再要你重新描述檔案裡已經寫清楚的事。${sample ? `我先看到的線索包括：${sample.slice(0, 220)}。` : ''}`,
@@ -782,11 +809,11 @@ export function buildGrillFallbackTurn(opts: {
       question: '當同一筆資料可能對到兩筆以上時，你現在通常依哪個線索做最後判斷？',
       suggestions: ['以單號／交易序號優先', '先看日期與金額，再由人工確認', '沒有唯一規則，請先列出候選配對', '檔案裡有說明，請再從內容找找看'],
       sourceAdvice: { mode: 'hidden', reason: '現有檔案已足以繼續分析。' },
-    };
+    });
   }
 
   if (/(?:花.{0,8}(?:時間|小時)|容易|常常|漏掉|困擾|痛點|麻煩|人工)/.test(brief.objective ?? latestUser)) {
-    return {
+    return finishFallbackTurn({
       key: 'objective',
       intent: 'explore',
       context: `我聽到的重點不是「想做一個工具」，而是目前這件事正在消耗時間或造成錯誤。先把真實痛點看清楚，這位員工才不會只把舊流程照搬一次。`,
@@ -798,16 +825,16 @@ export function buildGrillFallbackTurn(opts: {
         mode: 'optional',
         reason: '若最近案例有去識別範本會更容易看出問題，但也可以先用描述進行。',
       },
-    };
+    });
   }
 
   const base = buildContextualInterviewTurn(opts.fallbackKey, brief);
-  return {
+  return finishFallbackTurn({
     ...base,
     intent: opts.fallbackKey === 'testData' ? 'offer_test' : 'explore',
     whyThisMatters: base.context,
     recommendation: base.suggestions[0],
-  };
+  });
 }
 
 function validateModelTurn(
@@ -863,6 +890,7 @@ function validateModelTurn(
         ? source.reason.trim().slice(0, 260)
         : fallback.sourceAdvice.reason,
     },
+    generatedBy: 'model',
   });
 }
 
@@ -871,6 +899,9 @@ export async function planAdaptiveInterviewTurn(opts: {
   brief: Brief;
   recentTranscript?: TranscriptEntry[];
   sessionId?: string;
+  signal?: AbortSignal;
+  /** Test seam: inject a fake Claude so abort / generatedBy can be verified offline. */
+  runClaudeFn?: BuilderClaudeFn;
 }): Promise<InterviewTurn> {
   const fallback = buildGrillFallbackTurn({
     fallbackKey: opts.key,
@@ -881,7 +912,10 @@ export async function planAdaptiveInterviewTurn(opts: {
     return buildContextualInterviewTurn(opts.key, opts.brief);
   }
 
-  const latestUnderstanding = opts.sessionId
+  const execute = opts.runClaudeFn ?? runClaude;
+  const skipLiveSideEffects = Boolean(opts.runClaudeFn);
+
+  const latestUnderstanding = opts.sessionId && !skipLiveSideEffects
     ? await prisma.agentBuildIteration.findFirst({
         where: { sessionId: opts.sessionId, status: 'READY' },
         orderBy: { sequence: 'desc' },
@@ -919,25 +953,38 @@ export async function planAdaptiveInterviewTurn(opts: {
     JSON.stringify(safeContext),
   ].join('\n');
 
+  const registered = opts.sessionId ? beginBuilderInterviewCall(opts.sessionId) : null;
+  const signal = combineAbortSignals([opts.signal, registered?.signal]);
+
   try {
-    const advisor = await ensureBuilderAdvisor();
-    await guardBudget(advisor.id, advisor.costPolicy);
-    const result = await runClaude({
+    if (signal?.aborted) return fallback;
+    let advisorId: string | undefined;
+    if (!skipLiveSideEffects) {
+      const advisor = await ensureBuilderAdvisor();
+      await guardBudget(advisor.id, advisor.costPolicy);
+      advisorId = advisor.id;
+    }
+    const result = await execute({
       prompt,
       cwd: paths.cache,
       timeoutMs: 8_000,
       disallowedTools: ['Bash', 'Write', 'Edit', 'NotebookEdit', 'WebSearch', 'WebFetch', 'Task'],
+      signal,
     });
-    await recordCost({
-      agentId: advisor.id,
-      engine: 'CLAUDE_CODE',
-      inputText: prompt,
-      outputText: result.stdout,
-      stepKey: 'builder.interview',
-    }).catch(() => {});
+    if (advisorId) {
+      await recordCost({
+        agentId: advisorId,
+        engine: 'CLAUDE_CODE',
+        inputText: prompt,
+        outputText: result.stdout,
+        stepKey: 'builder.interview',
+      }).catch(() => {});
+    }
     return validateModelTurn(looseParseJson(result.stdout), opts.key, opts.brief) ?? fallback;
   } catch {
     return fallback;
+  } finally {
+    if (opts.sessionId && registered) finishBuilderInterviewCall(opts.sessionId, registered);
   }
 }
 
@@ -1545,7 +1592,8 @@ export async function createBuilderSession(opts: {
   const answered = [...inference.answered];
   const brief: Brief = deepRedactSecrets({ ...inference.brief });
   const fallbackFocus = nextUnanswered(answered) ?? 'objective';
-  const turn = await planAdaptiveInterviewTurn({ key: fallbackFocus, brief });
+  const id = ulid();
+  const turn = await planAdaptiveInterviewTurn({ key: fallbackFocus, brief, sessionId: id });
   const progress = buildProgress(answered, turn);
   const status: AgentBuildSessionStatus = 'ACTIVE';
   const assistantMessage = formatInterviewTurn(turn);
@@ -1555,8 +1603,6 @@ export async function createBuilderSession(opts: {
     'assistant',
     assistantMessage,
   );
-
-  const id = ulid();
   const { row, workingAgent } = await prisma.$transaction(async (tx) => {
     const workingAgent = await createBuilderWorkingAgent(tx, {
       userId: opts.userId,
@@ -1842,6 +1888,15 @@ export async function abandonBuilderSession(opts: {
   if (row.builtAgentId || row.draftSkillIds.length > 0) {
     throw errors.forbidden('此建置已產生員工或技能草稿，不可直接捨棄');
   }
+
+  abortBuilderSessionWork(row.id);
+  await prisma.agentBuildIteration.updateMany({
+    where: {
+      sessionId: row.id,
+      status: { in: ['QUEUED', 'ANALYZING', 'BUILDING'] },
+    },
+    data: { status: 'SUPERSEDED', completedAt: new Date() },
+  }).catch(() => {});
 
   const updated = await prisma.agentBuildSession.update({
     where: { id: row.id },
