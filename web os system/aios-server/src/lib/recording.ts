@@ -9,6 +9,7 @@ import { ulid } from 'ulid';
 import { config, paths } from '../config.js';
 import { prisma } from './db.js';
 import { errors } from './http.js';
+import { allowWrite, assertWriteEnabled } from './stopwrite.js';
 import { slugify } from './slug.js';
 import { redactSecrets } from '../memory/redactor.js';
 import { runCodex } from '../engine/codex.js';
@@ -425,6 +426,7 @@ export class RecordingService {
    * Fail-safe at startup: DB errors are logged, never fatal.
    */
   async recoverInterrupted(): Promise<number> {
+    if (!allowWrite('recording')) return 0;
     this.activeSessionId = null;
     try {
       const result = await prisma.recordingSession.updateMany({
@@ -442,6 +444,7 @@ export class RecordingService {
     userId: string,
     agentId: string,
   ): Promise<{ sessionId: string; agentId: string; status: string; raw?: unknown }> {
+    assertWriteEnabled('recording');
     // Host-global single active recorder.
     if (this.activeSessionId) {
       const active = await prisma.recordingSession.findUnique({
@@ -568,6 +571,7 @@ export class RecordingService {
     userId: string,
     sessionId: string,
   ): Promise<{ sessionId: string; artifactId: string | null; status: string }> {
+    assertWriteEnabled('recording');
     const row = await prisma.recordingSession.findUnique({ where: { id: sessionId } });
     if (!row) throw errors.notFound('錄製工作階段不存在');
     if (row.userId !== userId) {
@@ -616,6 +620,7 @@ export class RecordingService {
     agentId: string,
     hint?: string,
   ): Promise<{ skillId: string; reviewStatus: string; sessionId: string }> {
+    assertWriteEnabled('recording');
     const row = await prisma.recordingSession.findUnique({ where: { id: sessionId } });
     if (!row) throw errors.notFound('錄製工作階段不存在');
     if (row.userId !== userId) {

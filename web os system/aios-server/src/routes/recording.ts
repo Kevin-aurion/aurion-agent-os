@@ -8,6 +8,7 @@ import { requireAuth } from '../lib/guard.js';
 import { ok, errors, sendError } from '../lib/http.js';
 import { prisma } from '../lib/db.js';
 import { recordingService } from '../lib/recording.js';
+import { stopWriteGuard } from '../lib/stopwrite.js';
 
 const toSkillBodySchema = z.object({
   hint: z.string().trim().max(4000).optional(),
@@ -20,7 +21,7 @@ const startBodySchema = z.object({
 }).strip();
 
 export async function recordingRoutes(app: FastifyInstance) {
-  app.post('/api/recording/start', { preHandler: requireAuth }, async (req, reply) => {
+  app.post('/api/recording/start', { preHandler: [requireAuth, stopWriteGuard('recording')] }, async (req, reply) => {
     try {
       const parsed = startBodySchema.safeParse(req.body ?? {});
       if (!parsed.success) {
@@ -49,7 +50,7 @@ export async function recordingRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post('/api/recording/stop', { preHandler: requireAuth }, async (req, reply) => {
+  app.post('/api/recording/stop', { preHandler: [requireAuth, stopWriteGuard('recording')] }, async (req, reply) => {
     try {
       const userId = req.user!.sub;
       const active = await recordingService.currentActiveSessionFor(userId);
@@ -63,7 +64,7 @@ export async function recordingRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post('/api/agents/:id/recording/to-skill', { preHandler: requireAuth }, async (req, reply) => {
+  app.post('/api/agents/:id/recording/to-skill', { preHandler: [requireAuth, stopWriteGuard('recording')] }, async (req, reply) => {
     try {
       const { id: agentId } = req.params as { id: string };
       const parsed = toSkillBodySchema.safeParse(req.body ?? {});

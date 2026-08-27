@@ -8,6 +8,7 @@ import type { NormalizedRunEvent } from '../runtime/adapter.js';
 import { redactSecrets } from '../memory/redactor.js';
 import { createProposal } from './changeproposal.js';
 import { prisma } from './db.js';
+import { allowWrite } from './stopwrite.js';
 
 /** Minimum successful identical trajectories before emitting one PENDING proposal. */
 export const TRAJECTORY_MIN_OCCURRENCES = 3;
@@ -111,6 +112,7 @@ export async function ingestRunTrace(input: {
   outcome: RunOutcome;
   runtime?: RunTraceRuntimeMeta;
 }): Promise<void> {
+  if (!allowWrite('runTrace')) return;
   try {
     const { agent, manifest, outcome, runtime } = input;
     const agentId = agent.id;
@@ -224,6 +226,7 @@ export async function ingestPilotRunTrace(input: {
   status: 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | 'AWAITING_REVIEW';
   events: NormalizedRunEvent[];
 }): Promise<void> {
+  if (!allowWrite('runTrace')) return;
   try {
     const { runId, agentId, artifactId, engineExecute, engineVerify, status, events } =
       input;

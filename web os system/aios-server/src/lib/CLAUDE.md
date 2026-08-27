@@ -28,3 +28,4 @@
 - 閘門類 fail-closed；草稿捕捉可 requireAuth，生效一律 FDE。
 
 - 新增：`eval.ts`/`skillpromote.ts`（評測套件 + promote/rollback 閘）、`mcpclient.ts`/`mcpbroker.ts`/`mcpregistry.ts`（消費外部 MCP：client/broker/loopback 註冊表）、`mcpcapability.ts`（INTERNAL MCP 每次呼叫的 30 秒一次性 HMAC 能力票；Broker 覆寫注入）、`trace.ts`/`agentcard.ts`/`a2a.ts`（軌跡 fail-safe、AgentCard 先 redact、A2A 預設停用）、`skillgate.ts`/`identitycard.ts`（RECORDED→CODEX 掛載閘、身分卡）。
+- `stopwrite.ts` — 階段 1 S1-6 停寫守衛（不 drop 表）。HTTP 寫入端點回 501 `{ error:'stage1-stop-write' }`；內部寫入點 env 旗標預設關（`AIOS_REFLECTION_ENABLED` 等）。讀取路徑與 SkillVersion promote 閘保留；builderlessons 不受 `AIOS_REFLECTION_ENABLED` 影響。

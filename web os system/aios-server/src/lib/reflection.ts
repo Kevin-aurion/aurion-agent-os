@@ -12,6 +12,7 @@ import { redactSecrets } from '../memory/redactor.js';
 import { prisma } from './db.js';
 import { errors } from './http.js';
 import { audit } from './audit.js';
+import { assertWriteEnabled } from './stopwrite.js';
 import { hub } from '../ws/hub.js';
 
 const { parseExpression } = cronParser;
@@ -221,6 +222,7 @@ export class ReflectionService {
     window?: ReflectionWindow;
     triggeredBy: string;
   }) {
+    assertWriteEnabled('reflection');
     const window = args.window ?? reflectionWindowFor(args.now ?? new Date());
     const existing = await prisma.reflectionCycle.findUnique({
       where: { windowStart_windowEnd: { windowStart: window.start, windowEnd: window.end } },
@@ -409,6 +411,7 @@ export class ReflectionService {
 export const reflectionService = new ReflectionService();
 
 export async function proposeReflectionSuggestion(suggestionId: string, userId: string) {
+  assertWriteEnabled('reflection');
   const result = await prisma.$transaction(async (tx) => {
     const suggestion = await tx.reflectionSuggestion.findUnique({ where: { id: suggestionId } });
     if (!suggestion) throw errors.notFound('Reflection suggestion not found');
@@ -449,6 +452,7 @@ export async function proposeReflectionSuggestion(suggestionId: string, userId: 
 }
 
 export async function dismissReflectionSuggestion(suggestionId: string, userId: string) {
+  assertWriteEnabled('reflection');
   const claimed = await prisma.reflectionSuggestion.updateMany({
     where: { id: suggestionId, status: 'PENDING' },
     data: { status: 'DISMISSED', decidedBy: userId, decidedAt: new Date() },

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { requireTrainer } from '../lib/guard.js';
 import { ok, sendError, errors } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
+import { stopWriteGuard } from '../lib/stopwrite.js';
 import { projectAgentCard } from '../lib/agentcard.js';
 import {
   cancelTask,
@@ -71,7 +72,7 @@ export async function a2aRoutes(app: FastifyInstance) {
 
   app.post(
     '/a2a/peers',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('a2a')] },
     async (req, reply) => {
       try {
         const body = registerBody.parse(req.body);
@@ -88,7 +89,7 @@ export async function a2aRoutes(app: FastifyInstance) {
 
   app.patch(
     '/a2a/peers/:peerId/enabled',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('a2a')] },
     async (req, reply) => {
       try {
         const { peerId } = req.params as { peerId: string };
@@ -107,7 +108,7 @@ export async function a2aRoutes(app: FastifyInstance) {
 
   app.delete(
     '/a2a/peers/:peerId',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('a2a')] },
     async (req, reply) => {
       try {
         const { peerId } = req.params as { peerId: string };
@@ -140,7 +141,7 @@ export async function a2aRoutes(app: FastifyInstance) {
 
   app.post(
     '/a2a/tasks',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('a2a')] },
     async (req, reply) => {
       try {
         const body = submitBody.parse(req.body);
@@ -173,7 +174,7 @@ export async function a2aRoutes(app: FastifyInstance) {
 
   app.post(
     '/a2a/tasks/:taskId/cancel',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('a2a')] },
     async (req, reply) => {
       try {
         const { taskId } = req.params as { taskId: string };

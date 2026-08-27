@@ -126,6 +126,12 @@ export const config = {
     ).replace(/\/+$/, ''),
   },
 
+  // Stage-1 S1-6 stop-write (live-read in lib/stopwrite.ts; default off).
+  // Re-enable a cluster with =true: AIOS_LANGFLOW_RUNTIME_WRITES,
+  // AIOS_A2A_WRITES, AIOS_REFLECTION_ENABLED, AIOS_RECORDING_WRITES,
+  // AIOS_EVAL_WRITES, AIOS_RUNTRACE_WRITES. Devices are in use — not gated.
+  // Builder lessons (ChangeProposal) are not gated by AIOS_REFLECTION_ENABLED.
+
   // Memory (Phase 1): L1 wiki on disk is source of truth; L3 Qdrant is a
   // rebuildable semantic index. When enabled=false every memory I/O is no-op.
   memory: {

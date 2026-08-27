@@ -191,6 +191,10 @@ export async function enqueueBuilderSelfReflectionJob(sessionId: string): Promis
 
 async function runWorkflowRunJob(job: Job<RunJobData>): Promise<unknown> {
   if (job.data.kind === 'reflection') {
+    const { allowWrite } = await import('../lib/stopwrite.js');
+    if (!allowWrite('reflection')) {
+      return { skipped: 'stage1-stop-write' };
+    }
     const { reflectionService, reflectionWindowFor } = await import('../lib/reflection.js');
     const now = new Date();
     return reflectionService.runCycle({
@@ -374,25 +378,36 @@ export async function startScheduler(): Promise<void> {
 
     started = true;
 
-    // System reflection is a first-class, timezone-aware job. It is not a
-    // mutable user Workflow because its governance and data boundary are fixed.
-    const { ensureReflectionAgent, REFLECTION_CRON } = await import('../lib/reflection.js');
-    await ensureReflectionAgent();
-    await runsQueue.upsertJobScheduler(
-      'system:reflection',
-      { pattern: REFLECTION_CRON, tz: config.tz },
-      {
-        name: 'reflection-cycle',
-        data: { kind: 'reflection', triggeredBy: 'reflection-schedule' },
-      },
-    );
-    // Catch the latest completed window after downtime/restart. ReflectionCycle's
-    // unique window makes this safe to enqueue once on every scheduler boot.
-    await runsQueue.add(
-      'reflection-cycle',
-      { kind: 'reflection', triggeredBy: 'reflection-catchup' },
-      { removeOnComplete: 100, removeOnFail: 100 },
-    );
+    // System reflection writes ReflectionCycle/Feedback/Suggestion. S1-6
+    // defaults it off (AIOS_REFLECTION_ENABLED=false); builder lesson loop
+    // is a separate ChangeProposal path and is not gated here.
+    const { writesEnabled, allowWrite } = await import('../lib/stopwrite.js');
+    if (writesEnabled('reflection')) {
+      const { ensureReflectionAgent, REFLECTION_CRON } = await import('../lib/reflection.js');
+      await ensureReflectionAgent();
+      await runsQueue.upsertJobScheduler(
+        'system:reflection',
+        { pattern: REFLECTION_CRON, tz: config.tz },
+        {
+          name: 'reflection-cycle',
+          data: { kind: 'reflection', triggeredBy: 'reflection-schedule' },
+        },
+      );
+      // Catch the latest completed window after downtime/restart. ReflectionCycle's
+      // unique window makes this safe to enqueue once on every scheduler boot.
+      await runsQueue.add(
+        'reflection-cycle',
+        { kind: 'reflection', triggeredBy: 'reflection-catchup' },
+        { removeOnComplete: 100, removeOnFail: 100 },
+      );
+    } else {
+      allowWrite('reflection');
+      try {
+        await runsQueue.removeJobScheduler('system:reflection');
+      } catch {
+        // no existing scheduler is fine
+      }
+    }
 
     // Register the default retry/backoff policy for notify jobs at add-time
     // via a small wrapper; consumers can still override per-call.
@@ -420,7 +435,10 @@ export async function startScheduler(): Promise<void> {
       await enqueueBuilderEvolution(iteration.id);
     }
 
-    console.log(`[scheduler] started — ${schedules.length} workflow schedule(s) + system reflection + ${queuedIterations.length} builder evolution(s)`);
+    const reflectionNote = writesEnabled('reflection')
+      ? ' + system reflection'
+      : ' (system reflection stop-write)';
+    console.log(`[scheduler] started — ${schedules.length} workflow schedule(s)${reflectionNote} + ${queuedIterations.length} builder evolution(s)`);
   } catch (e) {
     console.warn('[scheduler] Redis unavailable or scheduler failed to start — continuing without it:', e instanceof Error ? e.message : e);
     await stopScheduler().catch(() => {});
@@ -434,6 +452,8 @@ export async function startScheduler(): Promise<void> {
 
 /** Enqueue an FDE-requested partial-window reflection without bypassing BullMQ. */
 export async function enqueueReflectionNow(triggeredBy: string): Promise<string> {
+  const { assertWriteEnabled } = await import('../lib/stopwrite.js');
+  assertWriteEnabled('reflection');
   if (!runsQueue) throw new Error('Scheduler is unavailable');
   const job = await runsQueue.add(
     'reflection-cycle',

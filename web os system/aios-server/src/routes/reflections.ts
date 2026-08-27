@@ -5,6 +5,7 @@ import { config } from '../config.js';
 import { prisma } from '../lib/db.js';
 import { requireTrainer } from '../lib/guard.js';
 import { errors, ok, sendError } from '../lib/http.js';
+import { stopWriteGuard } from '../lib/stopwrite.js';
 import {
   dismissReflectionSuggestion,
   ensureReflectionAgent,
@@ -86,7 +87,7 @@ export async function reflectionRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post('/api/reflections/run', { preHandler: requireTrainer }, async (req, reply) => {
+  app.post('/api/reflections/run', { preHandler: [requireTrainer, stopWriteGuard('reflection')] }, async (req, reply) => {
     try {
       let jobId: string;
       try {
@@ -100,7 +101,7 @@ export async function reflectionRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post('/api/reflection-suggestions/:id/propose', { preHandler: requireTrainer }, async (req, reply) => {
+  app.post('/api/reflection-suggestions/:id/propose', { preHandler: [requireTrainer, stopWriteGuard('reflection')] }, async (req, reply) => {
     try {
       const { id } = idParams.parse(req.params);
       return reply.send(ok(await proposeReflectionSuggestion(id, req.user!.sub)));
@@ -109,7 +110,7 @@ export async function reflectionRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post('/api/reflection-suggestions/:id/dismiss', { preHandler: requireTrainer }, async (req, reply) => {
+  app.post('/api/reflection-suggestions/:id/dismiss', { preHandler: [requireTrainer, stopWriteGuard('reflection')] }, async (req, reply) => {
     try {
       const { id } = idParams.parse(req.params);
       return reply.send(ok(await dismissReflectionSuggestion(id, req.user!.sub)));

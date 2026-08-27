@@ -13,6 +13,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from './db.js';
 import { ApiError, errors } from './http.js';
 import { audit } from './audit.js';
+import { assertWriteEnabled } from './stopwrite.js';
 import {
   FlowArtifactError,
   computeFlowArtifactDigest,
@@ -259,6 +260,7 @@ export async function validateArtifactForRuntime(
   args: { artifactId: string; actorId: string; actorRole: string },
   deps?: RuntimeDeploymentDeps,
 ): Promise<{ id: string; status: string; digest: string; runtimeKind: RuntimeKind }> {
+  assertWriteEnabled('langflowRuntime');
   assertFde(args.actorRole);
 
   const artifact = await loadVerifiedArtifact(args.artifactId);
@@ -317,6 +319,7 @@ export async function activateDeployment(
   },
   deps?: RuntimeDeploymentDeps,
 ): Promise<DeploymentSummary> {
+  assertWriteEnabled('langflowRuntime');
   // 1. FDE
   assertFde(args.actorRole);
 
@@ -522,6 +525,7 @@ export async function rollbackDeployment(args: {
   actorId: string;
   actorRole: string;
 }): Promise<DeploymentSummary> {
+  assertWriteEnabled('langflowRuntime');
   assertFde(args.actorRole);
 
   const target = await prisma.runtimeDeployment.findUnique({
@@ -1115,6 +1119,7 @@ export async function deactivateDeployment(args: {
   actorId: string;
   actorRole: string;
 }): Promise<DeploymentSummary> {
+  assertWriteEnabled('langflowRuntime');
   assertFde(args.actorRole);
 
   const target = await prisma.runtimeDeployment.findUnique({

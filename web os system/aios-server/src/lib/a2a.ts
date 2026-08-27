@@ -7,6 +7,7 @@ import { audit } from './audit.js';
 import { prisma } from './db.js';
 import { errors } from './http.js';
 import { redactSecrets } from '../memory/redactor.js';
+import { allowWrite, assertWriteEnabled } from './stopwrite.js';
 
 const CRED_REF_RE = /^(env:[A-Za-z_][A-Za-z0-9_]*|keychain:[^\s]+)$/;
 const SUMMARY_CAP = 2000;
@@ -151,6 +152,7 @@ export async function registerPeer(
   input: RegisterPeerInput,
   fdeUserId: string,
 ): Promise<A2APeerDto> {
+  assertWriteEnabled('a2a');
   if (!input.peerId?.trim()) throw errors.badRequest('peerId is required');
   if (!input.name?.trim()) throw errors.badRequest('name is required');
   assertHttpUrl(input.baseUrl);
@@ -206,6 +208,7 @@ export async function setPeerEnabled(
   enabled: boolean,
   fdeUserId: string,
 ): Promise<A2APeerDto> {
+  assertWriteEnabled('a2a');
   const peer = await prisma.a2APeer.findFirst({
     where: { OR: [{ id: peerId }, { peerId }] },
   });
@@ -222,6 +225,7 @@ export async function setPeerEnabled(
 }
 
 export async function deletePeer(peerId: string): Promise<void> {
+  assertWriteEnabled('a2a');
   const peer = await prisma.a2APeer.findFirst({
     where: { OR: [{ id: peerId }, { peerId }] },
   });
@@ -288,6 +292,7 @@ export async function submitTask(input: {
   payload: unknown;
   submittedBy: string;
 }): Promise<A2ATaskDto> {
+  assertWriteEnabled('a2a');
   const peer = await getPeer(input.peerId);
   if (!peer) throw errors.notFound('a2a peer not found');
 
@@ -414,6 +419,9 @@ export async function getTaskStatus(taskId: string): Promise<A2ATaskDto> {
   const task = await prisma.a2ATask.findUnique({ where: { id: taskId } });
   if (!task) throw errors.notFound('a2a task not found');
 
+  // S1-6: keep the read path, but skip remote poll updates that write A2ATask.
+  if (!allowWrite('a2a')) return toTaskDto(task);
+
   // Best-effort remote poll when we have a remote id and peer is enabled.
   if (task.remoteTaskId) {
     const peer = await prisma.a2APeer.findUnique({ where: { id: task.peerId } });
@@ -475,6 +483,7 @@ export async function cancelTask(
   taskId: string,
   byUser: string,
 ): Promise<A2ATaskDto> {
+  assertWriteEnabled('a2a');
   const task = await prisma.a2ATask.findUnique({ where: { id: taskId } });
   if (!task) throw errors.notFound('a2a task not found');
 

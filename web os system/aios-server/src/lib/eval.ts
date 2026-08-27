@@ -12,6 +12,7 @@ import { Prisma as PrismaNs } from '@prisma/client';
 import { ulid } from 'ulid';
 import { prisma } from './db.js';
 import { errors } from './http.js';
+import { assertWriteEnabled } from './stopwrite.js';
 import { isApproved } from '../engine/codex.js';
 import { estimateTokens, priceUsd, recordCost } from '../engine/cost.js';
 import { resolveVerifyEngine } from '../engine/verify.js';
@@ -40,6 +41,7 @@ export async function createSuite(args: {
   description?: string;
   createdBy?: string;
 }): Promise<EvalSuite> {
+  assertWriteEnabled('eval');
   const skill = await prisma.skill.findFirst({
     where: { id: args.skillId, deletedAt: null },
     select: { id: true },
@@ -67,6 +69,7 @@ export async function addCase(args: {
   forbiddenTools?: string[];
   weight?: number;
 }): Promise<EvalCase> {
+  assertWriteEnabled('eval');
   const suite = await prisma.evalSuite.findUnique({ where: { id: args.suiteId } });
   if (!suite) throw errors.notFound('EvalSuite not found');
 
@@ -457,6 +460,7 @@ export async function runSuite(args: {
   agentId?: string;
   deps?: EvalRunnerDeps;
 }): Promise<EvalRun> {
+  assertWriteEnabled('eval');
   const suite = await prisma.evalSuite.findUnique({
     where: { id: args.suiteId },
     include: { cases: { orderBy: { createdAt: 'asc' } } },

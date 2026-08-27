@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireTrainer } from '../lib/guard.js';
 import { errors, ok, sendError } from '../lib/http.js';
+import { stopWriteGuard } from '../lib/stopwrite.js';
 import { prisma } from '../lib/db.js';
 import { audit } from '../lib/audit.js';
 import { redactSecrets } from '../memory/redactor.js';
@@ -97,7 +98,7 @@ export async function runtimeRoutes(app: FastifyInstance) {
 
   app.post(
     '/api/runtime/artifacts/:id/validate',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('langflowRuntime')] },
     async (req, reply) => {
       try {
         const { id } = req.params as { id: string };
@@ -115,7 +116,7 @@ export async function runtimeRoutes(app: FastifyInstance) {
 
   app.post(
     '/api/runtime/deployments',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('langflowRuntime')] },
     async (req, reply) => {
       try {
         const body = activateBody.parse(req.body);
@@ -135,7 +136,7 @@ export async function runtimeRoutes(app: FastifyInstance) {
 
   app.post(
     '/api/runtime/deployments/:id/rollback',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('langflowRuntime')] },
     async (req, reply) => {
       try {
         const { id } = req.params as { id: string };
@@ -153,7 +154,7 @@ export async function runtimeRoutes(app: FastifyInstance) {
 
   app.post(
     '/api/runtime/deployments/:id/deactivate',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('langflowRuntime')] },
     async (req, reply) => {
       try {
         const { id } = req.params as { id: string };
@@ -259,7 +260,7 @@ export async function runtimeRoutes(app: FastifyInstance) {
 
   app.post(
     '/api/runtime/dead-letters/:id/replay',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('langflowRuntime')] },
     async (req, reply) => {
       try {
         const { id } = req.params as { id: string };
@@ -349,7 +350,7 @@ export async function runtimeRoutes(app: FastifyInstance) {
 
   app.post(
     '/api/runtime/dead-letters/:id/discard',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('langflowRuntime')] },
     async (req, reply) => {
       try {
         const { id } = req.params as { id: string };

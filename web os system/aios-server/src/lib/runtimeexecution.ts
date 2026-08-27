@@ -37,6 +37,7 @@ import { deepRedactSecrets } from '../memory/deepredact.js';
 import { redactSecrets } from '../memory/redactor.js';
 import { hub } from '../ws/hub.js';
 import { ingestPilotRunTrace } from './trace.js';
+import { allowWrite } from './stopwrite.js';
 import {
   beforeDispatch,
   checkRateLimit,
@@ -521,6 +522,7 @@ async function safeEnqueueDeadLetter(args: {
   reason: string;
   payload: Record<string, unknown>;
 }): Promise<void> {
+  if (!allowWrite('langflowRuntime')) return;
   try {
     await prisma.runtimeDeadLetter.create({
       data: {

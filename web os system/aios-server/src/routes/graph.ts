@@ -15,6 +15,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { requireTrainer } from '../lib/guard.js';
 import { errors, ok, sendError } from '../lib/http.js';
+import { stopWriteGuard } from '../lib/stopwrite.js';
 import { prisma } from '../lib/db.js';
 import {
   createFlowArtifact,
@@ -267,7 +268,7 @@ export async function graphRoutes(
    */
   app.post(
     '/api/graph/artifacts',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('langflowRuntime')] },
     async (req, reply) => {
       try {
         const body = artifactCreateSchema.parse(req.body ?? {});
@@ -322,7 +323,7 @@ export async function graphRoutes(
    */
   app.post(
     '/api/graph/artifacts/:id/compile/langflow',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('langflowRuntime')] },
     async (req, reply) => {
       try {
         const { id } = req.params as { id: string };

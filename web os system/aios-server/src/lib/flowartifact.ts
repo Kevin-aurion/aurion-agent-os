@@ -5,6 +5,7 @@ import { ulid } from 'ulid';
 import type { FlowArtifact, FlowArtifactStatus, RuntimeKind } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import { prisma } from './db.js';
+import { assertWriteEnabled } from './stopwrite.js';
 import { deepRedactSecrets } from '../memory/deepredact.js';
 import { redactSecrets } from '../memory/redactor.js';
 
@@ -136,6 +137,7 @@ function isPlainObjectOrArray(v: unknown): boolean {
 export async function createFlowArtifact(
   input: CreateFlowArtifactInput,
 ): Promise<CreateFlowArtifactResult> {
+  assertWriteEnabled('langflowRuntime');
   const runtimeKind = input.runtimeKind;
   if (typeof runtimeKind !== 'string' || !ALLOWED_RUNTIME_KINDS.has(runtimeKind)) {
     throw new FlowArtifactError(

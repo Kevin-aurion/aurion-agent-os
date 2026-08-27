@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { requireAuth, requireTrainer } from '../lib/guard.js';
 import { ok, sendError, errors } from '../lib/http.js';
 import { audit } from '../lib/audit.js';
+import { stopWriteGuard } from '../lib/stopwrite.js';
 import {
   createSuite,
   addCase,
@@ -65,7 +66,7 @@ export async function evalRoutes(app: FastifyInstance) {
   // Create eval suite for a skill (FDE)
   app.post(
     '/api/skills/:skillId/eval-suites',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('eval')] },
     async (req, reply) => {
       try {
         const { skillId } = req.params as { skillId: string };
@@ -105,7 +106,7 @@ export async function evalRoutes(app: FastifyInstance) {
   // Add case to suite (FDE)
   app.post(
     '/api/eval-suites/:suiteId/cases',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('eval')] },
     async (req, reply) => {
       try {
         const { suiteId } = req.params as { suiteId: string };
@@ -145,7 +146,7 @@ export async function evalRoutes(app: FastifyInstance) {
   // Run suite (FDE only — MEMBER blocked by requireTrainer → 403)
   app.post(
     '/api/eval-suites/:suiteId/run',
-    { preHandler: requireTrainer },
+    { preHandler: [requireTrainer, stopWriteGuard('eval')] },
     async (req, reply) => {
       try {
         const { suiteId } = req.params as { suiteId: string };

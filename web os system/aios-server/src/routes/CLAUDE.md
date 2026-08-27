@@ -27,3 +27,4 @@ Fastify 路由，全部掛在 `/api/*`。多數以 `requireAuth` preHandler 保�
 - `Agent.systemManaged=true` 不出現在 `/api/agents` 工作台清單，也不可由一般 Agent CRUD 修改或刪除。
 
 - 新增：`evals.ts`（trainer：EvalSuite/Case CRUD、跑評測、`promoteWithGate` 升級閘）、`mcp.ts`（trainer：外部 MCP loopback-only 註冊；`POST /mcp/call` 仍經 agent scope/tool/restriction/approval/budget Broker）、`googleworkspace.ts`（user-scoped Gmail/Drive read；write 需 FDE + 同 Agent 的真核准 Run；可安裝五個分權 MCP preset）、`a2a.ts`（peer 註冊需 trainer；AgentCard/task 預設停用邊界）。
+- 階段 1 S1-6 停寫：Langflow runtime／A2A／Reflection 舊表／Recording／Eval 新建／（內部）RunTrace 寫入端點回 501 `{ error:'stage1-stop-write' }`；GET 與 SkillVersion promote/rollback 保留。裝置叢集在用，不停寫。詳見 `lib/stopwrite.ts`。
