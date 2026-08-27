@@ -168,7 +168,7 @@ temporal server start-dev               # 耐久執行用（loopback；未進 co
 - 後端 `npm run start` **不會**熱重載；開發用 `npm run dev`。
 - **不要在 `next dev` 執行中跑 `next build`**（汙染 `.next` → 白畫面；解法 `rm -rf .next`）。
 - 金鑰在 `web os system/.env`（**已 gitignore、未追蹤**；`aios-server/.env` 是符號連結）。
-- 測試典範：**臨時 `.ts` 腳本 + `npx tsx` + 真 DB/真服務 + 用完清理**（不是 vitest）；測試放 `.scratch/<feature>/tests/`。安全項一律加**負向測試**。
+- 測試典範：**臨時 `.ts` 腳本 + `npx tsx` + 真 DB/真服務 + 用完清理**（不是 vitest）；測試放 aios-server/tests/<feature>/（stage-0 起的新慣例；歷史測試已封存至 ~/Documents/aurion-archive/server-scratch）。安全項一律加**負向測試**。
 
 ---
 

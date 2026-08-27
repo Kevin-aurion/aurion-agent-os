@@ -1,9 +1,0 @@
-Codex independent verification found concrete Ticket 25 hardening gaps. Fix them test-first and keep edits surgical. Read root AGENTS.md, relevant CLAUDE.md, spec 25, issue 25, and current implementation first. Do not commit/push or touch unrelated WIP.
-
-1. `LangflowAdapter.http()` currently calls `res.text()` with no raw response size bound. Add a streaming byte cap before JSON parse (including when Content-Length is missing or false). Oversize must abort/cancel reading, fail closed with a constant non-reflective RuntimeAdapterError, and never parse/store/log the body. Add boundary tests just-below/above and missing Content-Length.
-2. 2xx error-bearing detection is incomplete. At top, outer output, and effective inner ResultData levels, reject meaningful `error`, `errors`, `exception`, `traceback`, and `detail` fields. Empty string/false/null/empty arrays/empty objects are not meaningful; non-empty forms are. Never reflect their value. Add negative tests.
-3. Effective outputs must be non-null, plain, non-empty ResultData-like objects. `{outputs:[{outputs:[null]}]}`, primitives, and empty objects must not produce success.
-4. `isNormalizedRunEvent()` currently accepts any plain object for `run.output`. Add a deterministic bounded JSON-object guard (cycle-safe, bounded depth/nodes/array/keys/string/serialized size) so hostile injected adapters cannot pass unbounded/cyclic data into DB/trace. Add negative guard tests.
-5. `resumePilotRun()` must require all three artifact bindings: non-empty `run.artifactId`, non-empty server-generated `payload.artifactId`, and `deployment.artifactId`; all must be exactly equal. Missing is fail-closed, not optional. Add zero-adapter-call negative tests.
-
-Preserve the documented valid Langflow response shape and existing redaction. Run t25, ticket tsc, t03, all t18, t23, t24, all t20, full server tsc, and web tsc. Report exact results and BLOCKED items honestly.
