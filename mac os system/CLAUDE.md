@@ -17,8 +17,6 @@ Swift 端特別注意：
 ```
 mac os system/
   CLAUDE.md
-  docs/
-    windows-device-agent-contract.md   # Windows 契約/設計 only（無 Windows runtime）
   aios-system/
     aios-system.xcodeproj/         Xcode 專案（file-system-synchronized group）
     aios-system/
@@ -31,7 +29,6 @@ mac os system/
         AwpClient.swift            # 使用者 hub `/ws`
         AppState.swift
         Models.swift
-        ComputerControlExecutor.swift  # 已退役（public AWP 路徑 fail-closed）
         Device/
           DeviceIdentityStore.swift
           DeviceAPIClient.swift        # 裝置 Bearer REST

@@ -9,7 +9,6 @@ App 的非 UI 基礎設施：設定、憑證、網路、狀態、裝置代理執
 - `AwpClient.swift` — 使用者 hub WebSocket `/ws`（JWT query；既有契約）。
 - `AppState.swift` — 全域狀態；開機時若已註冊則啟動 `DeviceAgentService`。
 - `Models.swift` — 後端 DTO + AWP frame；Swift 6 `nonisolated`。
-- `ComputerControlExecutor.swift` — **已退役** public AWP 電腦操控（fail-closed，不回報 dispatched success）。
 - `Device/` — 多裝置執行平台 Slice 6 實作：
   - 註冊 / DeviceChannel / capabilities / durable tasks / screenshot / LINE MCP / Computer Use bridge
 

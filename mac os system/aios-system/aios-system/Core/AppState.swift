@@ -72,16 +72,12 @@ final class AppState {
             "workflow.triggered",
             "schedule.fired",
             "device.task.*",
-            "computer.control_requested", // retired handler only
+            "computer.control_requested", // retired: activity only; never treated as success
         ])
     }
 
     private func ingest(_ frame: AwpFrame) {
         guard let topic = frame.topic else { return }
-        // Retired path: never claim success for public-AWP computer control.
-        if topic == "computer.control_requested" {
-            ComputerControlExecutor.shared.handle(frame, awp: awp)
-        }
         let text = summarize(frame)
         activity.insert(ActivityItem(topic: topic, text: text, at: Date()), at: 0)
         if activity.count > 100 { activity.removeLast(activity.count - 100) }

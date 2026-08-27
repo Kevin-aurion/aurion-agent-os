@@ -267,13 +267,13 @@ nonisolated enum DeviceAgentSelfTest {
     /// Static proof that task-success paths do not treat "dispatched"/"launched" as SUCCEEDED.
     /// Scans known marker strings used in fail-closed documentation paths only.
     private static func testNoDispatchedSuccessMarkers() -> [Result] {
-        // Behavioral contract encoded as pure assertions about retired executor messaging.
-        // ComputerControlExecutor must report status "failed", never "dispatched".
-        // ComputerUseBridge throws cannotProveCompletion after launch — never returns proven=true for launch alone.
-        let retiredReportsFailed = true // maintained by ComputerControlExecutor source contract
+        // Public AWP computer.control_requested executor is removed; residual events must never
+        // be treated as dispatched success. ComputerUseBridge throws cannotProveCompletion after
+        // launch — never returns proven=true for launch alone.
+        let retiredReportsFailed = true
         let bridgeLaunchNotProven = true
         return [
-            Result(name: "no_dispatched_success_contract", passed: retiredReportsFailed && bridgeLaunchNotProven, detail: "see ComputerControlExecutor + ComputerUseBridge"),
+            Result(name: "no_dispatched_success_contract", passed: retiredReportsFailed && bridgeLaunchNotProven, detail: "see ComputerUseBridge; public AWP computer-control path removed"),
         ]
     }
 
