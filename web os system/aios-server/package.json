@@ -16,6 +16,8 @@
     "prisma:push": "prisma db push",
     "seed": "tsx src/scripts/seed.ts",
     "doctor": "tsx src/scripts/doctor.ts",
+    "vincent:mcp:provision": "tsx src/scripts/configure-vincent-mcp.ts --provision",
+    "vincent:mcp:verify": "tsx src/scripts/configure-vincent-mcp.ts --verify",
     "typecheck": "tsc --noEmit",
     "temporal:worker": "tsx src/temporal/worker.ts",
     "install:host-service": "npm run build && node scripts/install-host-service.mjs"
@@ -44,6 +46,7 @@
     "google-auth-library": "^9.15.0",
     "ioredis": "^5.4.1",
     "jose": "^5.9.6",
+    "mcp-remote": "0.4.1",
     "ulid": "^2.3.0",
     "ws": "^8.18.0",
     "xlsx": "^0.18.5",
