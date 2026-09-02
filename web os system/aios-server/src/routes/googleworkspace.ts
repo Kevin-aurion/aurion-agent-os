@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { parseRestrictions } from '../engine/restrictions.js';
 import * as cloud from '../integrations/cloud.js';
 import { isRunApproved } from '../lib/approval.js';
+import { rejectUnreleasedBuilderAgents } from '../lib/builderrelease.js';
 import { prisma } from '../lib/db.js';
 import { requireAuth, requireTrainer } from '../lib/guard.js';
 import { errors, ok, sendError } from '../lib/http.js';
@@ -71,11 +72,14 @@ export async function googleWorkspaceRoutes(app: FastifyInstance) {
           })
           .parse(req.body);
         const account = await resolveGoogleAccount(req.user!.sub, body.accountId);
-        const agents = await prisma.agent.findMany({
-          where: { id: { in: [...new Set(body.agentIds)] }, deletedAt: null },
-          select: { id: true },
-        });
-        if (agents.length !== new Set(body.agentIds).size) {
+        const requestedIds = [...new Set(body.agentIds)];
+        const agents = await rejectUnreleasedBuilderAgents(
+          await prisma.agent.findMany({
+            where: { id: { in: requestedIds }, deletedAt: null },
+            select: { id: true },
+          }),
+        );
+        if (agents.length !== requestedIds.length) {
           throw errors.badRequest('One or more Agent ids are invalid');
         }
 

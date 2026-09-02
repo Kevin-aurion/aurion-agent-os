@@ -6,6 +6,7 @@ import { accessSync, constants as fsConstants } from 'node:fs';
 import readline from 'node:readline';
 import { ulid } from 'ulid';
 import { assertLoopbackUrl } from './mcpregistry.js';
+import { redactSecrets } from '../memory/redactor.js';
 
 export interface McpClient {
   listTools(): Promise<Array<{ name: string; description?: string }>>;
@@ -21,6 +22,14 @@ export class McpError extends Error {
   ) {
     super(message);
     this.name = 'McpError';
+  }
+}
+
+/** The MCP transport answered successfully, but the tool returned isError. */
+export class McpToolResultError extends McpError {
+  constructor(public tool: string, message: string, data?: unknown) {
+    super('tool_error', `MCP tool "${tool}" failed: ${message}`, data);
+    this.name = 'McpToolResultError';
   }
 }
 
@@ -575,15 +584,14 @@ class SessionImpl implements McpSession {
     if (result && typeof result === 'object') {
       const r = result as { isError?: boolean; content?: unknown };
       if (r.isError) {
-        const text = extractMcpText(result);
-        const msg = text || JSON.stringify(result);
+        const msg = formatMcpToolFailure(result);
         if (
           this.errorHint &&
           /not authenticated|accessibility|permission|-10000/i.test(msg)
         ) {
-          throw new Error(`${msg} — ${this.errorHint}`);
+          throw new McpToolResultError(name, `${msg} — ${this.errorHint}`);
         }
-        throw new Error(`MCP tool "${name}" failed: ${msg}`);
+        throw new McpToolResultError(name, msg);
       }
     }
     try {
@@ -618,6 +626,38 @@ function extractMcpText(result: unknown): string {
     }
   }
   return parts.join('\n');
+}
+
+/**
+ * MCP servers may put the useful failure code in structuredContent while the
+ * text merely says "see structuredContent". Surface a bounded, redacted
+ * version so RunStep errors remain actionable without leaking credentials.
+ */
+export function formatMcpToolFailure(result: unknown): string {
+  const text = extractMcpText(result).trim();
+  if (!result || typeof result !== 'object') return text || 'Unknown MCP tool error';
+
+  const structured = (result as { structuredContent?: unknown }).structuredContent;
+  if (!structured || typeof structured !== 'object') {
+    return redactSecrets(text || JSON.stringify(result)).slice(0, 2_000);
+  }
+
+  const container = structured as Record<string, unknown>;
+  const nested = container.error && typeof container.error === 'object' && !Array.isArray(container.error)
+    ? container.error as Record<string, unknown>
+    : container;
+  const useful = Object.fromEntries(
+    ['code', 'message', 'details', 'issues', 'field'].flatMap((key) =>
+      nested[key] === undefined ? [] : [[key, nested[key]]],
+    ),
+  );
+  const structuredText = redactSecrets(
+    JSON.stringify(Object.keys(useful).length > 0 ? useful : nested),
+  ).slice(0, 2_000);
+
+  if (!structuredText) return redactSecrets(text || 'Unknown MCP tool error').slice(0, 2_000);
+  if (!text || /see structuredcontent/i.test(text)) return structuredText;
+  return redactSecrets(`${text} — ${structuredText}`).slice(0, 2_000);
 }
 
 /** Create a fresh MCP session (one-shot; caller owns close()). */

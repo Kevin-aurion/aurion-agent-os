@@ -65,6 +65,7 @@ const required = [
   [path.join(packageRoot, 'plugins', pluginName, '.claude-plugin', 'plugin.json'), setTopLevelVersion],
   [path.join(packageRoot, 'plugins', pluginName, '.codex-plugin', 'plugin.json'), setTopLevelVersion],
   [path.join(packageRoot, 'installers', 'marketplace.json'), setMarketplacePluginVersion],
+  [path.join(packageRoot, 'installers', 'updater', 'marketplace', '.claude-plugin', 'marketplace.json'), setMarketplacePluginVersion],
   [path.join(aurionRoot, '.claude-plugin', 'marketplace.json'), setMarketplacePluginVersion],
 ];
 

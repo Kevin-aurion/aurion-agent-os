@@ -15,8 +15,10 @@ import {
 } from '../lib/mcpregistry.js';
 
 const SERVER_ID = 'vincent-knowledge-read';
-const CLIENT_ID = '7a23acfa-a548-48ca-a280-f2b2a9566031';
-const KEYCHAIN_SERVICE = 'app.aurion.aios.vincent.read';
+const KEYCHAIN_ACCOUNT = 'aios-employee:vincent-query-consultant';
+const KEYCHAIN_SERVICE = 'app.aurion.aios.vincent.hs256';
+const TOKEN_ISSUER = 'https://aurion-aios.lazyoffice.app';
+const TOKEN_AUDIENCE = 'https://vincent.pinnovabiotech.com.tw/api/mcp';
 const QUERY_AGENT_NAME = 'Vincent 知識庫查詢顧問';
 const QUERY_AGENT_OWNER = 'hank@aurion-group.com';
 const FDE_EMAIL = 'kevin@aurion-group.com';
@@ -38,12 +40,12 @@ function assertCredentialInstalled(): void {
   try {
     execFileSync(
       '/usr/bin/security',
-      ['find-generic-password', '-a', CLIENT_ID, '-s', KEYCHAIN_SERVICE],
+      ['find-generic-password', '-a', KEYCHAIN_ACCOUNT, '-s', KEYCHAIN_SERVICE],
       { stdio: 'ignore' },
     );
   } catch {
     throw new Error(
-      'Vincent client secret 尚未安全匯入 macOS Keychain；請執行 scripts/install-vincent-mcp-credential.command。',
+      'Vincent HS256 shared secret 尚未安全匯入 macOS Keychain；請執行 scripts/install-vincent-mcp-credential.command。',
     );
   }
 }
@@ -52,22 +54,22 @@ function exactTools(actual: string[]): boolean {
   return JSON.stringify(sorted(actual)) === JSON.stringify(sorted(EXPECTED_TOOLS));
 }
 
-function firstIdentifier(value: unknown): string | undefined {
+function firstValueForKeys(value: unknown, keys: string[]): string | undefined {
   if (Array.isArray(value)) {
     for (const item of value) {
-      const found = firstIdentifier(item);
+      const found = firstValueForKeys(item, keys);
       if (found) return found;
     }
     return undefined;
   }
   if (!value || typeof value !== 'object') return undefined;
   const obj = value as Record<string, unknown>;
-  for (const key of ['space_id', 'spaceId', 'id', 'ref']) {
+  for (const key of keys) {
     const candidate = obj[key];
     if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
   }
   for (const nested of Object.values(obj)) {
-    const found = firstIdentifier(nested);
+    const found = firstValueForKeys(nested, keys);
     if (found) return found;
   }
   return undefined;
@@ -75,6 +77,8 @@ function firstIdentifier(value: unknown): string | undefined {
 
 function parseMcpPayload(value: unknown): unknown {
   if (!value || typeof value !== 'object') return value;
+  const structured = (value as { structuredContent?: unknown }).structuredContent;
+  if (structured && typeof structured === 'object') return structured;
   const content = (value as { content?: unknown }).content;
   if (!Array.isArray(content)) return value;
   const text = content
@@ -91,7 +95,10 @@ function parseMcpPayload(value: unknown): unknown {
   }
 }
 
-function buildSearchArgs(schema: JsonSchema | undefined, spaceId?: string): Record<string, unknown> {
+function buildSearchArgs(
+  schema: JsonSchema | undefined,
+  refs: { organizationRef?: string; spaceRef?: string },
+): Record<string, unknown> {
   const properties = schema?.properties ?? {};
   const required = new Set(schema?.required ?? []);
   const args: Record<string, unknown> = {};
@@ -100,8 +107,10 @@ function buildSearchArgs(schema: JsonSchema | undefined, spaceId?: string): Reco
   args[queryKey] = 'PK3050013';
 
   for (const key of Object.keys(properties)) {
-    if (['space_id', 'spaceId', 'space', 'space_ref', 'spaceRef'].includes(key) && spaceId) {
-      args[key] = spaceId;
+    if (['organizationRef', 'organization_ref', 'organizationId', 'organization_id'].includes(key) && refs.organizationRef) {
+      args[key] = refs.organizationRef;
+    } else if (['space_id', 'spaceId', 'space', 'space_ref', 'spaceRef'].includes(key) && refs.spaceRef) {
+      args[key] = refs.spaceRef;
     } else if (['limit', 'top_k', 'topK'].includes(key)) {
       args[key] = 5;
     }
@@ -136,7 +145,7 @@ async function provision() {
   const { fde, agent } = await resolveContext();
   const input = {
     serverId: SERVER_ID,
-    name: 'Vincent Knowledge MCP（read-only · client 7a23acfa…）',
+    name: 'Vincent Knowledge MCP（HS256 · read-only）',
     transport: 'STDIO' as const,
     command: process.execPath,
     commandArgs: [bridgePath],
@@ -167,8 +176,10 @@ async function provision() {
   });
   await audit(fde.id, existing ? 'mcp_server.update' : 'mcp_server.create', 'McpServerRegistry', dto.id, {
     serverId: SERVER_ID,
-    clientId: CLIENT_ID,
-    callback: 'http://localhost:3335/oauth/callback',
+    authMode: 'HS256',
+    issuer: TOKEN_ISSUER,
+    subject: KEYCHAIN_ACCOUNT,
+    audience: TOKEN_AUDIENCE,
     agentId: agent.id,
     account: QUERY_AGENT_OWNER,
     tools: EXPECTED_TOOLS,
@@ -180,28 +191,54 @@ async function provision() {
     enabled: dto.enabled,
     agentId: agent.id,
     account: QUERY_AGENT_OWNER,
-    clientId: CLIENT_ID,
-    callback: 'http://localhost:3335/oauth/callback',
+    authMode: 'HS256',
+    issuer: TOKEN_ISSUER,
+    subject: KEYCHAIN_ACCOUNT,
+    audience: TOKEN_AUDIENCE,
     tools: EXPECTED_TOOLS,
   }, null, 2));
   return dto.id;
 }
 
-async function ensureQueryWorkflow(agentId: string, queryField: string, spaceField?: string) {
+async function ensureQueryWorkflow(
+  agentId: string,
+  queryField: string,
+  organizationField?: string,
+  spaceField?: string,
+  refs: { organizationRef?: string; spaceRef?: string } = {},
+) {
   const name = 'Vincent 知識庫查詢（MCP）';
-  const existing = await prisma.workflow.findFirst({ where: { agentId, name, deletedAt: null } });
-  const workflow = existing ?? await prisma.workflow.create({
-    data: {
-      id: ulid(),
-      agentId,
-      name,
-      description: '透過 Vincent read-only MCP 查詢產品知識庫。',
-      enabled: true,
-      trigger: { type: 'keyword', keywords: ['知識庫', 'PK', '產品', '查詢'] },
+  const inputSchema = {
+    type: 'object',
+    required: ['message'],
+    properties: {
+      message: {
+        type: 'string',
+        minLength: 1,
+        description: '要交給 Vincent 知識庫查詢顧問的原始問題或產品編號。',
+      },
     },
-  });
+  };
+  const existing = await prisma.workflow.findFirst({ where: { agentId, name, deletedAt: null } });
+  const workflow = existing
+    ? await prisma.workflow.update({ where: { id: existing.id }, data: { inputSchema } })
+    : await prisma.workflow.create({
+        data: {
+          id: ulid(),
+          agentId,
+          name,
+          description: '透過 Vincent read-only MCP 查詢產品知識庫。',
+          enabled: true,
+          trigger: { type: 'keyword', keywords: ['知識庫', 'PK', '產品', '查詢'] },
+          inputSchema,
+        },
+      });
   const args: Record<string, string> = { [queryField]: '{{input.message}}' };
-  if (spaceField) args[spaceField] = '{{identity.vincentSpaceId}}';
+  // These are opaque capability refs returned by list_spaces, not secrets.
+  // Keep them in the governed workflow instead of identityCard: the identity
+  // normalizer intentionally drops unknown fields before a run is compiled.
+  if (organizationField && refs.organizationRef) args[organizationField] = refs.organizationRef;
+  if (spaceField && refs.spaceRef) args[spaceField] = refs.spaceRef;
   await prisma.workflowStep.deleteMany({ where: { workflowId: workflow.id } });
   await prisma.workflowStep.createMany({
     data: [
@@ -247,11 +284,13 @@ async function verify() {
 
     const spacesRaw = await session.call('list_spaces', {});
     const spaces = parseMcpPayload(spacesRaw);
-    const spaceId = firstIdentifier(spaces);
+    const organizationRef = firstValueForKeys(spaces, ['organizationRef', 'organization_ref']);
+    const spaceRef = firstValueForKeys(spaces, ['spaceRef', 'space_ref', 'spaceId', 'space_id']);
     const searchTool = tools.find((tool) => tool.name === 'search_knowledge');
-    const searchArgs = buildSearchArgs(searchTool?.inputSchema, spaceId);
+    const searchArgs = buildSearchArgs(searchTool?.inputSchema, { organizationRef, spaceRef });
     const queryField = Object.keys(searchArgs).find((key) => ['query', 'q', 'text', 'keyword', 'search'].includes(key));
     if (!queryField) throw new Error('Unable to determine Vincent query field');
+    const organizationField = Object.keys(searchArgs).find((key) => ['organizationRef', 'organization_ref', 'organizationId', 'organization_id'].includes(key));
     const spaceField = Object.keys(searchArgs).find((key) => ['space_id', 'spaceId', 'space', 'space_ref', 'spaceRef'].includes(key));
     const searchRaw = await session.call('search_knowledge', searchArgs);
     const searchable = JSON.stringify(parseMcpPayload(searchRaw));
@@ -259,12 +298,27 @@ async function verify() {
       if (!searchable.includes(expected)) throw new Error(`Vincent knowledge smoke test missing expected value: ${expected}`);
     }
 
-    const workflowId = await ensureQueryWorkflow(agent.id, queryField, spaceField);
-    if (spaceId) {
+    const workflowId = await ensureQueryWorkflow(
+      agent.id,
+      queryField,
+      organizationField,
+      spaceField,
+      { organizationRef, spaceRef },
+    );
+    if (organizationRef || spaceRef) {
       const identity = agent.identityCard && typeof agent.identityCard === 'object'
         ? agent.identityCard as Record<string, unknown>
         : {};
-      await prisma.agent.update({ where: { id: agent.id }, data: { identityCard: { ...identity, vincentSpaceId: spaceId } } });
+      await prisma.agent.update({
+        where: { id: agent.id },
+        data: {
+          identityCard: {
+            ...identity,
+            ...(organizationRef ? { vincentOrganizationRef: organizationRef } : {}),
+            ...(spaceRef ? { vincentSpaceRef: spaceRef } : {}),
+          },
+        },
+      });
     }
     await updateHealthFields(entry.id, { healthStatus: 'healthy', lastVersion: '2025-11-25', lastHealthAt: new Date() });
     await setEnabled(entry.id, true, fde.id);

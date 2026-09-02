@@ -8,8 +8,8 @@
   "plugins": [
     {
       "name": "aurion-aios-builder",
-      "description": "Build AI employees, try READY employees immediately, invoke approved employees, and request governed schedules over the hosted Aurion AIOS OAuth Remote MCP.",
-      "version": "1.6.1",
+      "description": "Train and directly activate AI employees in one durable session, then invoke them over the hosted Aurion AIOS OAuth Remote MCP.",
+      "version": "1.8.2",
       "author": {
         "name": "Aurion"
       },

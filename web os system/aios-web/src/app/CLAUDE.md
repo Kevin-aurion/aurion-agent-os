@@ -3,7 +3,7 @@
 ## 版面/入口
 - `layout.tsx` / `providers.tsx` — 全域版面與 React Query provider。
 - `page.tsx` — 根路徑：auth 後導向 **`/work`**（未登入 → `/login`）。
-- `work/page.tsx` — **AI 工作台**（三欄：Agent／thread／訊息；左欄「建立 AI 員工」開 Agent Builder）。教學與交辦同一對話：SkillDraftCard／訓練意圖在對話流觸發。`?mode=builder` 開 Builder。
+- `work/page.tsx` — **AI 工作台**（三欄：Agent／thread／訊息；左欄「建立 AI 員工」開 Agent Builder）。建立與再訓練都進同一 Builder；選定既有員工時以 `agentId` 續接該員工原 session。`?mode=builder` 開 Builder。錄製／舊 SkillDraft 訓練入口先隱藏。
 - `admin/page.tsx` — **FDE 管理中心總覽**（原 Dashboard）。
 - `admin/devices/page.tsx` — **FDE 裝置管理**（註冊碼／token 輪替／撤銷／LINE MCP；`GET /api/device-tasks` 任務表＋篩選；`device.task.*` AWP 重抓；檢查點詳情）。能力晶片含獨立 `codexApp` / `codexCli` / `lineDesktop`（不可由 computerUse 推斷）。
 - `globals.css` — 全域樣式。
@@ -18,7 +18,7 @@
 - `org/` — 組織圖與權限（OWNER/TRAINER/MEMBER；Kevin 為 OWNER 最高管理）。
 - `audit/` — 中文稽核紀錄。
 - `proposals/` — FDE 提案審核。
-- `agent-builds/` — **獨立 Agent 建置治理入口**；同一組登入、單一側欄，**所有角色（含 OWNER/TRAINER）都只看該登入帳號自己的建置**（帳號隔離）。FDE 跨帳號全域紀錄走 admin evolution-queue／`proposals/`。訓練、Shadow Agent 試教與除錯留在 Claude MCP 對話；本頁顯示版本、每回合反思、送審狀態、FDE 正式放行，以及 ACTIVE 建置的 **Agent package ZIP 匯出**。
+- `agent-builds/` — **本人訓練紀錄**；所有角色只看該登入帳號自己的 session。可查看版本／反思、直接啟用歷史待處理 session，以及匯出 ACTIVE Agent package ZIP；不顯示 FDE queue、Shadow 試教或 Builder test。
 - `admin/devices/` — 多裝置執行平台管理。
 
 ## 三表面（Agent Workbench + Builder Portal）

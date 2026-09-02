@@ -1,7 +1,7 @@
-// Agent Builder REST — durable CEO-friendly agent factory.
-// Auth: requireAuth. MEMBER may interview + request authorize (AWAITING_FDE only).
-// FDE may authorize build, finalize. Ownership fail-closed (404 for foreigners).
-import type { FastifyInstance } from 'fastify';
+// Agent Builder REST — durable, owner-scoped conversational agent factory.
+// Every authenticated owner may train and directly activate their own Agent.
+// Ownership remains fail-closed (404 for foreigners).
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,13 +16,9 @@ import {
   getLatestBuilderSession,
   postBuilderMessage,
   authorizeBuilderSession,
-  submitBuilderTestData,
-  runBuilderTest,
   finalizeBuilderSession,
-  approveAndActivate,
   attachBuilderSourceFile,
   attachBuilderTestFixture,
-  listBuilderReviewQueue,
   listBuilderEvolutionSessions,
   listAllBuilderEvolutionSessions,
   listBuilderSessions,
@@ -35,14 +31,14 @@ import {
   guardExternalBuilderStop,
   importExternalBuilderArtifact,
   prepareExternalBuilderPrompt,
-  submitExternalBuilderForReview,
+  activateExternalBuilderSession,
   syncExternalBuilderTurn,
   upsertExternalBuilderSnapshot,
 } from '../lib/externalagentbuilder.js';
-import { chatWithBuilderShadow } from '../lib/builderconversation.js';
 
 const messageSchema = z.object({
   message: z.string().min(1),
+  agentId: z.string().min(1).optional(),
 });
 
 const authorizeSchema = z.object({
@@ -50,21 +46,8 @@ const authorizeSchema = z.object({
   targetAgentId: z.string().min(1).optional(),
 });
 
-const testDataSchema = z.object({
-  data: z.unknown().refine((value) => value !== undefined && value !== null && value !== '', {
-    message: 'data is required',
-  }),
-  expected: z.unknown().refine((value) => value !== undefined && value !== null && value !== '', {
-    message: 'expected is required',
-  }),
-});
-
 const abandonBodySchema = z.object({
   confirmSessionId: z.string().min(1).optional(),
-}).strict();
-
-const approveAndActivateSchema = z.object({
-  autoAdoptSuggestedTest: z.boolean().optional(),
 }).strict();
 
 const draftQuerySchema = z.object({ sessionId: z.string().min(1).optional() });
@@ -75,7 +58,7 @@ const draftBodySchema = z.object({
   testExpected: z.string().max(12_000).default(''),
 });
 
-const externalSourceSchema = z.enum(['CLAUDE_DESKTOP', 'CLAUDE_CODE', 'CHATGPT', 'CURSOR', 'OTHER']);
+const externalSourceSchema = z.enum(['CLAUDE_DESKTOP', 'CLAUDE_CODE', 'CODEX', 'CHATGPT', 'CURSOR', 'OTHER']);
 const externalSessionSchema = z.object({
   source: externalSourceSchema,
   initialRequest: z.string().min(1).max(12_000),
@@ -116,6 +99,7 @@ const externalArtifactSchema = z.object({
     identity: z.object({
       name: z.string().min(1).max(120),
       purpose: z.string().min(1).max(1_500),
+      department: z.string().min(1).max(80).optional(),
       workingStyle: z.array(z.string().max(800)).max(20).optional(),
     }).strict(),
     agentMarkdown: z.string().max(60_000).optional(),
@@ -134,7 +118,7 @@ const externalArtifactSchema = z.object({
     tools: z.array(z.object({
       name: z.string().min(1).max(180),
       purpose: z.string().max(800).optional(),
-      status: z.enum(['AVAILABLE', 'NEEDS_FDE', 'NOT_NEEDED']).optional(),
+      status: z.enum(['AVAILABLE', 'NEEDS_SETUP', 'NEEDS_FDE', 'NOT_NEEDED']).optional(),
     }).strict()).max(30).optional(),
     policies: z.object({
       allowed: z.array(z.string().max(800)).max(30).optional(),
@@ -276,7 +260,7 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     },
   );
 
-  /** Upload one FDE test fixture. Raw files are temporary; only redacted parsed text persists. */
+  /** Legacy fixture upload retained for stored historical sessions; new clients do not use it. */
   app.post(
     '/api/agent-builder/sessions/:id/test-fixtures/:requirementKey',
     { preHandler: requireAuth },
@@ -322,7 +306,7 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     },
   );
 
-  /** Import a full Agent/Skill/Memory/Workflow/Test shadow snapshot. Never promotes it. */
+  /** Import a full Agent/Skill/Memory/Workflow draft snapshot. */
   app.post(
     '/api/agent-builder/sessions/:id/external-artifact',
     { preHandler: requireAuth },
@@ -365,25 +349,25 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     },
   );
 
-  /** Always stop at AWAITING_FDE, even when the caller authenticated as OWNER. */
-  app.post(
-    '/api/agent-builder/sessions/:id/submit-review',
-    { preHandler: requireAuth },
-    async (req, reply) => {
-      try {
-        const { id } = req.params as { id: string };
-        const body = externalSubmitReviewSchema.parse(req.body ?? {});
-        return ok(await submitExternalBuilderForReview({
-          sessionId: id,
-          userId: req.user!.sub,
-          role: req.user!.role,
-          ...body,
-        }));
-      } catch (e) {
-        return sendError(reply, e);
-      }
-    },
-  );
+  const activateExternal = async (req: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { id } = req.params as { id: string };
+      const body = externalSubmitReviewSchema.parse(req.body ?? {});
+      return ok(await activateExternalBuilderSession({
+        sessionId: id,
+        userId: req.user!.sub,
+        role: req.user!.role,
+        ...body,
+      }));
+    } catch (e) {
+      return sendError(reply, e);
+    }
+  };
+
+  /** Activate the latest READY training snapshot directly. */
+  app.post('/api/agent-builder/sessions/:id/activate', { preHandler: requireAuth }, activateExternal);
+  /** Compatibility alias for already-installed Claude plugins. */
+  app.post('/api/agent-builder/sessions/:id/submit-review', { preHandler: requireAuth }, activateExternal);
 
   /** Account-scoped build portal: every role sees only this login's builds. */
   app.get('/api/agent-builder/evolution-queue', { preHandler: requireAuth }, async (req, reply) => {
@@ -396,7 +380,7 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     }
   });
 
-  /** Separate FDE ledger. Never use this endpoint from the customer portal. */
+  /** Trainer-only cross-account history ledger; it has no Builder approval action. */
   app.get('/api/agent-builder/admin/evolution-queue', { preHandler: requireTrainer }, async (req, reply) => {
     try {
       return ok(await listAllBuilderEvolutionSessions({ viewerUserId: req.user!.sub }));
@@ -405,10 +389,10 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     }
   });
 
-  /** FDE inbox for build authorization and final activation. */
+  /** Retired FDE inbox: training release is owner-scoped and direct. */
   app.get('/api/agent-builder/review-queue', { preHandler: requireTrainer }, async (_req, reply) => {
     try {
-      return ok(await listBuilderReviewQueue());
+      return ok([]);
     } catch (e) {
       return sendError(reply, e);
     }
@@ -463,6 +447,7 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
       const result = await createBuilderSession({
         userId: req.user!.sub,
         message: parsed.data.message,
+        agentId: parsed.data.agentId,
       });
       return ok(result);
     } catch (e) {
@@ -470,7 +455,7 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     }
   });
 
-  /** Read session (owner or FDE). Foreign users → 404. */
+  /** Read an owner-scoped session. Foreign users → 404. */
   app.get('/api/agent-builder/sessions/:id', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { id } = req.params as { id: string };
@@ -500,7 +485,7 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     }
   });
 
-  /** Download an ACTIVE, FDE-approved Agent as a portable, redacted ZIP package. */
+  /** Download an ACTIVE owner-activated Agent as a portable, redacted ZIP package. */
   app.get('/api/agent-builder/sessions/:id/export', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { id } = req.params as { id: string };
@@ -508,7 +493,7 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
         sessionId: id,
         userId: req.user!.sub,
         // A public Builder OAuth token may be owned by an OWNER account, but
-        // it remains customer-scoped and must never inherit cross-user FDE access.
+        // it remains customer-scoped and must never inherit cross-user admin access.
         role: req.user!.scope ? 'MEMBER' : req.user!.role,
       });
       const encoded = encodeURIComponent(exported.filename);
@@ -588,10 +573,7 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     },
   );
 
-  /**
-   * Claude/ChatGPT/Codex conversational coaching against the latest READY
-   * Shadow Draft. No live tools or external side effects are available.
-   */
+  /** Legacy Shadow-chat URL now continues the real training session. */
   app.post(
     '/api/agent-builder/sessions/:id/shadow-chat',
     { preHandler: requireAuth },
@@ -600,7 +582,7 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
         const { id } = req.params as { id: string };
         const parsed = messageSchema.safeParse(req.body);
         if (!parsed.success) throw errors.badRequest('message is required');
-        return ok(await chatWithBuilderShadow({
+        return ok(await postBuilderMessage({
           sessionId: id,
           userId: req.user!.sub,
           role: req.user!.role,
@@ -612,10 +594,10 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     },
   );
 
-  /** FDE clicks approve in the admin review inbox; uses the operator-selected strategy. */
+  /** Compatibility alias: directly activate the owner's pending build. */
   app.post(
     '/api/agent-builder/sessions/:id/approve-build',
-    { preHandler: requireTrainer },
+    { preHandler: requireAuth },
     async (req, reply) => {
       try {
         const { id } = req.params as { id: string };
@@ -624,9 +606,6 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
           userId: req.user!.sub,
           role: req.user!.role,
         });
-        if (session.status !== 'AWAITING_FDE') {
-          throw errors.conflict(`Cannot approve build from status=${session.status}`);
-        }
         const strategy = session.strategy === 'reuse' ? 'reuse' : 'create';
         return ok(
           await authorizeBuilderSession({
@@ -644,8 +623,7 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
   );
 
   /**
-   * Authorize build: MEMBER → AWAITING_FDE (no mutation);
-   * FDE → create PAUSED agent / inert skill draft.
+   * Materialize and activate the latest training snapshot for its owner.
    */
   app.post(
     '/api/agent-builder/sessions/:id/authorize',
@@ -669,21 +647,17 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     },
   );
 
-  /** Submit redacted manual fixture data + expected result. */
+  /** Legacy test-data URL: the Builder test gate is retired, so activate directly. */
   app.post(
     '/api/agent-builder/sessions/:id/test-data',
     { preHandler: requireAuth },
     async (req, reply) => {
       try {
         const { id } = req.params as { id: string };
-        const parsed = testDataSchema.safeParse(req.body);
-        if (!parsed.success) throw errors.badRequest('data and expected are required');
-        const result = await submitBuilderTestData({
+        const result = await finalizeBuilderSession({
           sessionId: id,
           userId: req.user!.sub,
           role: req.user!.role,
-          data: parsed.data.data,
-          expected: parsed.data.expected,
         });
         return ok(result);
       } catch (e) {
@@ -692,21 +666,17 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     },
   );
 
-  /**
-   * Run a real asynchronous runAgent test against submitted fixture data.
-   * Never fake-passes. Injectable runner is for focused tests only (not HTTP).
-   */
+  /** Legacy test URL: the Builder test gate is retired, so activate directly. */
   app.post(
     '/api/agent-builder/sessions/:id/test',
     { preHandler: requireAuth },
     async (req, reply) => {
       try {
         const { id } = req.params as { id: string };
-        const result = await runBuilderTest({
+        const result = await finalizeBuilderSession({
           sessionId: id,
           userId: req.user!.sub,
           role: req.user!.role,
-          background: true,
         });
         return ok(result);
       } catch (e) {
@@ -715,7 +685,7 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     },
   );
 
-  /** FDE-only finalize after PASSED: confirm drafts, activate created agent. */
+  /** Compatibility alias for an already-materialized legacy build. */
   app.post(
     '/api/agent-builder/sessions/:id/finalize',
     { preHandler: requireAuth },
@@ -734,26 +704,25 @@ export async function agentBuilderRoutes(app: FastifyInstance) {
     },
   );
 
-  /**
-   * FDE one-click: approve-build → test (if data ready) → evidence gate →
-   * confirm skills → activate. Stepwise endpoints remain available.
-   */
+  /** Compatibility alias for older Web clients; no test or FDE stage remains. */
   app.post(
     '/api/agent-builder/sessions/:id/approve-and-activate',
-    { preHandler: requireTrainer },
+    { preHandler: requireAuth },
     async (req, reply) => {
       try {
         const { id } = req.params as { id: string };
-        const parsed = approveAndActivateSchema.safeParse(req.body ?? {});
-        if (!parsed.success) throw errors.badRequest('autoAdoptSuggestedTest must be a boolean if provided');
-        return ok(
-          await approveAndActivate({
-            sessionId: id,
-            userId: req.user!.sub,
-            role: req.user!.role,
-            autoAdoptSuggestedTest: parsed.data.autoAdoptSuggestedTest === true,
-          }),
-        );
+        const session = await getBuilderSession({
+          sessionId: id,
+          userId: req.user!.sub,
+          role: req.user!.role,
+        });
+        return ok(await authorizeBuilderSession({
+          sessionId: id,
+          userId: req.user!.sub,
+          role: req.user!.role,
+          strategy: session.strategy === 'reuse' ? 'reuse' : 'create',
+          targetAgentId: session.targetAgentId ?? undefined,
+        }));
       } catch (e) {
         return sendError(reply, e);
       }

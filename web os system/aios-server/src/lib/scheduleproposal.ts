@@ -1,6 +1,6 @@
-// Governed schedule proposals for MCP/runtime callers. A caller can only create
-// a PENDING ChangeProposal; this module applies the schedule after an FDE
-// explicitly approves it.
+// Account-scoped schedule changes for MCP/runtime callers. The historical
+// proposal-shaped endpoint is retained as a compatibility alias, but an owner
+// request now applies the schedule directly and idempotently.
 import cronParser from 'cron-parser';
 import type { ChangeProposal, Prisma } from '@prisma/client';
 import { z } from 'zod';
@@ -124,6 +124,128 @@ export async function createScheduleProposal(args: {
     },
   });
   return { proposal, deduplicated: false };
+}
+
+/** Apply an account owner's schedule change directly, without a review queue. */
+export async function applyOwnedScheduleChange(args: {
+  agentId: string;
+  workflowId: string;
+  userId: string;
+  change: unknown;
+}): Promise<{
+  action: ScheduleProposalChange['action'];
+  workflowId: string;
+  scheduleId: string | null;
+  enabled: boolean;
+}> {
+  const change = normalizeScheduleProposalChange(args.change);
+  if (change.workflowId !== args.workflowId) {
+    throw errors.badRequest('Schedule workflowId does not match the selected workflow');
+  }
+
+  const result = await prisma.$transaction(async (tx) => {
+    const workflow = await tx.workflow.findFirst({
+      where: {
+        id: args.workflowId,
+        agentId: args.agentId,
+        deletedAt: null,
+        agent: {
+          is: {
+            createdBy: args.userId,
+            deletedAt: null,
+            status: 'ACTIVE',
+            systemManaged: false,
+          },
+        },
+      },
+    });
+    if (!workflow) throw errors.notFound('Active Agent workflow not found');
+
+    const current = triggerRecord(workflow.trigger);
+    let next: Record<string, unknown>;
+    if (change.action === 'UPSERT') {
+      if (!workflow.enabled) throw errors.conflict('Cannot schedule a disabled workflow');
+      next = {
+        ...current,
+        type: 'schedule',
+        cron: change.cron!,
+        timezone: change.timezone || config.tz,
+        scheduleEnabled: true,
+        ...(change.input !== undefined ? { input: change.input } : {}),
+      };
+    } else {
+      if (current.type !== 'schedule' || typeof current.cron !== 'string' || !current.cron.trim()) {
+        throw errors.conflict('Workflow does not currently have a schedule');
+      }
+      if (change.action === 'RESUME' && !workflow.enabled) {
+        throw errors.conflict('Cannot resume a disabled workflow');
+      }
+      if (change.action === 'DELETE') {
+        next = { ...current, type: 'manual' };
+        delete next.cron;
+        delete next.timezone;
+        delete next.input;
+        delete next.scheduleEnabled;
+      } else {
+        next = { ...current, scheduleEnabled: change.action === 'RESUME' };
+      }
+    }
+
+    await tx.workflow.update({
+      where: { id: workflow.id },
+      data: { trigger: next as Prisma.InputJsonValue },
+    });
+
+    const schedules = await tx.schedule.findMany({
+      where: { workflowId: workflow.id },
+      orderBy: { id: 'asc' },
+    });
+    const removedScheduleIds = schedules.slice(1).map((row) => row.id);
+    if (removedScheduleIds.length > 0) {
+      await tx.schedule.deleteMany({ where: { id: { in: removedScheduleIds } } });
+    }
+
+    let scheduleId: string | null = null;
+    let enabled = false;
+    if (change.action === 'DELETE') {
+      const allIds = schedules.map((row) => row.id);
+      if (allIds.length > 0) await tx.schedule.deleteMany({ where: { id: { in: allIds } } });
+      removedScheduleIds.splice(0, removedScheduleIds.length, ...allIds);
+    } else {
+      const cron = String(next.cron);
+      const timezone = typeof next.timezone === 'string' ? next.timezone : config.tz;
+      enabled = workflow.enabled && next.scheduleEnabled !== false;
+      const primary = schedules[0];
+      if (primary) {
+        await tx.schedule.update({
+          where: { id: primary.id },
+          data: { cron, timezone, enabled },
+        });
+        scheduleId = primary.id;
+      } else {
+        scheduleId = ulid();
+        await tx.schedule.create({
+          data: { id: scheduleId, workflowId: workflow.id, cron, timezone, enabled },
+        });
+      }
+    }
+    return { workflowId: workflow.id, scheduleId, removedScheduleIds, enabled };
+  });
+
+  const scheduler = await import('../scheduler/index.js').catch(() => null);
+  for (const scheduleId of result.removedScheduleIds) {
+    await scheduler?.removeSchedule?.(scheduleId).catch(() => {});
+  }
+  if (result.scheduleId) {
+    await scheduler?.syncSchedule?.(result.scheduleId).catch(() => {});
+  }
+
+  return {
+    action: change.action,
+    workflowId: result.workflowId,
+    scheduleId: result.scheduleId,
+    enabled: result.enabled,
+  };
 }
 
 function triggerRecord(value: Prisma.JsonValue): Record<string, unknown> {

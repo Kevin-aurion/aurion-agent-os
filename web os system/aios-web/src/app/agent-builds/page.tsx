@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -12,7 +11,6 @@ import {
   Clock3,
   Database,
   Download,
-  FileCheck2,
   FlaskConical,
   GitBranch,
   History,
@@ -39,7 +37,7 @@ import {
   type BuilderSession,
 } from '@/components/workbench/types';
 import { API, downloadToDevice } from '@/lib/api';
-import { useAuth, isFdeRole } from '@/lib/auth';
+import { useAuth } from '@/lib/auth';
 import { useAwp } from '@/lib/awp';
 import { cn } from '@/lib/cn';
 
@@ -50,6 +48,7 @@ const SOURCE_LABELS: Record<SourceFilter, string> = {
   AIOS: 'AIOS 前臺',
   CLAUDE_DESKTOP: 'Claude Desktop',
   CLAUDE_CODE: 'Claude Code',
+  CODEX: 'Codex',
   CHATGPT: 'ChatGPT / Codex',
   CURSOR: 'Cursor',
   OTHER: '其他外部來源',
@@ -122,6 +121,7 @@ function sourceClass(source: Exclude<SourceFilter, 'ALL'>): string {
   if (source === 'CLAUDE_DESKTOP') return 'bg-orange-500/15 text-orange-500';
   if (source === 'CHATGPT') return 'bg-emerald-500/15 text-emerald-500';
   if (source === 'CLAUDE_CODE') return 'bg-amber-500/15 text-amber-500';
+  if (source === 'CODEX') return 'bg-indigo-500/15 text-indigo-500';
   if (source === 'CURSOR') return 'bg-sky-500/15 text-sky-500';
   if (source === 'OTHER') return 'bg-violet-500/15 text-violet-500';
   return 'bg-brand/15 text-brand';
@@ -339,7 +339,7 @@ function AbandonDraftButton({ session }: { session: BuilderSession }) {
         className="btn-ghost px-3 py-1.5 text-xs text-rose-400"
         disabled={abandonBuild.isPending}
         onClick={() => {
-          if (!window.confirm('捨棄這個建置草稿？紀錄會保留（軟刪），但不再出現在清單，也不會被 AI 續接。已送審或已產生員工/技能的建置無法捨棄。')) return;
+          if (!window.confirm('捨棄這個建置草稿？紀錄會保留（軟刪），但不再出現在清單，也不會被 AI 續接。已產生員工或技能的建置無法捨棄。')) return;
           abandonBuild.mutate();
         }}
       >
@@ -355,46 +355,31 @@ function AbandonDraftButton({ session }: { session: BuilderSession }) {
   );
 }
 
-function BuildActions({
-  session,
-  harness,
-  isFde,
-}: {
+function BuildActions({ session, harness }: {
   session: BuilderSession;
   harness: BuilderHarnessSnapshot | null;
-  isFde: boolean;
 }) {
   const queryClient = useQueryClient();
   const refresh = async () => {
     await queryClient.invalidateQueries({ queryKey: ['agent-builder-evolutions'] });
   };
   const submitReview = useMutation({
-    mutationFn: () => API.post(`/api/agent-builder/sessions/${session.id}/submit-review`, { strategy: 'create' }),
-    onSuccess: refresh,
-  });
-  const approveBuild = useMutation({
-    mutationFn: () => API.post(`/api/agent-builder/sessions/${session.id}/approve-build`, {}),
-    onSuccess: refresh,
-  });
-  const finalizeBuild = useMutation({
-    mutationFn: () => API.post(`/api/agent-builder/sessions/${session.id}/finalize`, {}),
+    mutationFn: () => API.post(`/api/agent-builder/sessions/${session.id}/activate`, {}),
     onSuccess: refresh,
   });
   const exportPackage = useMutation({
     mutationFn: () => downloadToDevice(`/api/agent-builder/sessions/${session.id}/export`),
   });
-  const pending = submitReview.isPending || approveBuild.isPending || finalizeBuild.isPending || exportPackage.isPending;
-  const error = submitReview.error ?? approveBuild.error ?? finalizeBuild.error ?? exportPackage.error;
+  const pending = submitReview.isPending || exportPackage.isPending;
+  const error = submitReview.error ?? exportPackage.error;
   const latestReady = [...session.iterations].reverse().find((iteration) => iteration.status === 'READY' && iteration.harness);
   const latestReflection = [...session.iterations].reverse().find((iteration) => iteration.triggerKind === 'reflection');
   const reflectionCount = session.iterations.filter((iteration) => iteration.triggerKind === 'reflection').length;
   const canSubmit = Boolean(
     latestReady
     && session.ownedByCurrentUser !== false
-    && ['DISCOVERY', 'PLAN_READY', 'ACTIVE'].includes(session.status),
+    && ['PLAN_READY', 'AWAITING_FDE', 'AWAITING_TEST_DATA', 'TESTING', 'PASSED', 'FAILED'].includes(session.status),
   );
-  const canApprove = isFde && session.status === 'AWAITING_FDE';
-  const canFinalize = isFde && session.status === 'PASSED';
 
   return (
     <section className="rounded-xl border border-brand/20 bg-brand/[0.04] p-4">
@@ -402,29 +387,17 @@ function BuildActions({
         <div>
           <div className="flex items-center gap-2 text-sm font-medium">
             <MessageSquareText className="h-4 w-4 text-brand" />
-            對話式訓練與正式放行
+            對話式訓練與自動套用
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted">
-            訓練、試教與除錯都在 Claude MCP 對話完成；這裡只保存版本、反思與 FDE 正式放行紀錄。
+            Claude、Codex 與 Web 的訓練都保存到同一個 session；第一份完整內容會自動建立可用員工，後續內容更新同一位。
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           {canSubmit && (
             <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled={pending} onClick={() => submitReview.mutate()}>
               {submitReview.isPending ? <Spinner /> : <Send className="h-3.5 w-3.5" />}
-              送交 FDE 正式審核
-            </button>
-          )}
-          {canApprove && (
-            <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled={pending} onClick={() => approveBuild.mutate()}>
-              {approveBuild.isPending ? <Spinner /> : <ShieldCheck className="h-3.5 w-3.5" />}
-              FDE 核准待放行版本
-            </button>
-          )}
-          {canFinalize && (
-            <button type="button" className="btn-primary px-3 py-1.5 text-xs" disabled={pending} onClick={() => finalizeBuild.mutate()}>
-              {finalizeBuild.isPending ? <Spinner /> : <ShieldCheck className="h-3.5 w-3.5" />}
-              FDE 正式放行
+              重新套用最新訓練
             </button>
           )}
           {session.status === 'ACTIVE' && (
@@ -437,30 +410,30 @@ function BuildActions({
         </div>
       </div>
 
-      {session.status === 'AWAITING_FDE' && !isFde && (
-        <p className="mt-3 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-500">已送交 FDE；這個版本已鎖定等待正式審核，後臺不再進行 End User 訓練或除錯。</p>
+      {session.status === 'AWAITING_FDE' && (
+        <p className="mt-3 rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-500">舊版待啟用狀態；可直接啟用並保留原 Agent ID。</p>
       )}
       {session.status === 'AWAITING_TEST_DATA' && (
-        <p className="mt-3 rounded-lg bg-brand/10 px-3 py-2 text-xs text-brand">待放行草稿已建立。請回到原本的 Claude MCP 對話提交最後驗證資料；通過後只會等待 FDE 正式放行。</p>
+        <p className="mt-3 rounded-lg bg-brand/10 px-3 py-2 text-xs text-brand">舊版草稿已建立；不需再提交測試資料，可直接啟用。</p>
       )}
-      {session.status === 'PASSED' && !isFde && (
-        <p className="mt-3 rounded-lg bg-emerald-500/10 px-3 py-2 text-xs text-emerald-500">Claude MCP 最後驗證已通過，正在等待 FDE 於後臺正式放行。</p>
+      {session.status === 'PASSED' && (
+        <p className="mt-3 rounded-lg bg-emerald-500/10 px-3 py-2 text-xs text-emerald-500">舊版測試紀錄已保留；可直接啟用。</p>
       )}
       <div className="mt-4 grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">
         <div className="rounded-lg border border-brand/20 bg-background/40 p-3">
           <div className="flex items-center gap-2 text-xs font-medium text-brand">
             <MessageSquareText className="h-3.5 w-3.5" />
-            在 Claude 或 Codex 裡直接試用（免 FDE）
+            在 Claude 或 Codex 裡直接調度
           </div>
           <p className="mt-1.5 text-xs leading-relaxed text-muted">
-            先呼叫 <span className="font-mono text-foreground">list_testable_agents</span> 選擇員工，再用 <span className="font-mono text-foreground">chat_with_test_agent</span> 直接對話。測試模式不需 FDE，但不會使用工具、網路、電腦操作、排程或外部寫入；回覆與你的修正仍會成為下一版 Skill 的訓練依據。
+            完整內容同步後即可呼叫 <span className="font-mono text-foreground">list_available_agents</span> 選擇員工，再用 <span className="font-mono text-foreground">invoke_agent</span> 交辦工作。後續教學會續接同一個訓練 session。
           </p>
         </div>
         <div className="rounded-lg border border-border/70 bg-background/40 p-3">
           <div className="text-[11px] text-muted">已完成的對話反思</div>
           <div className="mt-1 text-lg font-semibold tabular-nums">{reflectionCount}</div>
           <p className="mt-1 line-clamp-3 text-[11px] leading-relaxed text-muted">
-            {latestReflection?.userSummary ?? latestReflection?.fdeSummary ?? '完成第一輪 Claude 試教後，這裡會顯示 Skill／規則優化摘要。'}
+            {latestReflection?.userSummary ?? latestReflection?.fdeSummary ?? '完成第一輪訓練後，這裡會顯示 Skill／規則優化摘要。'}
           </p>
         </div>
       </div>
@@ -469,7 +442,7 @@ function BuildActions({
   );
 }
 
-function BuildCard({ session, open, onToggle, isFde }: { session: BuilderSession; open: boolean; onToggle: () => void; isFde: boolean }) {
+function BuildCard({ session, open, onToggle }: { session: BuilderSession; open: boolean; onToggle: () => void }) {
   const harnessIteration = latestHarnessIteration(session);
   const harness = harnessIteration?.harness ?? null;
   const source = sourceOf(session);
@@ -544,19 +517,13 @@ function BuildCard({ session, open, onToggle, isFde }: { session: BuilderSession
             <div className="flex items-start gap-2 text-sm">
               <ShieldCheck className={cn('mt-0.5 h-4 w-4 shrink-0', session.status === 'ACTIVE' ? 'text-emerald-500' : 'text-amber-500')} />
               <div>
-                <div className="font-medium">{session.status === 'ACTIVE' ? '已通過治理並啟用' : '目前是受治理的建置草稿'}</div>
-                <div className="mt-0.5 text-xs leading-relaxed text-muted">{session.status === 'ACTIVE' ? '可匯出成標準資料夾結構的 ZIP；憑證與啟用排程不會被帶出。' : '顯示在此不代表已啟用；正式建立、技能確認與上線仍必須經 FDE 審核。'}</div>
+                <div className="font-medium">{session.status === 'ACTIVE' ? '目前版本已套用，可以使用' : '訓練內容持續同步中'}</div>
+                <div className="mt-0.5 text-xs leading-relaxed text-muted">{session.status === 'ACTIVE' ? '可由 Claude、Codex 或 Web 直接調度，也可繼續教學或匯出標準 Agent ZIP。' : '第一份完整內容同步後會自動可用，不需要另外啟用或送審。'}</div>
               </div>
             </div>
-            {isFde && (
-              <Link href="/proposals" className="btn-ghost border border-border px-3 py-1.5 text-xs">
-                <FileCheck2 className="h-3.5 w-3.5" />
-                完整審核紀錄
-              </Link>
-            )}
           </div>
 
-          <BuildActions session={session} harness={harness} isFde={isFde} />
+          <BuildActions session={session} harness={harness} />
 
           {harness ? <SnapshotDetails harness={harness} /> : (
             <div className="rounded-lg border border-dashed border-border p-5 text-sm text-muted">尚未完成第一份 Agent 草稿。</div>
@@ -633,7 +600,6 @@ function BuildCard({ session, open, onToggle, isFde }: { session: BuilderSession
 
 export default function AgentBuildsPage() {
   const { user } = useAuth();
-  const isFde = isFdeRole(user?.role);
   const queryClient = useQueryClient();
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('ALL');
   const [query, setQuery] = useState('');
@@ -667,7 +633,7 @@ export default function AgentBuildsPage() {
   }, [query, sessions, sourceFilter]);
 
   const externalCount = sessions.filter((session) => sourceOf(session) !== 'AIOS').length;
-  const awaitingFdeCount = sessions.filter((session) => session.status === 'AWAITING_FDE').length;
+  const legacyPendingCount = sessions.filter((session) => ['AWAITING_FDE', 'AWAITING_TEST_DATA', 'TESTING', 'PASSED', 'FAILED'].includes(session.status)).length;
   const activeCount = sessions.filter((session) => session.status === 'ACTIVE').length;
   const workingCount = sessions.filter((session) => session.status === 'TESTING'
     || ['QUEUED', 'ANALYZING', 'BUILDING'].includes(session.latestIteration?.status ?? '')).length;
@@ -689,7 +655,7 @@ export default function AgentBuildsPage() {
         <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-brand" />
         <div className="text-sm leading-relaxed">
           <span className="font-medium">對話會自動保存，Agent 與 Skill 會在背景持續更新。</span>
-          <span className="text-muted"> 你不需要在 Claude 裡反覆提醒系統記錄；試教與除錯留在 Claude MCP 對話，這裡只查看版本反思與完成 FDE 正式放行。</span>
+          <span className="text-muted"> 你不需要在 Claude 裡反覆提醒系統記錄，也不需要另外下「啟用」指令。</span>
         </div>
       </div>
 
@@ -697,8 +663,8 @@ export default function AgentBuildsPage() {
         <SummaryCard label="全部建置" value={sessions.length} icon={Bot} />
         <SummaryCard label="外部同步" value={externalCount} icon={Link2} />
         <SummaryCard label="背景處理中" value={workingCount} icon={RefreshCw} />
-        <SummaryCard label="等待 FDE" value={awaitingFdeCount} icon={ShieldCheck} />
-        <SummaryCard label="已啟用" value={activeCount} icon={CircleDot} />
+        <SummaryCard label="舊版待啟用" value={legacyPendingCount} icon={ShieldCheck} />
+        <SummaryCard label="可使用" value={activeCount} icon={CircleDot} />
       </section>
 
       <section className="card mb-5 space-y-3 p-4">
@@ -742,7 +708,6 @@ export default function AgentBuildsPage() {
               session={session}
               open={expandedId === session.id}
               onToggle={() => setExpandedId(expandedId === session.id ? null : session.id)}
-              isFde={isFde}
             />
           ))}
         </div>

@@ -330,7 +330,7 @@ export type BuilderHarnessSnapshot = {
     }>;
   }>;
   provenance?: {
-    source: 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CHATGPT' | 'CURSOR' | 'OTHER';
+    source: 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CODEX' | 'CHATGPT' | 'CURSOR' | 'OTHER';
     externalEventId: string;
     syncedAt: string;
   };
@@ -392,7 +392,7 @@ export type BuilderBrief = {
   testDataHint?: string;
   expectedResult?: string;
   requestedAgentName?: string;
-  externalSource?: 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CHATGPT' | 'CURSOR' | 'OTHER';
+  externalSource?: 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CODEX' | 'CHATGPT' | 'CURSOR' | 'OTHER';
   externalConversationId?: string;
   externalConversationTitle?: string;
   tags?: string[];
@@ -518,13 +518,13 @@ export const BUILDER_FIELD_LABELS: Record<string, string> = {
 export const BUILDER_STATUS_LABEL: Record<string, string> = {
   DISCOVERY: '持續學習中',
   PLAN_READY: '計畫已就緒',
-  AWAITING_FDE: '等待訓練師核准',
-  BUILDING: '建立草稿中',
-  AWAITING_TEST_DATA: '等待測試資料',
-  TESTING: '試跑中',
-  PASSED: '試跑通過',
-  FAILED: '試跑未通過',
-  ACTIVE: '已啟用',
+  AWAITING_FDE: '舊版待啟用',
+  BUILDING: '正在套用訓練',
+  AWAITING_TEST_DATA: '舊版待啟用',
+  TESTING: '舊版待啟用',
+  PASSED: '舊版待啟用',
+  FAILED: '舊版待啟用',
+  ACTIVE: '可使用',
 };
 
 export const BUILDER_DISCOVERY_ORDER: BuilderBriefFieldKey[] = [

@@ -1,12 +1,17 @@
 import { createHash } from 'node:crypto';
 import { appendFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { Prisma } from '@prisma/client';
 import { ulid } from 'ulid';
 import { config } from '../config.js';
+import { deepRedactSecrets } from '../memory/deepredact.js';
 import { prisma } from './db.js';
 
 /** Advisory lock key: serializes all audit chain writers to prevent forks. */
 const AUDIT_ADVISORY_LOCK_KEY = 4242424242;
+
+/** Match deepRedactSecrets depth cap so a cyclic payload cannot hang the writer. */
+const JSON_MAX_DEPTH = 32;
 
 export interface AuditRowLite {
   id: string;
@@ -20,19 +25,57 @@ export interface AuditRowLite {
   createdAt: Date;
 }
 
-/** Recursively sort object keys so JSON.stringify is deterministic. */
-function sortKeysDeep(value: unknown): unknown {
+function isOmittedObjectValue(value: unknown): boolean {
+  return value === undefined || typeof value === 'function' || typeof value === 'symbol';
+}
+
+/**
+ * Deterministic JSON value that matches Prisma JSON write semantics:
+ * - object keys sorted
+ * - object undefined / function / symbol omitted (Prisma/JSON.stringify drop the key;
+ *   converting them to null is what broke self-hash for
+ *   agent_builder.external_stop_messages_synced)
+ * - array holes and non-JSON values become null
+ * - Date → ISO string; non-finite number / bigint → null
+ */
+function normalizeAuditJson(value: unknown, depth = 0): unknown {
+  if (depth > JSON_MAX_DEPTH) return null;
   if (value === null || value === undefined) return null;
-  if (Array.isArray(value)) return value.map(sortKeysDeep);
-  if (typeof value === 'object' && value !== null && !(value instanceof Date)) {
+  if (typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'bigint') return null;
+  if (typeof value === 'function' || typeof value === 'symbol') return null;
+  if (value instanceof Date) {
+    const t = value.getTime();
+    return Number.isNaN(t) ? null : value.toISOString();
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeAuditJson(item, depth + 1));
+  }
+  if (typeof value === 'object') {
     const obj = value as Record<string, unknown>;
     const out: Record<string, unknown> = {};
     for (const k of Object.keys(obj).sort()) {
-      out[k] = sortKeysDeep(obj[k]);
+      const v = obj[k];
+      if (isOmittedObjectValue(v)) continue;
+      out[k] = normalizeAuditJson(v, depth + 1);
     }
     return out;
   }
-  return value;
+  return null;
+}
+
+/**
+ * Value used for BOTH hashing and Prisma write: already deep-redacted and
+ * JSON-normalized. Redactor is unconditional (AGENTS.md red line).
+ */
+function persistableAuditDetail(detail: unknown): unknown {
+  return normalizeAuditJson(deepRedactSecrets(normalizeAuditJson(detail)));
+}
+
+function toJsonField(value: unknown): Prisma.InputJsonValue | typeof Prisma.JsonNull {
+  if (value === null) return Prisma.JsonNull;
+  return value as Prisma.InputJsonValue;
 }
 
 function toIso(createdAt: Date | string): string {
@@ -65,7 +108,7 @@ export function computeAuditHash(row: {
     row.action,
     row.entity,
     row.entityId,
-    JSON.stringify(sortKeysDeep(row.detail ?? null)),
+    JSON.stringify(normalizeAuditJson(row.detail ?? null)),
     toIso(row.createdAt),
   ].join('\n');
   return createHash('sha256').update(payload, 'utf8').digest('hex');
@@ -129,7 +172,7 @@ export async function audit(
       const id = ulid();
       const createdAt = new Date();
       const prevHash = last?.hash ?? null;
-      const detailValue = detail === undefined ? undefined : (detail as object);
+      const detailValue = persistableAuditDetail(detail ?? null);
       const hash = computeAuditHash({
         prevHash,
         id,
@@ -137,7 +180,7 @@ export async function audit(
         action,
         entity,
         entityId,
-        detail: detailValue ?? null,
+        detail: detailValue,
         createdAt,
       });
       await tx.auditLog.create({
@@ -147,7 +190,7 @@ export async function audit(
           action,
           entity,
           entityId,
-          detail: detailValue,
+          detail: toJsonField(detailValue),
           prevHash,
           hash,
           createdAt,

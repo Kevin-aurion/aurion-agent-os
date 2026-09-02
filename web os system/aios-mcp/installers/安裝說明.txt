@@ -20,7 +20,7 @@ Windows：右鍵「Install-Aurion-AIOS.ps1」，選擇使用 PowerShell 執行
 4. 對話與背景 Agent／Skill 草稿會傳回中央 AIOS。
 5. 到 https://aurion-aios.lazyoffice.app/agent-builds 查看。
 6. 若要使用既有員工，直接說「請用我的 AIOS 員工……」；Claude 會列出自己的已啟用員工並在執行後追蹤結果。
-7. 若要求定期執行，Claude 只會送出排程提案；必須由 FDE 核准後才生效。
+7. 若要求定期執行，Claude 會用專用排程工具寫入 AIOS，並以後端回傳狀態確認是否生效。
 
 如果只使用 Claude Chat 而沒有 Claude Code CLI：
 1. 在 Claude 的 Connectors 設定加入上面的 Remote MCP URL，完成登入授權。

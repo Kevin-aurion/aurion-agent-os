@@ -343,13 +343,23 @@ export async function skillRoutes(app: FastifyInstance) {
   });
 
   // FDE-only. Applies CODEX gate for RECORDED / COMPUTER_CONTROL when pre-linked.
-  app.post('/api/skills/:id/confirm', { preHandler: requireTrainer }, async (req, reply) => {
+  app.post('/api/skills/:id/confirm', { preHandler: requireAuth }, async (req, reply) => {
     try {
       const { id } = idParamSchema.parse(req.params);
       const { confirmAwaitingSkill } = await import('../lib/skillgate.js');
-      // Direct confirm: skill must be AWAITING_USER_CONFIRM; CODEX gate on all links.
-      // (Pre-linked RECORDED drafts activate on confirm without a separate attach.)
-      const updated = await confirmAwaitingSkill(id, req.user!.sub);
+      const ownedLink = await prisma.agentSkill.findFirst({
+        where: {
+          skillId: id,
+          agent: { is: { createdBy: req.user!.sub, deletedAt: null } },
+        },
+        select: { agentId: true },
+      });
+      if (!ownedLink) throw errors.notFound('Skill not found');
+      // The employee owner is the release authority for its training Skills.
+      // The existing execution-environment safety gate remains enforced.
+      const updated = await confirmAwaitingSkill(id, req.user!.sub, {
+        requireLinkedAgentId: ownedLink.agentId,
+      });
       await audit(req.user!.sub, 'skill.confirm', 'Skill', id);
       return ok(updated);
     } catch (e) {

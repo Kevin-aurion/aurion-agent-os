@@ -156,6 +156,8 @@ export interface RunClaudeOpts {
   fullPermissions?: boolean; // --dangerously-skip-permissions
   disallowedTools?: string[]; // hard tool bans, e.g. ['WebSearch','WebFetch'] (agent restrictions)
   allowedTools?: string[]; // pre-approved tools, e.g. verifier read-only web access
+  /** Pass `--tools ""` so the subprocess has no callable tools at all. */
+  disableAllTools?: boolean;
   /** Opt-in L6 write sandbox profile path; forwarded to execCli. */
   sandboxProfilePath?: string;
   signal?: AbortSignal;
@@ -173,6 +175,7 @@ export function buildClaudeArgs(opts: RunClaudeOpts): string[] {
   if (opts.systemAppend) args.push('--append-system-prompt', opts.systemAppend);
   if (opts.mcpConfig) args.push('--mcp-config', opts.mcpConfig);
   if (opts.fullPermissions) args.push('--dangerously-skip-permissions');
+  if (opts.disableAllTools) args.push('--tools', '');
   if (opts.disallowedTools?.length) args.push('--disallowedTools', opts.disallowedTools.join(','));
   if (opts.allowedTools?.length) args.push('--allowedTools', opts.allowedTools.join(','));
   return args;

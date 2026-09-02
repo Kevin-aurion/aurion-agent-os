@@ -16,6 +16,7 @@
 ## 關鍵規則
 - **執行引擎 ≠ 驗證引擎**：驗證取員工指定的 `engineVerify`，否則自動取執行引擎的「對面」。
 - **限制於引擎層強制**：`webSearch=false` → 停用 WebSearch/WebFetch；`computerUse=false` → COMPUTER_CONTROL 硬性拒絕。
+- **Builder 正式釋出閘**：`runAgent()` 在 HITL、filesystem materialize、成本與 CLI 之前呼叫 `assertBuilderAgentReleased()`。曾為 `builtAgentId` 的 Agent 沒有 `agent_builder.finalized` 稽核證據就拒絕（不建 Run）。`builderTestSessionId` 隔離測試略過此閘，後續 `compileManifest` 仍驗證 session／actor／draft。
 - 驗證器在啟用網路搜尋時，被授予 `allowedTools:['WebFetch','WebSearch']` 以驗證來源。
 - 每步 execute→verify 最多 `maxRounds` 回合，超過即停並回報。
 

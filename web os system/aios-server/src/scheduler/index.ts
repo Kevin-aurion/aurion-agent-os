@@ -12,6 +12,7 @@ import { config } from '../config.js';
 import { prisma } from '../lib/db.js';
 import { hub } from '../ws/hub.js';
 import { audit } from '../lib/audit.js';
+import { runWorkflow } from '../workflow/runner.js';
 
 interface WorkflowRunJobData {
   kind?: 'workflow';
@@ -234,17 +235,8 @@ async function runWorkflowRunJob(job: Job<RunJobData>): Promise<unknown> {
   }
 
   try {
-    const runnerPath = '../workflow/runner.js';
-    const mod: any = await import(runnerPath);
-    if (typeof mod.runWorkflow !== 'function') {
-      throw new Error('workflow/runner.js does not export runWorkflow');
-    }
-    return await mod.runWorkflow(workflowId, input ?? {}, triggeredBy);
+    return await runWorkflow(workflowId, (input ?? {}) as Record<string, unknown>, triggeredBy);
   } catch (e: any) {
-    if (e?.code === 'ERR_MODULE_NOT_FOUND') {
-      console.warn('[scheduler] workflow/runner.js not present yet — skipping run', workflowId);
-      return null;
-    }
     await audit(null, 'workflow.run.failed', 'Workflow', workflowId, { error: e instanceof Error ? e.message : String(e) });
     throw e;
   }

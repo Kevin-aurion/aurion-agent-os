@@ -11,6 +11,7 @@ import { errors } from '../lib/http.js';
 import { hub } from '../ws/hub.js';
 import { durableHighRiskRejected } from '../lib/approval.js';
 import type { RunOutcome } from '../engine/index.js';
+import { prepareWorkflowInput } from './input.js';
 
 const VALID_STATUSES = new Set(['RUNNING', 'SUCCEEDED', 'FAILED', 'AWAITING_REVIEW', 'CANCELLED']);
 
@@ -48,6 +49,17 @@ export async function runWorkflow(
   }
   if (workflow.steps.length === 0) throw errors.badRequest(`Workflow ${workflowId} has no steps configured`);
 
+  const prepared = prepareWorkflowInput(input, workflow.inputSchema, workflow.steps);
+  if (prepared.issues.length > 0) {
+    throw errors.badRequest('Workflow input does not match its required schema', {
+      workflowId: workflow.id,
+      workflowName: workflow.name,
+      issues: prepared.issues,
+      expectedInputSchema: prepared.schema,
+    });
+  }
+  const effectiveInput = prepared.input;
+
   hub.publish('workflow.triggered', {
     workflowId: workflow.id,
     agentId: workflow.agentId,
@@ -79,7 +91,7 @@ export async function runWorkflow(
       agentId: workflow.agentId,
       workflowId: workflow.id,
       triggeredBy,
-      input,
+      input: effectiveInput,
       riskTier: agent?.riskTier ?? 'medium',
     });
     outcome = await getDurableRunResult(rid);
@@ -89,7 +101,7 @@ export async function runWorkflow(
       ...(runId ? { runId } : {}),
       agentId: workflow.agentId,
       workflowId: workflow.id,
-      input,
+      input: effectiveInput,
       triggeredBy,
       signal,
     });

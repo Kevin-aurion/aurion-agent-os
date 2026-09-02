@@ -1,6 +1,6 @@
 // External Agent Builder tools for Claude, ChatGPT, Codex and Cursor.
-// These tools synchronize inert drafts, offer isolated no-tools Shadow Chat,
-// and submit to FDE. They never approve, confirm Skills or activate production.
+// These tools synchronize one durable training session and let its owner
+// activate the latest READY snapshot as a callable AIOS employee.
 import { open, realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,7 +10,7 @@ import type { HttpClient } from '../http/client.js';
 import type { AgentBuildSession, ExternalBuilderSource } from '../types.js';
 import { runTool } from './util.js';
 
-const sourceSchema = z.enum(['CLAUDE_DESKTOP', 'CLAUDE_CODE', 'CHATGPT', 'CURSOR', 'OTHER']);
+const sourceSchema = z.enum(['CLAUDE_DESKTOP', 'CLAUDE_CODE', 'CODEX', 'CHATGPT', 'CURSOR', 'OTHER']);
 
 function resolvedSource(source?: ExternalBuilderSource): ExternalBuilderSource {
   if (source) return source;
@@ -79,6 +79,8 @@ const artifactSchema = z.object({
   identity: z.object({
     name: z.string().min(1).max(120),
     purpose: z.string().min(1).max(1_500),
+    department: z.string().min(1).max(80).optional()
+      .describe('Business department or function, for example 專案管理、財務、營運. Use 未分類 only when genuinely unclear.'),
     workingStyle: z.array(z.string().max(800)).max(20).optional(),
   }).strict(),
   agentMarkdown: z.string().max(60_000).optional().describe('Full agent identity/instructions Markdown draft.'),
@@ -97,7 +99,7 @@ const artifactSchema = z.object({
   tools: z.array(z.object({
     name: z.string().min(1).max(180),
     purpose: z.string().max(800).optional(),
-    status: z.enum(['AVAILABLE', 'NEEDS_FDE', 'NOT_NEEDED']).optional(),
+    status: z.enum(['AVAILABLE', 'NEEDS_SETUP', 'NEEDS_FDE', 'NOT_NEEDED']).optional(),
   }).strict()).max(30).optional(),
   policies: z.object({
     allowed: z.array(z.string().max(800)).max(30).optional(),
@@ -164,46 +166,96 @@ const DESTRUCTIVE_DRAFT = {
 
 function noteFor(session: AgentBuildSession): string {
   if (session.status === 'AWAITING_FDE') {
-    return 'The draft is waiting for an explicit FDE decision. Do not claim it is built or active.';
+    return 'This is a legacy pending build. Synchronize one complete snapshot to migrate and make it callable in place.';
   }
   if (session.status === 'AWAITING_TEST_DATA') {
-    return 'FDE created inert Agent/Skill drafts. Submit test data, then run the real test; nothing is active yet.';
+    return 'This is a legacy materialized build. Synchronize one complete snapshot to migrate it; no separate test is required.';
   }
   if (session.status === 'PASSED') {
-    return 'The test passed, but only FDE finalization can confirm skills and activate a new agent.';
+    return 'This is a legacy passed build. Synchronize one complete snapshot to make the same employee callable.';
   }
   if (session.status === 'ACTIVE') {
-    return 'The latest approved version is active. Further training must create a new draft and review cycle.';
+    return 'The latest trained version is active and callable. Further training continues in this same build session.';
   }
-  return 'Continue the adaptive interview and synchronize each turn. Import a full artifact whenever the draft meaningfully changes.';
+  return 'Continue training in this session. The first complete synchronized snapshot becomes callable automatically.';
 }
 
-function testAgentName(session: AgentBuildSession): string {
-  const harness = session.latestIteration?.harness;
-  const identity = harness && typeof harness === 'object' && !Array.isArray(harness)
-    ? (harness as Record<string, unknown>).identity
-    : null;
-  if (identity && typeof identity === 'object' && !Array.isArray(identity)) {
-    const name = (identity as Record<string, unknown>).name;
-    if (typeof name === 'string' && name.trim()) return name.trim();
+export function readinessFor(
+  session: AgentBuildSession,
+  agentName: string,
+  becameReady: boolean,
+): {
+  readyForUse: boolean;
+  becameReady: boolean;
+  userNotice: string;
+} {
+  const name = agentName.trim() || '這位 AI 員工';
+  const agentId = session.agentId ?? session.builtAgentId ?? session.targetAgentId;
+  if (session.status !== 'ACTIVE' || !agentId) {
+    return {
+      readyForUse: false,
+      becameReady: false,
+      userNotice: `「${name}」還沒有完成建立，請繼續訓練；等 AIOS 回傳可以使用後再交付工作。`,
+    };
   }
-  const planName = session.plan?.proposedAgentName;
-  if (typeof planName === 'string' && planName.trim()) return planName.trim();
-  const objective = session.brief?.objective;
-  if (typeof objective === 'string' && objective.trim()) return objective.trim().slice(0, 120);
-  return `AIOS 測試員工 ${session.id.slice(-6)}`;
-}
-
-function testableAgent(session: AgentBuildSession) {
   return {
-    sessionId: session.id,
-    name: testAgentName(session),
+    readyForUse: true,
+    becameReady,
+    userNotice: becameReady
+      ? `「${name}」已經建立完成，現在就可以開始使用。你可以直接說：「請叫 ${name} 幫我處理……」。`
+      : `「${name}」的最新訓練內容已更新完成，現在可以繼續使用。`,
+  };
+}
+
+function summarizeIteration(iteration: unknown): Record<string, unknown> | null {
+  if (!iteration || typeof iteration !== 'object' || Array.isArray(iteration)) return null;
+  const value = iteration as Record<string, unknown>;
+  return {
+    id: value.id,
+    sequence: value.sequence,
+    triggerKind: value.triggerKind,
+    status: value.status,
+    userSummary: value.userSummary,
+    error: value.error,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+  };
+}
+
+/**
+ * Builder writes can contain the complete transcript and every historical
+ * Harness snapshot. Returning that payload after each write makes MCP clients
+ * repeat the entire training history in their context. Keep the authoritative
+ * copy in AIOS and return only the fields needed to continue the conversation.
+ */
+export function summarizeAgentBuildSession(session: AgentBuildSession): Record<string, unknown> {
+  return {
+    id: session.id,
     status: session.status,
-    iterationId: session.latestIteration?.id ?? null,
-    iterationSequence: session.latestIteration?.sequence ?? null,
+    agentId: session.agentId ?? null,
+    targetAgentId: session.targetAgentId,
+    builtAgentId: session.builtAgentId,
+    strategy: session.strategy,
+    draftSkillIds: session.draftSkillIds,
+    hasTestData: session.hasTestData,
+    lastRunId: session.lastRunId,
+    transcriptCount: session.transcript.length,
+    iterationCount: session.iterations.length,
+    latestIteration: summarizeIteration(session.latestIteration),
+    createdAt: session.createdAt,
     updatedAt: session.updatedAt,
-    mode: 'SAFE_SHADOW_CHAT' as const,
-    restrictions: ['no_tools', 'no_network', 'no_shell', 'no_computer_use', 'no_external_writes'],
+  };
+}
+
+export function summarizeAgentBuildForResume(session: AgentBuildSession): Record<string, unknown> {
+  return {
+    ...summarizeAgentBuildSession(session),
+    // Preserve the established session.transcript / session.iterations /
+    // session.latestIteration shape, but include only the context required to
+    // resume from the latest draft instead of replaying the whole ledger.
+    transcript: session.transcript.slice(-6),
+    iterations: session.latestIteration ? [session.latestIteration] : [],
+    latestIteration: session.latestIteration,
   };
 }
 
@@ -260,7 +312,7 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
       title: 'Start an AIOS agent build',
       annotations: DRAFT_WRITE_ANNOTATIONS,
       description:
-        'Start or resume an AIOS shadow build from a user request made in ChatGPT, Claude, Codex or Cursor. This records the exact initial request and creates an inert, append-only build session. It never creates or activates a live Agent. Keep the returned session.id and use it on every later sync call.',
+        'Start or resume one durable AIOS training session from a user request made in ChatGPT, Claude, Codex or Cursor. This records the initial request; providing an existing agentId always resumes that employee’s same backend session. The start call alone has no complete employee snapshot yet; the first complete snapshot becomes callable automatically. Keep the returned session.id for later sync calls.',
       inputSchema: {
         initialRequest: z.string().min(1).max(12_000),
         source: sourceSchema.optional(),
@@ -287,7 +339,8 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
           },
         );
         return {
-          ...result,
+          session: summarizeAgentBuildSession(result.session),
+          deduplicated: result.deduplicated,
           note: noteFor(result.session),
           next: 'Ask one contextual, high-information question. Before showing it to the user, call sync_agent_build_turn with the exact user and assistant text.',
         };
@@ -321,7 +374,12 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
         }>(`/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/external-turns`, {
           body: { source: resolvedSource(source), externalEventId, turns, summary },
         });
-        return { ...result, note: noteFor(result.session) };
+        return {
+          session: summarizeAgentBuildSession(result.session),
+          deduplicated: result.deduplicated,
+          iteration: summarizeIteration(result.iteration),
+          note: noteFor(result.session),
+        };
       }),
   );
 
@@ -331,7 +389,7 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
       title: 'Sync a complete AIOS agent draft',
       annotations: DRAFT_WRITE_ANNOTATIONS,
       description:
-        'Synchronize the complete current draft produced in ChatGPT, Claude, Codex or Cursor: identity/Agent Markdown, SKILL.md bodies, memory documents, tools, approval policies, workflows and tests. Send a full snapshot, not only a patch. The server redacts secrets, rejects unsafe memory paths, downgrades claimed tool availability to NEEDS_FDE, and stores an inert version for review.',
+        'Synchronize the complete current training snapshot produced in ChatGPT, Claude, Codex or Cursor: identity/Agent Markdown, SKILL.md bodies, memory documents, tools, policies and workflows. Send a full snapshot, not only a patch. A successful snapshot immediately creates or updates the same callable employee. The server redacts secrets, rejects unsafe memory paths and marks unverified tool connections as NEEDS_SETUP.',
       inputSchema: {
         sessionId: z.string().min(1),
         source: sourceSchema.optional(),
@@ -345,13 +403,20 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
           session: AgentBuildSession;
           iteration: unknown;
           deduplicated: boolean;
+          becameCallable: boolean;
         }>(`/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/external-artifact`, {
           body: { source: resolvedSource(source), externalEventId, artifact },
         });
+        const readiness = readinessFor(result.session, artifact.identity.name, result.becameCallable);
         return {
-          ...result,
+          session: summarizeAgentBuildSession(result.session),
+          iteration: summarizeIteration(result.iteration),
+          deduplicated: result.deduplicated,
           note: noteFor(result.session),
-          warning: 'This is a shadow draft. Do not tell the user that the Agent or its skills are active.',
+          ...readiness,
+          callability: readiness.readyForUse
+            ? 'The latest complete snapshot is active and callable; later training will update this same employee.'
+            : 'The snapshot is not callable yet. Continue only from the returned real session status.',
         };
       }),
   );
@@ -361,7 +426,7 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
     {
       title: 'Save a complete Agent Builder turn and draft',
       description:
-        'Preferred synchronization tool for ChatGPT and other clients without lifecycle hooks. It retry-safely stores the exact paired conversation turn and the complete current Agent/Skill/Memory/Workflow/Test shadow draft, then lets AIOS continue building asynchronously. It never approves, confirms or activates anything.',
+        'Preferred synchronization tool for ChatGPT and other clients without lifecycle hooks. It retry-safely stores the exact paired conversation turn and complete current Agent/Skill/Memory/Workflow/Test snapshot. A successful complete snapshot immediately creates or updates the same callable employee without a separate activation command.',
       annotations: DRAFT_WRITE_ANNOTATIONS,
       inputSchema: {
         sessionId: z.string().min(1),
@@ -381,14 +446,31 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
         const result = await client.post<{
           session: AgentBuildSession;
           turn: { deduplicated: boolean; iteration: unknown };
-          artifact: { deduplicated: boolean; iteration: unknown };
+          artifact: { deduplicated: boolean; iteration: unknown; becameCallable: boolean };
         }>(`/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/external-snapshot`, {
           body: { source, externalEventId, turns, summary, artifact },
         });
+        const readiness = readinessFor(
+          result.session,
+          artifact.identity.name,
+          result.artifact.becameCallable,
+        );
         return {
-          ...result,
+          session: summarizeAgentBuildSession(result.session),
+          turn: {
+            deduplicated: result.turn.deduplicated,
+            iteration: summarizeIteration(result.turn.iteration),
+          },
+          artifact: {
+            deduplicated: result.artifact.deduplicated,
+            iteration: summarizeIteration(result.artifact.iteration),
+            becameCallable: result.artifact.becameCallable,
+          },
           note: noteFor(result.session),
-          warning: 'This is a shadow draft. Do not tell the user that the Agent or its skills are active.',
+          ...readiness,
+          callability: readiness.readyForUse
+            ? 'The latest complete snapshot is active and callable; later training will update this same employee.'
+            : 'The snapshot is not callable yet. Continue only from the returned real session status.',
         };
       }),
   );
@@ -435,7 +517,9 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
           status: string;
         }>(`/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/files`, form);
         return {
-          ...result,
+          session: summarizeAgentBuildSession(result.session),
+          assistantMessage: result.assistantMessage,
+          status: result.status,
           uploaded: { filename: safeName, bytes: bytes.length, mimeType: mimeType || 'application/octet-stream' },
           note: noteFor(result.session),
         };
@@ -448,7 +532,7 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
       title: 'Synchronize AIOS when Claude Code stops',
       annotations: DRAFT_WRITE_ANNOTATIONS,
       description:
-        'Claude Code Stop-hook tool. It mirrors the final assistant message, catches a missed Agent-building user prompt, and lets AIOS update its shadow Agent/Skill draft asynchronously from the transcript. It does not block Stop and never submits, approves, confirms, tests or activates an Agent.',
+        'Claude Code Stop-hook tool. It mirrors the final assistant message, catches a missed Agent-building user prompt, and lets AIOS update the same durable Agent training session asynchronously. It does not activate an Agent by itself.',
       inputSchema: {
         externalConversationId: z.string().min(1).max(160).optional()
           .describe('Claude Code session id. The configured Stop hook supplies ${session_id}.'),
@@ -485,94 +569,20 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
       title: 'Get an AIOS agent build',
       annotations: READ_ONLY_ANNOTATIONS,
       description:
-        'Read the durable synchronized transcript, latest shadow Harness, FDE state, test state and ids for one owned AIOS build session.',
-      inputSchema: { sessionId: z.string().min(1) },
+        'Resume one owned AIOS build. By default this returns the latest complete training snapshot plus only the six most recent conversation entries; set includeHistory only for explicit audit/debug work.',
+      inputSchema: {
+        sessionId: z.string().min(1),
+        includeHistory: z.boolean().default(false),
+      },
     },
-    async ({ sessionId }) => runTool(async () => {
+    async ({ sessionId, includeHistory }) => runTool(async () => {
       const session = await client.get<AgentBuildSession>(
         `/api/agent-builder/sessions/${encodeURIComponent(sessionId)}`,
       );
-      return { session, note: noteFor(session) };
-    }),
-  );
-
-  server.registerTool(
-    'chat_with_agent_build',
-    {
-      title: 'Coach a Shadow AIOS employee in this conversation',
-      annotations: DRAFT_WRITE_ANNOTATIONS,
-      description:
-        'Send one realistic End User work message to the latest READY Shadow Agent and return its isolated reply in this Claude/ChatGPT/Codex conversation. Use this for training and debugging before FDE review. The preview has no tools, network, shell, Computer Use or external-write authority. AIOS stores the redacted pair and queues a reflection that may revise only the Shadow Skill/Rules; it never edits or activates production.',
-      inputSchema: {
-        sessionId: z.string().min(1),
-        message: z.string().min(1).max(24_000)
-          .describe('The exact realistic End User message or work input to test against the Shadow Agent.'),
-      },
-    },
-    async ({ sessionId, message }) => runTool(async () => {
-      const result = await client.post<{
-        sessionId: string;
-        iterationId: string;
-        reply: string;
-        reflectionQueued: boolean;
-      }>(`/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/shadow-chat`, {
-        body: { message },
-      });
       return {
-        ...result,
-        note: 'Show reply exactly as the Shadow Agent test result, ask the user for one concrete correction, and never claim the draft is active.',
-      };
-    }),
-  );
-
-  server.registerTool(
-    'list_testable_agents',
-    {
-      title: 'List AIOS employees available for immediate test chat',
-      annotations: READ_ONLY_ANNOTATIONS,
-      description:
-        'List the signed-in account\'s READY Shadow Agents that can be talked to immediately without FDE approval. These are isolated conversational previews only: no tools, network, Shell, Computer Use, schedules or external writes. Use this when the user wants to try, use or talk to an employee before formal release.',
-      inputSchema: {},
-    },
-    async () => runTool(async () => {
-      const sessions = await client.get<AgentBuildSession[]>('/api/agent-builder/sessions');
-      return sessions
-        .filter((session) =>
-          ['DISCOVERY', 'PLAN_READY', 'ACTIVE'].includes(session.status)
-          && session.latestIteration?.status === 'READY'
-          && session.latestIteration.harness,
-        )
-        .map(testableAgent);
-    }),
-  );
-
-  server.registerTool(
-    'chat_with_test_agent',
-    {
-      title: 'Talk to an AIOS test employee without FDE approval',
-      annotations: DRAFT_WRITE_ANNOTATIONS,
-      description:
-        'Talk directly to one READY Shadow Agent before FDE approval. Returns the isolated Agent reply in this Claude/ChatGPT/Codex conversation and records redacted feedback for the next Shadow revision. This is not a production run and cannot call tools, browse, use Computer Use, send messages, write external systems or create schedules.',
-      inputSchema: {
-        sessionId: z.string().min(1).describe('The sessionId returned by list_testable_agents.'),
-        message: z.string().min(1).max(24_000)
-          .describe('The exact realistic End User request to send to the test Agent.'),
-      },
-    },
-    async ({ sessionId, message }) => runTool(async () => {
-      const result = await client.post<{
-        sessionId: string;
-        iterationId: string;
-        reply: string;
-        reflectionQueued: boolean;
-      }>(`/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/shadow-chat`, {
-        body: { message },
-      });
-      return {
-        ...result,
-        mode: 'SAFE_SHADOW_CHAT',
-        productionApproved: false,
-        note: 'Present this as the test Agent\'s real isolated reply. It needed no FDE approval, but it did not perform external actions.',
+        session: includeHistory ? session : summarizeAgentBuildForResume(session),
+        historyIncluded: includeHistory,
+        note: noteFor(session),
       };
     }),
   );
@@ -586,7 +596,10 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
         'List the signed-in user’s recent AIOS Agent Builder sessions for resume or status checks. Each item includes agentId when the build is bound to an employee; pass that agentId to start_agent_build to resume the same conversation instead of opening a new one.',
       inputSchema: {},
     },
-    async () => runTool(() => client.get<AgentBuildSession[]>('/api/agent-builder/sessions')),
+    async () => runTool(async () => {
+      const sessions = await client.get<AgentBuildSession[]>('/api/agent-builder/sessions');
+      return sessions.map(summarizeAgentBuildSession);
+    }),
   );
 
   server.registerTool(
@@ -595,7 +608,7 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
       title: 'Abandon an unsubmitted AIOS build draft',
       annotations: DESTRUCTIVE_DRAFT,
       description:
-        '捨棄一個尚未送審的建置草稿（DISCOVERY/PLAN_READY）。呼叫前先用 list_agent_builds 確認並向使用者取得明確同意。這是軟刪：紀錄保留、不再出現在清單。已送審的建置無法用此工具捨棄。',
+        '捨棄一個尚未產生 Agent／Skill 的訓練草稿（DISCOVERY/PLAN_READY）。呼叫前先用 list_agent_builds 確認並向使用者取得明確同意。這是軟刪：紀錄保留、不再出現在清單。已產生 Agent／Skill 的建置無法用此工具捨棄。',
       inputSchema: {
         sessionId: z.string().min(1).describe('The sessionId returned by list_agent_builds.'),
         confirmSessionId: z.string().min(1).describe(
@@ -604,77 +617,36 @@ export function registerAgentBuilderTools(server: McpServer, client: HttpClient)
       },
     },
     async ({ sessionId, confirmSessionId }) =>
-      runTool(() =>
-        client.post<AgentBuildSession>(
+      runTool(async () => {
+        const session = await client.post<AgentBuildSession>(
           `/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/abandon`,
           { body: { confirmSessionId } },
-        ),
-      ),
+        );
+        return { session: summarizeAgentBuildSession(session), note: noteFor(session) };
+      }),
   );
 
   server.registerTool(
-    'submit_agent_build_for_fde_review',
+    'activate_agent_build',
     {
-      title: 'Submit an agent draft for FDE review',
+      title: 'Activate the trained AIOS employee',
       annotations: DRAFT_WRITE_ANNOTATIONS,
       description:
-        'Use only after the user explicitly confirms the current complete draft should be reviewed. This always stops at AWAITING_FDE, even if MCP authenticated with OWNER credentials. It does not approve, build, confirm, test or activate anything.',
+        'Compatibility and recovery tool for legacy pending builds. Normal training does not need this call because every successfully synchronized complete snapshot is immediately callable. It preserves the same build session and existing Agent id.',
       inputSchema: {
         sessionId: z.string().min(1),
-        strategy: z.enum(['create', 'reuse']).default('create'),
-        targetAgentId: z.string().min(1).optional(),
       },
-    },
-    async ({ sessionId, strategy, targetAgentId }) => runTool(async () => {
-      const session = await client.post<AgentBuildSession>(
-        `/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/submit-review`,
-        { body: { strategy, targetAgentId } },
-      );
-      return {
-        session,
-        note: noteFor(session),
-        requiredHumanAction: 'An FDE must review and click approve in AIOS 管理中心 → 提案審核.',
-      };
-    }),
-  );
-
-  server.registerTool(
-    'submit_agent_build_test_data',
-    {
-      title: 'Submit test data for an approved draft',
-      annotations: DRAFT_WRITE_ANNOTATIONS,
-      description:
-        'After FDE has created the inert draft and status is AWAITING_TEST_DATA, submit a concrete fixture and expected outcome. This stores redacted test evidence but does not run or pass the test.',
-      inputSchema: {
-        sessionId: z.string().min(1),
-        data: z.unknown(),
-        expected: z.unknown(),
-      },
-    },
-    async ({ sessionId, data, expected }) => runTool(async () => {
-      const result = await client.post<{ session: AgentBuildSession }>(
-        `/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/test-data`,
-        { body: { data, expected } },
-      );
-      return { ...result, note: noteFor(result.session) };
-    }),
-  );
-
-  server.registerTool(
-    'run_agent_build_test',
-    {
-      title: 'Run the real AIOS build test',
-      annotations: DRAFT_WRITE_ANNOTATIONS,
-      description:
-        'Start the real asynchronous AIOS test after test data was submitted. Poll get_agent_build until PASSED or FAILED. A pass still requires separate FDE finalization; this tool cannot finalize.',
-      inputSchema: { sessionId: z.string().min(1) },
     },
     async ({ sessionId }) => runTool(async () => {
-      const result = await client.post<{ session: AgentBuildSession }>(
-        `/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/test`,
+      const session = await client.post<AgentBuildSession>(
+        `/api/agent-builder/sessions/${encodeURIComponent(sessionId)}/activate`,
         { body: {} },
       );
-      return { ...result, note: noteFor(result.session) };
+      return {
+        session: summarizeAgentBuildSession(session),
+        note: noteFor(session),
+        agentId: session.agentId ?? session.builtAgentId ?? session.targetAgentId,
+      };
     }),
   );
 }

@@ -45,6 +45,7 @@ DerivedData/
 
 # Local tooling / backups
 /.claude/
+/.wrangler/
 /web os system/backups/
 
 # Local orchestration scratchpads (project test specs live under aios-server/.scratch)

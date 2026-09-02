@@ -1,20 +1,22 @@
 // Agent Builder domain: durable discovery interview → capability plan →
-// authorize (create/reuse draft) → real runAgent test → FDE finalize.
+// materialize (create/reuse) → direct activation.
 //
 // Hard rules:
 // - Discovery is deterministic (no CLI wait); works offline.
-// - MEMBER may create its own least-privilege working Agent container; Skill,
-//   Workflow, MCP and elevated capability changes remain governed/inert.
-// - New skills stay AWAITING_USER_CONFIRM until FDE finalize after PASSED test.
+// - Every authenticated owner may turn the latest READY training snapshot into
+//   a callable Agent. Builder release has no FDE or mandatory test gate.
+// - Runtime restrictions, cost gates and high-risk action approval remain in
+//   the execution engine; this simplification applies only to training/release.
 // - Every string leaf is deep-redacted before DB write.
-// - Session ownership: foreign users get 404 (no existence leak); FDE may inspect.
-import { mkdir, unlink, writeFile } from 'node:fs/promises';
+// - Session ownership: foreign users get 404 (no existence leak).
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ulid } from 'ulid';
-import { Prisma, type AgentBuildIteration, type AgentBuildSession, type AgentBuildSessionStatus, type UserRole } from '@prisma/client';
+import { Prisma, type Agent, type AgentBuildIteration, type AgentBuildSession, type AgentBuildSessionStatus, type SkillReview, type UserRole } from '@prisma/client';
 import { prisma } from './db.js';
 import { errors } from './http.js';
 import { audit } from './audit.js';
+import { excludeUnreleasedBuilderAgentsWhere } from './builderrelease.js';
 import { slugify } from './slug.js';
 import { safeJoin } from './safepath.js';
 import { paths } from '../config.js';
@@ -58,8 +60,6 @@ import {
   deriveBuilderTestProgress,
   type BuilderTestProgressDto,
 } from './buildertestprogress.js';
-import { createBuilderWorkingAgent } from './builderworkingagent.js';
-import { hub } from '../ws/hub.js';
 
 // ── Types (business-language DTOs — no engines/manifests/MCP protocol) ───────
 
@@ -68,7 +68,7 @@ export type TranscriptEntry = {
   content: string;
   at: string;
   /** Present when the turn was synchronized by an external MCP client. */
-  source?: 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CHATGPT' | 'CURSOR' | 'OTHER';
+  source?: 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CODEX' | 'CHATGPT' | 'CURSOR' | 'OTHER';
   /** Client-supplied idempotency key; never treated as authorization. */
   externalEventId?: string;
 };
@@ -104,7 +104,7 @@ export type Brief = {
   /** Domain tags inferred from the initial prompt (finance, email, drive, …). */
   tags?: string[];
   /** External Builder provenance used to resume the same desktop conversation. */
-  externalSource?: 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CHATGPT' | 'CURSOR' | 'OTHER';
+  externalSource?: 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CODEX' | 'CHATGPT' | 'CURSOR' | 'OTHER';
   externalConversationId?: string;
   externalConversationTitle?: string;
   /** Files explicitly uploaded from the end-user Builder UI. Content is redacted before persistence. */
@@ -175,6 +175,8 @@ export type PlanDto = {
   proposedSkillName: string;
   /** Plain-language least-privilege note (no engine names). */
   privilegeNote: string;
+  /** Latest READY evolution already applied; makes external activation retry-safe. */
+  activatedIterationId?: string;
 };
 
 export type TestResultDto = {
@@ -304,7 +306,7 @@ export async function ensureBuilderAdvisor(): Promise<{
     orderBy: { createdAt: 'asc' },
     select: { id: true },
   });
-  if (!creator) throw errors.notConfigured('找不到可建立訪談顧問的 FDE 帳號');
+  if (!creator) throw errors.notConfigured('找不到可建立訪談顧問的系統帳號');
   const created = await prisma.agent.create({
     data: {
       id: ulid(),
@@ -696,7 +698,7 @@ export function buildContextualInterviewTurn(
           ? '它是否只讀取公開網頁並產出內容，還需要登入網站、下載檔案或主動發送結果？'
           : '除了讀取與產出草稿外，是否需要寄送、寫入系統或操作電腦？哪些動作一定要先得到你確認？',
         suggestions: research
-          ? ['只讀公開網站並產出摘要，不登入、不發送', '可以下載公開附件，但任何發送都先問我', '先維持最小權限，之後再由 FDE 開通']
+          ? ['只讀公開網站並產出摘要，不登入、不發送', '可以下載公開附件，但任何發送都先問我', '先維持最小權限，之後再明確開通需要的工具']
           : ['先維持只讀與草稿，任何寫入都要確認', '允許寫入指定位置，但寄送仍需確認', '所有不可逆操作都交給人工執行'],
         sourceAdvice,
         generatedBy: 'questionnaire',
@@ -1137,8 +1139,9 @@ export async function buildCapabilityPlan(brief: Brief, userId: string): Promise
     .join(' ')
     .toLowerCase();
 
+  const unreleasedWhere = await excludeUnreleasedBuilderAgentsWhere();
   const agents = await prisma.agent.findMany({
-    where: { deletedAt: null, status: { not: 'ARCHIVED' } },
+    where: { deletedAt: null, status: { not: 'ARCHIVED' }, ...unreleasedWhere },
     select: {
       id: true,
       name: true,
@@ -1278,7 +1281,7 @@ export async function buildCapabilityPlan(brief: Brief, userId: string): Promise
       available,
       actionNeeded:
         available
-          ? '已連線；正式寫入仍需 FDE 另行授權（預設只做草稿）。'
+          ? '已連線；正式寫入仍受 Agent 的工具權限與高風險動作核准限制。'
           : '請在設定中連線雲端硬碟；目前測試可用手動資料代替。',
     });
   }
@@ -1286,7 +1289,7 @@ export async function buildCapabilityPlan(brief: Brief, userId: string): Promise
     connections.push({
       label: '公開網路搜尋',
       available: false,
-      actionNeeded: '這項任務需要網路搜尋；建立與試跑仍採隔離資料，正式開放搜尋需由 FDE 明確核准範圍。',
+      actionNeeded: '這項任務需要網路搜尋；請在員工限制設定中明確開放所需範圍。',
     });
   }
 
@@ -1297,15 +1300,15 @@ export async function buildCapabilityPlan(brief: Brief, userId: string): Promise
       label: `外部工具：${m.name}`,
       available: healthy,
       actionNeeded: healthy
-        ? '已啟用且健康；不會自動掛給這位員工，需 FDE 另行授權。'
-        : '已註冊但健康狀態異常，正式環境使用前請 FDE 檢查。',
+        ? '已啟用且健康；訓練不會自動擴張工具 allowlist。'
+        : '已註冊但健康狀態異常，使用前請先完成連線檢查。',
     });
   }
   for (const p of a2aPeers) {
     connections.push({
       label: `協作對象：${p.name}`,
       available: true,
-      actionNeeded: '已核准的外部協作對象；不會自動委派，需 FDE 另行設定。',
+      actionNeeded: '已設定的外部協作對象；不會因訓練內容而自動委派。',
     });
   }
 
@@ -1338,16 +1341,16 @@ export async function buildCapabilityPlan(brief: Brief, userId: string): Promise
     );
   } else if (strategyRecommendation === 'reuse') {
     summaryParts.push(
-      `建議優先複用既有員工「${reuseCandidates[0]!.name}」，只新增一個待確認的技能草稿，不改寫其身分與權限。`,
+      `建議優先複用既有員工「${reuseCandidates[0]!.name}」，把本次訓練新增為技能，不擴張其工具權限。`,
     );
   } else {
-    summaryParts.push('目前沒有高度相符的既有員工，建議建立一位新的 AI 員工（先暫停、最小權限）。');
+    summaryParts.push('目前沒有高度相符的既有員工，建議建立一位新的 AI 員工（最小權限）。');
   }
   if (skillMatches.length) {
     summaryParts.push(`已確認技能中有 ${skillMatches.length} 項可參考。`);
   }
   if (gaps.length) {
-    summaryParts.push(`正式上線前尚缺：${gaps.map((g) => g.label).join('、')}。手動測試資料仍可先驗流程。`);
+    summaryParts.push(`尚未完成的外部連線：${gaps.map((g) => g.label).join('、')}。員工仍可先以現有能力運作。`);
   } else if (connections.length) {
     summaryParts.push('相關連線看起來可用，但仍採最小權限，不會自動寄信或寫入雲端。');
   }
@@ -1362,7 +1365,7 @@ export async function buildCapabilityPlan(brief: Brief, userId: string): Promise
     proposedAgentName,
     proposedSkillName,
     privilegeNote:
-      '預設關閉：寄信、雲端寫入、Shell、電腦操控。正式開放需 FDE 另審。',
+      '預設關閉：寄信、雲端寫入、Shell、電腦操控；需要時請明確設定工具與高風險動作權限。',
   };
 }
 
@@ -1540,18 +1543,15 @@ async function testInputContractForSession(sessionId: string): Promise<{
   };
 }
 
-/**
- * Load session with ownership fail-closed: non-owner non-FDE → 404
- * (avoid existence leak). FDE may inspect any session.
- */
+/** Load a Builder session with owner-only, fail-closed isolation. */
 export async function loadOwnedSession(
   sessionId: string,
   userId: string,
-  role: UserRole | string,
+  _role: UserRole | string,
 ): Promise<AgentBuildSession> {
   const row = await prisma.agentBuildSession.findUnique({ where: { id: sessionId } });
   if (!row) throw errors.notFound('Session not found');
-  if (row.userId !== userId && !isFde(role)) {
+  if (row.userId !== userId) {
     throw errors.notFound('Session not found');
   }
   return row;
@@ -1597,27 +1597,64 @@ function planAssistantMessage(plan: PlanDto): string {
     }
   }
   lines.push('', plan.privilegeNote);
-  lines.push('', '若策略正確，請按「授權建立」；操作者會送交 FDE，訓練師可直接建立草稿。');
+  lines.push('', '這份內容會直接套用成可使用的員工；後續仍可在同一訓練 session 持續教學。');
   return lines.join('\n');
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
+// A bare start creates only a DISCOVERY AgentBuildSession. Once the native
+// interview produces a usable plan, it is materialized automatically; the
+// external path does the same when its first complete snapshot arrives.
 export async function createBuilderSession(opts: {
   userId: string;
   message: string;
+  agentId?: string;
 }): Promise<BuilderMessageResult> {
   const message = opts.message.trim();
   if (!message) throw errors.badRequest('message is required');
 
+  if (opts.agentId) {
+    const agent = await prisma.agent.findFirst({
+      where: { id: opts.agentId, createdBy: opts.userId, deletedAt: null, systemManaged: false },
+      select: { id: true },
+    });
+    if (!agent) throw errors.notFound('Agent not found');
+    const existing = await prisma.agentBuildSession.findFirst({
+      where: { userId: opts.userId, agentId: agent.id, status: { not: 'ABANDONED' } },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, status: true },
+    });
+    if (existing) {
+      if (existing.status === 'AWAITING_FDE') {
+        await prisma.agentBuildSession.update({
+          where: { id: existing.id },
+          data: { status: 'DISCOVERY', plan: Prisma.DbNull },
+        });
+      } else if (['AWAITING_TEST_DATA', 'TESTING', 'PASSED', 'FAILED'].includes(existing.status)) {
+        const materialized = await prisma.agentBuildSession.findUnique({ where: { id: existing.id } });
+        if (materialized) await activateBuilderArtifacts({ row: materialized, userId: opts.userId });
+      }
+      return postBuilderMessage({
+        sessionId: existing.id,
+        userId: opts.userId,
+        role: 'MEMBER',
+        message,
+      });
+    }
+  }
+
   const inference = inferFromPrompt(message);
   const answered = [...inference.answered];
-  const brief: Brief = deepRedactSecrets({ ...inference.brief });
+  const brief: Brief = deepRedactSecrets({
+    ...inference.brief,
+    requestedStrategy: opts.agentId ? 'reuse' : inference.brief.requestedStrategy,
+  });
   const fallbackFocus = nextUnanswered(answered) ?? 'objective';
   const id = ulid();
   const turn = await planAdaptiveInterviewTurn({ key: fallbackFocus, brief, sessionId: id });
   const progress = buildProgress(answered, turn);
-  const status: AgentBuildSessionStatus = 'ACTIVE';
+  const status: AgentBuildSessionStatus = 'DISCOVERY';
   const assistantMessage = formatInterviewTurn(turn);
 
   const transcript = pushTranscript(
@@ -1625,30 +1662,19 @@ export async function createBuilderSession(opts: {
     'assistant',
     assistantMessage,
   );
-  const { row, workingAgent } = await prisma.$transaction(async (tx) => {
-    const workingAgent = await createBuilderWorkingAgent(tx, {
+  const row = await prisma.agentBuildSession.create({
+    data: {
+      id,
       userId: opts.userId,
-      name: brief.requestedAgentName,
-      objective: brief.objective,
-      process: brief.process,
-      tags: brief.tags,
-    });
-    const row = await tx.agentBuildSession.create({
-      data: {
-        id,
-        userId: opts.userId,
-        status,
-        transcript,
-        brief: brief as object,
-        progress: progress as object,
-        strategy: 'create',
-        agentId: workingAgent.id,
-        targetAgentId: workingAgent.id,
-        builtAgentId: workingAgent.id,
-        lastAssistantMessage: deepRedactSecrets(assistantMessage),
-      },
-    });
-    return { row, workingAgent };
+      status,
+      transcript,
+      brief: brief as object,
+      progress: progress as object,
+      agentId: opts.agentId ?? null,
+      targetAgentId: opts.agentId ?? null,
+      strategy: opts.agentId ? 'reuse' : null,
+      lastAssistantMessage: deepRedactSecrets(assistantMessage),
+    },
   });
 
   // Draft cleanup is auxiliary: never fail a successfully created session.
@@ -1656,14 +1682,8 @@ export async function createBuilderSession(opts: {
 
   await audit(opts.userId, 'agent_builder.session_created', 'AgentBuildSession', id, {
     status,
-    agentId: workingAgent.id,
+    agentId: opts.agentId ?? null,
   });
-  await audit(opts.userId, 'agent_builder.working_agent_created', 'Agent', workingAgent.id, {
-    sessionId: id,
-    status: 'ACTIVE',
-    leastPrivilege: true,
-  });
-  hub.publish('agent.status', { id: workingAgent.id, status: 'ACTIVE', event: 'created' });
 
   const iteration = await createBuilderEvolutionIteration({
     sessionId: id,
@@ -1727,7 +1747,7 @@ export async function postBuilderMessage(opts: {
 
   const legacyDeterministicComplete =
     process.env.AIOS_BUILDER_ADAPTIVE_MODEL === 'off' && nextUnanswered(answered) == null;
-  if (!continuingActiveAgent && ((explicitlyRequestsBuild(message) && Boolean(brief.objective)) || legacyDeterministicComplete)) {
+  if ((explicitlyRequestsBuild(message) && Boolean(brief.objective)) || (!continuingActiveAgent && legacyDeterministicComplete)) {
     plan = deepRedactSecrets(await buildCapabilityPlan(brief, row.userId));
     status = 'PLAN_READY';
     nextProgress = { ...buildProgress(answered), currentKey: null, turn: null, mode: 'grill' };
@@ -1775,6 +1795,20 @@ export async function postBuilderMessage(opts: {
   if (iteration) {
     sessionDto.iterations = [iteration];
     sessionDto.latestIteration = iteration;
+  }
+
+  // The Web/native interview has enough structured content once it reaches a
+  // plan. Materialize it immediately so the user never needs a second
+  // "activate" action. Explicit agentId sessions update that same employee;
+  // new sessions create a new one rather than guessing a reuse candidate.
+  if (updated.status === 'PLAN_READY') {
+    return authorizeBuilderSession({
+      sessionId: updated.id,
+      userId: opts.userId,
+      role: opts.role,
+      strategy: updated.targetAgentId ? 'reuse' : 'create',
+      targetAgentId: updated.targetAgentId ?? undefined,
+    });
   }
 
   return {
@@ -1880,7 +1914,7 @@ export async function listBuilderSessions(opts: { userId: string }): Promise<Ses
   return hydrateSessionDtos(rows, () => true);
 }
 
-const ABANDONABLE_STATUSES: AgentBuildSessionStatus[] = ['DISCOVERY', 'PLAN_READY'];
+const ABANDONABLE_STATUSES: AgentBuildSessionStatus[] = ['DISCOVERY', 'PLAN_READY', 'AWAITING_FDE'];
 
 /** Fail-safe: session success must not depend on the lesson reflection. */
 async function enqueueBuilderSelfReflectionSafe(sessionId: string): Promise<void> {
@@ -1896,8 +1930,8 @@ async function enqueueBuilderSelfReflectionSafe(sessionId: string): Promise<void
 }
 
 /**
- * Soft-delete an unsubmitted owner draft. Governed sessions (AWAITING_FDE+)
- * cannot be abandoned here — they stay on the FDE path. Never hard-deletes.
+ * Soft-delete an owner draft that has not materialized Agent/Skill rows.
+ * Never hard-deletes history.
  */
 export async function abandonBuilderSession(opts: {
   sessionId: string;
@@ -1918,7 +1952,7 @@ export async function abandonBuilderSession(opts: {
     return toSessionDto(row);
   }
   if (!ABANDONABLE_STATUSES.includes(row.status)) {
-    throw errors.forbidden('已進入審核流程的建置不可自行捨棄；請走 FDE 流程');
+    throw errors.forbidden('此建置已開始套用或啟用，不可直接捨棄');
   }
   if (row.builtAgentId || row.draftSkillIds.length > 0) {
     throw errors.forbidden('此建置已產生員工或技能草稿，不可直接捨棄');
@@ -2011,9 +2045,9 @@ function skillMarkdownFromBrief(
     return [
       authored,
       '',
-      '## AIOS 治理狀態',
-      '- 此檔案由外部 Agent Builder 同步為技能草稿。',
-      '- 需通過測試與 FDE 最終確認後才會生效。',
+      '## AIOS 訓練來源',
+      '- 此檔案由外部 Agent Builder 同一訓練 session 同步。',
+      '- 使用者啟用最新訓練內容後即套用到該員工。',
       '',
     ].join('\n');
   }
@@ -2072,13 +2106,13 @@ function skillMarkdownFromBrief(
     ...(harness?.tools?.length
       ? [
           '## 工具與連線候選',
-          ...harness.tools.map((tool) => `- ${tool.name}：${tool.purpose}（${tool.status === 'AVAILABLE' ? '可用' : '需 FDE 檢查'}）`),
+          ...harness.tools.map((tool) => `- ${tool.name}：${tool.purpose}（${tool.status === 'AVAILABLE' ? '可用' : '尚未連線'}）`),
           '',
         ]
       : []),
     '## 注意',
-    '- 本技能由 Agent Builder 產生，需 FDE 確認後才會生效。',
-    '- 正式連線（信箱／雲端）未就緒前，僅可用手動測試資料驗流程。',
+    '- 本技能由 Agent Builder 依同一訓練 session 的最新內容產生。',
+    '- 尚未連線的外部工具不會因為出現在訓練內容中就自動取得權限。',
     '',
   ];
   return lines.filter((l) => l !== undefined).join('\n');
@@ -2222,23 +2256,98 @@ export async function listAllBuilderEvolutionSessions(opts: {
   }));
 }
 
+type InertSkillDraft = {
+  id: string;
+  filePath: string;
+  created: boolean;
+  previous?: {
+    contentMd: string;
+    understanding: Prisma.JsonValue | null;
+    reviewStatus: SkillReview;
+    confirmedBy: string | null;
+    confirmedAt: Date | null;
+    version: number;
+    fileContent: string | null;
+  };
+};
+
 async function createInertSkillDraft(opts: {
   name: string;
   brief: Brief;
   createdBy: string;
   harness?: HarnessSnapshot | null;
   harnessSkill?: HarnessSnapshot['skills'][number] | null;
-}): Promise<{ id: string; filePath: string }> {
-  const id = ulid();
+  existingSkillId?: string;
+}): Promise<InertSkillDraft> {
   const name = opts.name.slice(0, 80) || 'Builder 技能草稿';
   const contentMd = deepRedactSecrets(
     skillMarkdownFromBrief(opts.brief, name, opts.harness, opts.harnessSkill),
   );
-  const slug = await uniqueSkillSlug(slugify(name));
+  const understanding = deepRedactSecrets({
+    summary: opts.brief.objective ?? name,
+    capabilities: opts.harnessSkill?.instructions?.length
+      ? opts.harnessSkill.instructions
+      : [opts.brief.process ?? '依已確認流程處理測試資料'],
+    data_read: opts.harnessSkill?.inputs?.length
+      ? opts.harnessSkill.inputs
+      : [opts.brief.inputs ?? opts.brief.sources ?? '由使用者提供的測試資料'],
+    data_written: opts.harnessSkill?.outputs?.length
+      ? opts.harnessSkill.outputs
+      : ['只產生草稿；不執行外部寫入'],
+    external_calls: opts.harness?.tools?.map((tool) => `${tool.name}:${tool.status}`) ?? [],
+    irreversible_actions: [],
+    risks: [opts.brief.permissions ?? '不可逆操作一律需人工核准'],
+  }) as Prisma.InputJsonValue;
+
+  const existing = opts.existingSkillId
+    ? await prisma.skill.findFirst({
+        where: { id: opts.existingSkillId, generator: 'agent-builder', deletedAt: null },
+      })
+    : null;
+  const id = existing?.id ?? ulid();
+  const slug = existing?.slug ?? await uniqueSkillSlug(slugify(name));
 
   const dest = safeJoin(paths.skills, slug, 'SKILL.md');
   await mkdir(path.dirname(dest), { recursive: true });
+  const previousFileContent = existing
+    ? await readFile(dest, 'utf8').catch(() => null)
+    : null;
   await writeFile(dest, contentMd, 'utf8');
+
+  if (existing) {
+    try {
+      await prisma.skill.update({
+        where: { id: existing.id },
+        data: {
+          name,
+          contentMd,
+          understanding,
+          reviewStatus: 'AWAITING_USER_CONFIRM',
+          confirmedBy: null,
+          confirmedAt: null,
+          version: { increment: 1 },
+        },
+      });
+    } catch (error) {
+      if (previousFileContent == null) await unlink(dest).catch(() => {});
+      else await writeFile(dest, previousFileContent, 'utf8').catch(() => {});
+      throw error;
+    }
+    return {
+      id,
+      filePath: dest,
+      created: false,
+      previous: {
+        contentMd: existing.contentMd,
+        understanding: existing.understanding,
+        reviewStatus: existing.reviewStatus,
+        confirmedBy: existing.confirmedBy,
+        confirmedAt: existing.confirmedAt,
+        version: existing.version,
+        fileContent: previousFileContent,
+      },
+    };
+  }
 
   await prisma.skill.create({
     data: {
@@ -2253,27 +2362,13 @@ async function createInertSkillDraft(opts: {
       // The structured brief itself is the human-readable understanding; the
       // draft still requires an explicit FDE confirmation before it is effective.
       reviewStatus: 'AWAITING_USER_CONFIRM',
-      understanding: deepRedactSecrets({
-        summary: opts.brief.objective ?? name,
-        capabilities: opts.harnessSkill?.instructions?.length
-          ? opts.harnessSkill.instructions
-          : [opts.brief.process ?? '依已確認流程處理測試資料'],
-        data_read: opts.harnessSkill?.inputs?.length
-          ? opts.harnessSkill.inputs
-          : [opts.brief.inputs ?? opts.brief.sources ?? '由使用者提供的測試資料'],
-        data_written: opts.harnessSkill?.outputs?.length
-          ? opts.harnessSkill.outputs
-          : ['只產生草稿；不執行外部寫入'],
-        external_calls: opts.harness?.tools?.map((tool) => `${tool.name}:${tool.status}`) ?? [],
-        irreversible_actions: [],
-        risks: [opts.brief.permissions ?? '不可逆操作一律需人工核准'],
-      }) as object,
+      understanding,
       executionEnv: 'CLI',
     },
   });
 
   void opts.createdBy;
-  return { id, filePath: dest };
+  return { id, filePath: dest, created: true };
 }
 
 export async function authorizeBuilderSession(opts: {
@@ -2284,9 +2379,18 @@ export async function authorizeBuilderSession(opts: {
   targetAgentId?: string;
 }): Promise<BuilderMessageResult> {
   const row = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
+  if (row.userId !== opts.userId) throw errors.notFound('Session not found');
+
+  // Older builds may already have inert artifacts from the retired
+  // FDE/test pipeline. Finish those in place instead of creating another
+  // Agent id or another set of Skill rows.
+  if (['AWAITING_TEST_DATA', 'TESTING', 'PASSED', 'FAILED'].includes(row.status)) {
+    return activateBuilderArtifacts({ row, userId: opts.userId });
+  }
 
   if (row.status !== 'PLAN_READY' && row.status !== 'AWAITING_FDE') {
-    // Allow re-authorize only from plan/awaiting states; not after build.
+    // ACTIVE training first compiles its latest READY snapshot back into a
+    // PLAN_READY release request; materialization itself starts here.
     throw errors.conflict(`Cannot authorize from status=${row.status}`);
   }
   if (!row.plan) throw errors.badRequest('Plan is not ready');
@@ -2294,59 +2398,8 @@ export async function authorizeBuilderSession(opts: {
   const plan = asPlan(row.plan);
   if (!plan) throw errors.badRequest('Plan is invalid');
 
-  // MEMBER: request only — no Agent/Skill mutation.
-  if (!isFde(opts.role)) {
-    if (row.userId !== opts.userId) {
-      throw errors.notFound('Session not found');
-    }
-    const requestedTarget =
-      opts.strategy === 'reuse'
-        ? opts.targetAgentId ?? plan.reuseCandidates[0]?.agentId ?? null
-        : null;
-    if (
-      opts.strategy === 'reuse' &&
-      (!requestedTarget || !plan.reuseCandidates.some((candidate) => candidate.agentId === requestedTarget))
-    ) {
-      throw errors.badRequest('targetAgentId must be one of the reviewed reuse candidates');
-    }
-    const assistantMessage =
-      '已送交訓練師（FDE）審核授權。在核准前不會建立或修改任何員工／技能。';
-    const transcript = pushTranscript(
-      asTranscript(row.transcript),
-      'assistant',
-      assistantMessage,
-    );
-    if (requestedTarget) {
-      await assertBuilderAgentBindingAvailable({
-        userId: row.userId,
-        agentId: requestedTarget,
-        exceptSessionId: row.id,
-      });
-    }
-    const updated = await prisma.agentBuildSession.update({
-      where: { id: row.id },
-      data: {
-        status: 'AWAITING_FDE',
-        strategy: opts.strategy,
-        targetAgentId: requestedTarget,
-        agentId: requestedTarget ?? row.agentId,
-        transcript,
-        lastAssistantMessage: deepRedactSecrets(assistantMessage),
-      },
-    });
-    await audit(opts.userId, 'agent_builder.awaiting_fde', 'AgentBuildSession', row.id, {
-      strategy: opts.strategy,
-    });
-    return {
-      session: toSessionDto(updated),
-      assistantMessage,
-      status: updated.status,
-      progress: asProgress(updated.progress),
-    };
-  }
-
-  // FDE path: atomically claim the build. Two concurrent approvals must not
-  // both pass the stale status check and create duplicate orphan artifacts.
+  // Atomically claim the build. Two concurrent clients must not both pass the
+  // stale status check and create duplicate orphan artifacts.
   const claimed = await prisma.agentBuildSession.updateMany({
     where: {
       id: row.id,
@@ -2379,19 +2432,38 @@ export async function authorizeBuilderSession(opts: {
   let builtAgentId: string | null = row.builtAgentId;
   let targetAgentId: string | null = null;
   const draftSkillIds: string[] = [];
-  const draftSkillFiles: string[] = [];
+  const skillDraftsMade: InertSkillDraft[] = [];
   let createdAgentId: string | null = null;
+  let reusedAgentSnapshot: Agent | null = null;
 
-  const makeSkillDrafts = async () => {
-    const created: Array<{ id: string; filePath: string }> = [];
-    for (const blueprint of skillBlueprints) {
-      created.push(await createInertSkillDraft({
+  const makeSkillDrafts = async (agentId?: string) => {
+    const created: InertSkillDraft[] = [];
+    for (const [index, blueprint] of skillBlueprints.entries()) {
+      let existingSkillId: string | undefined;
+      if (agentId) {
+        const preferredId = row.draftSkillIds[index];
+        const existingSkill = await prisma.skill.findFirst({
+          where: {
+            ...(preferredId ? { id: preferredId } : { name: blueprint.name || plan.proposedSkillName }),
+            generator: 'agent-builder',
+            deletedAt: null,
+            agents: { some: { agentId } },
+          },
+          orderBy: { updatedAt: 'desc' },
+          select: { id: true },
+        });
+        existingSkillId = existingSkill?.id;
+      }
+      const draft = await createInertSkillDraft({
         name: blueprint.name || plan.proposedSkillName,
         brief,
         createdBy: opts.userId,
         harness,
         harnessSkill: blueprint,
-      }));
+        existingSkillId,
+      });
+      created.push(draft);
+      skillDraftsMade.push(draft);
     }
     return created;
   };
@@ -2411,11 +2483,10 @@ export async function authorizeBuilderSession(opts: {
       targetAgentId = agent.id;
       // Do NOT rewrite identity/role/restrictions.
 
-      const skillDrafts = await makeSkillDrafts();
+      const skillDrafts = await makeSkillDrafts(agent.id);
       for (const skillDraft of skillDrafts) {
         const skillId = skillDraft.id;
         draftSkillIds.push(skillId);
-        draftSkillFiles.push(skillDraft.filePath);
         await prisma.agentSkill.upsert({
           where: { agentId_skillId: { agentId: agent.id, skillId } },
           create: { agentId: agent.id, skillId },
@@ -2429,10 +2500,18 @@ export async function authorizeBuilderSession(opts: {
         });
       }
     } else {
-      // create: PAUSED agent + linked inert draft
-      const agentId = ulid();
+      // Create a new Agent, or recover the same historical Agent id when an
+      // older Builder already populated builtAgentId before this simple flow
+      // existed. Preserving the id keeps workflows, run history and external
+      // MCP allowlists attached to the employee being trained.
+      const agentId = row.builtAgentId ?? ulid();
+      const existingAgent = await prisma.agent.findUnique({ where: { id: agentId } });
+      if (existingAgent?.deletedAt || (existingAgent && existingAgent.createdBy !== row.userId)) {
+        throw errors.conflict('The bound Agent cannot be reused by this training session');
+      }
+      reusedAgentSnapshot = existingAgent;
       const name = plan.proposedAgentName.slice(0, 80) || '新 AI 員工';
-      const slug = await uniqueAgentSlug(slugify(name));
+      const slug = existingAgent?.slug ?? await uniqueAgentSlug(slugify(name));
       const rolePrompt = deepRedactSecrets(
         harness?.agentMarkdown?.trim()
           ? [
@@ -2457,13 +2536,13 @@ export async function authorizeBuilderSession(opts: {
               .join('\n'),
       );
 
-      await prisma.agent.create({
-        data: {
+      const agentData = {
           id: agentId,
           slug,
           name,
           description: deepRedactSecrets((brief.objective ?? name).slice(0, 500)),
-          department: brief.tags?.includes('finance') ? '財務' : '未分類',
+          department: harness?.identity?.department?.trim().slice(0, 80)
+            || (brief.tags?.includes('finance') ? '財務' : '未分類'),
           rolePrompt,
           // Execute ≠ verify enforced at compileManifest; leave verify null = auto opposite.
           engineExecute: 'CLAUDE_CODE',
@@ -2471,23 +2550,43 @@ export async function authorizeBuilderSession(opts: {
           restrictions: { ...BUILDER_LEAST_PRIVILEGE },
           riskTier: 'medium',
           status: 'PAUSED',
-          // The FDE approves the build, but the resulting employee belongs to
-          // the session owner rather than the approving operator.
           createdBy: row.userId,
-        },
-      });
-      createdAgentId = agentId;
+      } as const;
+      if (existingAgent) {
+        await prisma.agent.update({
+          where: { id: agentId },
+          data: {
+            name: agentData.name,
+            description: agentData.description,
+            department: agentData.department,
+            rolePrompt: agentData.rolePrompt,
+            engineExecute: agentData.engineExecute,
+            engineVerify: agentData.engineVerify,
+            restrictions: agentData.restrictions,
+            riskTier: agentData.riskTier,
+            status: agentData.status,
+          },
+        });
+      } else {
+        await prisma.agent.create({ data: agentData });
+        createdAgentId = agentId;
+      }
       builtAgentId = agentId;
       targetAgentId = agentId;
 
-      const skillDrafts = await makeSkillDrafts();
+      const skillDrafts = await makeSkillDrafts(existingAgent?.id);
       for (const skillDraft of skillDrafts) {
         draftSkillIds.push(skillDraft.id);
-        draftSkillFiles.push(skillDraft.filePath);
-        await prisma.agentSkill.create({ data: { agentId, skillId: skillDraft.id } });
+        await prisma.agentSkill.upsert({
+          where: { agentId_skillId: { agentId, skillId: skillDraft.id } },
+          create: { agentId, skillId: skillDraft.id },
+          update: {},
+        });
       }
 
-      await audit(opts.userId, 'agent_builder.created_paused_agent', 'Agent', agentId, {
+      await audit(opts.userId, existingAgent
+        ? 'agent_builder.reused_bound_agent'
+        : 'agent_builder.created_paused_agent', 'Agent', agentId, {
         sessionId: row.id,
         status: 'PAUSED',
         iterationId: latestEvolution?.id ?? null,
@@ -2505,15 +2604,52 @@ export async function authorizeBuilderSession(opts: {
   } catch (e) {
     // Best-effort compensation: a partial build must not leave effective or
     // visible orphan rows. The original error still fails the authorization.
-    if (draftSkillIds.length) {
-      await prisma.agentSkill.deleteMany({ where: { skillId: { in: draftSkillIds } } }).catch(() => {});
-      await prisma.skill.deleteMany({ where: { id: { in: draftSkillIds } } }).catch(() => {});
+    const createdSkillIds = skillDraftsMade.filter((draft) => draft.created).map((draft) => draft.id);
+    if (createdSkillIds.length) {
+      await prisma.agentSkill.deleteMany({ where: { skillId: { in: createdSkillIds } } }).catch(() => {});
+      await prisma.skill.deleteMany({ where: { id: { in: createdSkillIds } } }).catch(() => {});
+    }
+    for (const draft of skillDraftsMade.filter((item) => !item.created && item.previous)) {
+      const previous = draft.previous!;
+      await prisma.skill.update({
+        where: { id: draft.id },
+        data: {
+          contentMd: previous.contentMd,
+          understanding: previous.understanding == null
+            ? Prisma.DbNull
+            : previous.understanding as Prisma.InputJsonValue,
+          reviewStatus: previous.reviewStatus,
+          confirmedBy: previous.confirmedBy,
+          confirmedAt: previous.confirmedAt,
+          version: previous.version,
+        },
+      }).catch(() => {});
+      if (previous.fileContent == null) await unlink(draft.filePath).catch(() => {});
+      else await writeFile(draft.filePath, previous.fileContent, 'utf8').catch(() => {});
     }
     if (createdAgentId) {
       await prisma.agent.deleteMany({ where: { id: createdAgentId } }).catch(() => {});
     }
-    await Promise.all(draftSkillFiles.map((file) => unlink(file).catch(() => {})));
-    // Roll status back so FDE can retry.
+    if (reusedAgentSnapshot) {
+      await prisma.agent.update({
+        where: { id: reusedAgentSnapshot.id },
+        data: {
+          name: reusedAgentSnapshot.name,
+          description: reusedAgentSnapshot.description,
+          department: reusedAgentSnapshot.department,
+          rolePrompt: reusedAgentSnapshot.rolePrompt,
+          engineExecute: reusedAgentSnapshot.engineExecute,
+          engineVerify: reusedAgentSnapshot.engineVerify,
+          restrictions: reusedAgentSnapshot.restrictions as Prisma.InputJsonValue,
+          riskTier: reusedAgentSnapshot.riskTier,
+          status: reusedAgentSnapshot.status,
+        },
+      }).catch(() => {});
+    }
+    await Promise.all(
+      skillDraftsMade.filter((draft) => draft.created).map((draft) => unlink(draft.filePath).catch(() => {})),
+    );
+    // Roll status back so the owner can retry.
     await prisma.agentBuildSession.update({
       where: { id: row.id },
       data: { status: row.status === 'AWAITING_FDE' ? 'AWAITING_FDE' : 'PLAN_READY' },
@@ -2521,18 +2657,13 @@ export async function authorizeBuilderSession(opts: {
     throw e;
   }
 
-  // If brief already has test data hint, still require explicit test-data POST
-  // (spec: test data mandatory via dedicated endpoint).
   const assistantMessage = [
     opts.strategy === 'create'
-      ? `已建立暫停中的 AI 員工草稿「${plan.proposedAgentName}」，並連結待確認技能。`
-      : `已在既有員工上新增待確認技能草稿（未改寫員工設定）。`,
+      ? `正在建立 AI 員工「${plan.proposedAgentName}」並套用本次訓練內容。`
+      : '正在把本次訓練內容套用到既有員工。',
     '',
-    opts.strategy === 'create'
-      ? '技能尚未確認、員工尚未啟用。請提交測試資料後執行試跑。'
-      : '新技能尚未確認；既有員工維持原狀。請提交測試資料後執行隔離試跑。',
     plan.gaps.length
-      ? `提醒：正式環境仍缺 ${plan.gaps.map((g) => g.label).join('、')}；手動測試可先進行。`
+      ? `提醒：尚未連線的能力包括 ${plan.gaps.map((g) => g.label).join('、')}；員工仍會先以現有能力啟用。`
       : '',
   ]
     .filter(Boolean)
@@ -2563,12 +2694,7 @@ export async function authorizeBuilderSession(opts: {
     },
   });
 
-  return {
-    session: toSessionDto(updated),
-    assistantMessage,
-    status: updated.status,
-    progress: asProgress(updated.progress),
-  };
+  return activateBuilderArtifacts({ row: updated, userId: opts.userId });
 }
 
 export async function submitBuilderTestData(opts: {
@@ -3187,42 +3313,46 @@ async function snapshotBuilderSession(sessionId: string): Promise<{
   };
 }
 
-export async function finalizeBuilderSession(opts: {
-  sessionId: string;
+async function activateBuilderArtifacts(opts: {
+  row: AgentBuildSession;
   userId: string;
-  role: UserRole | string;
 }): Promise<BuilderMessageResult> {
-  if (!isFde(opts.role)) {
-    throw errors.forbidden('Only FDE (OWNER/TRAINER) may finalize');
+  const row = opts.row;
+  if (row.status === 'ACTIVE') {
+    return {
+      session: toSessionDto(row),
+      assistantMessage: row.lastAssistantMessage ?? '員工已可使用。',
+      status: row.status,
+      progress: asProgress(row.progress),
+    };
   }
-
-  const row = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
-
-  await assertBuilderFinalizeEvidence(row);
-
+  if (!['AWAITING_TEST_DATA', 'TESTING', 'PASSED', 'FAILED'].includes(row.status)) {
+    throw errors.conflict(`Cannot activate from status=${row.status}`);
+  }
   const expectedAgentId = row.builtAgentId ?? row.targetAgentId;
+  if (!expectedAgentId) throw errors.badRequest('Session has no Agent to activate');
   const draftIds = row.draftSkillIds ?? [];
   if (!draftIds.length) {
-    throw errors.badRequest('No builder-owned draft skills to confirm');
+    throw errors.badRequest('Session has no trained Skill to activate');
   }
 
   const { confirmAwaitingSkill } = await import('./skillgate.js');
   const latestReadyIteration = await prisma.agentBuildIteration.findFirst({
     where: { sessionId: row.id, status: 'READY' },
     orderBy: { sequence: 'desc' },
-    select: { artifactSnapshot: true },
+    select: { id: true, artifactSnapshot: true },
   });
   const finalHarness = latestReadyIteration?.artifactSnapshot as HarnessSnapshot | null;
-  const assistantMessage = '已完成最終確認：技能已確認，員工已啟用（若為新建）。';
+  const assistantMessage = '訓練內容已套用，員工現在可以立即由 Claude、Codex 或 Web 調度；後續仍可繼續教學。';
   const transcript = pushTranscript(asTranscript(row.transcript), 'assistant', assistantMessage);
 
-  // Atomic claim prevents two FDE requests from confirming/activating the same
+  // Atomic claim prevents two clients from confirming/activating the same
   // session concurrently. State mutations then commit in one DB transaction.
   const claimed = await prisma.agentBuildSession.updateMany({
-    where: { id: row.id, status: 'PASSED', lastRunId: row.lastRunId },
+    where: { id: row.id, status: row.status },
     data: { status: 'BUILDING' },
   });
-  if (claimed.count !== 1) throw errors.conflict('Finalize is already in progress');
+  if (claimed.count !== 1) throw errors.conflict('Activation is already in progress');
 
   let updated: typeof row;
   let activatedAgentId: string | null = null;
@@ -3268,6 +3398,12 @@ export async function finalizeBuilderSession(opts: {
         where: { id: row.id },
         data: {
           status: 'ACTIVE',
+          plan: {
+            ...(asPlan(row.plan) ?? {}),
+            ...(latestReadyIteration?.id
+              ? { activatedIterationId: latestReadyIteration.id }
+              : {}),
+          } as Prisma.InputJsonValue,
           transcript,
           lastAssistantMessage: deepRedactSecrets(assistantMessage),
           draftState: { reply: '', testData: '', testExpected: '' },
@@ -3277,7 +3413,7 @@ export async function finalizeBuilderSession(opts: {
   } catch (e) {
     await prisma.agentBuildSession.updateMany({
       where: { id: row.id, status: 'BUILDING' },
-      data: { status: 'PASSED' },
+      data: { status: row.status },
     });
     throw e;
   }
@@ -3313,6 +3449,7 @@ export async function finalizeBuilderSession(opts: {
     builtAgentId: row.builtAgentId,
     draftSkillIds: draftIds,
     importedWorkflowIds,
+    releaseMode: 'SIMPLE_DIRECT',
   });
   await enqueueBuilderSelfReflectionSafe(row.id);
 
@@ -3322,6 +3459,21 @@ export async function finalizeBuilderSession(opts: {
     status: updated.status,
     progress: asProgress(updated.progress),
   };
+}
+
+/**
+ * Compatibility endpoint for clients that still call `finalize`. The Builder
+ * no longer has a separate FDE or test phase; ownership is the only release
+ * authority and the latest trained snapshot is activated directly.
+ */
+export async function finalizeBuilderSession(opts: {
+  sessionId: string;
+  userId: string;
+  role: UserRole | string;
+}): Promise<BuilderMessageResult> {
+  const row = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
+  if (row.userId !== opts.userId) throw errors.notFound('Session not found');
+  return activateBuilderArtifacts({ row, userId: opts.userId });
 }
 
 /**

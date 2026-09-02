@@ -2,7 +2,7 @@
 //
 // This is deliberately not a live Agent run: the latest READY Harness is
 // rendered into a no-tools prompt so an end user can coach it through Claude
-// MCP before FDE review. Every pair is persisted as redacted evidence and
+// MCP before owner activation. Every pair is persisted as redacted evidence and
 // queues a non-effective reflection iteration.
 import type { Prisma, UserRole } from '@prisma/client';
 import { runClaude } from '../engine/claude.js';
@@ -177,15 +177,7 @@ export function renderShadowPrompt(
   };
 }
 
-export const BUILDER_SHADOW_DISALLOWED_TOOLS = [
-  'Bash',
-  'Write',
-  'Edit',
-  'NotebookEdit',
-  'WebSearch',
-  'WebFetch',
-  'Task',
-] as const;
+export const BUILDER_SHADOW_DISABLE_ALL_TOOLS = true;
 
 function transcript(value: unknown): TranscriptEntry[] {
   if (!Array.isArray(value)) return [];
@@ -207,7 +199,7 @@ async function defaultExecute(input: {
     timeoutMs: 120_000,
     signal: input.signal,
     safeMode: true,
-    disallowedTools: [...BUILDER_SHADOW_DISALLOWED_TOOLS],
+    disableAllTools: BUILDER_SHADOW_DISABLE_ALL_TOOLS,
   });
   return result.stdout;
 }

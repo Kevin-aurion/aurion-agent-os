@@ -14,6 +14,7 @@ import { audit } from '../lib/audit.js';
 import { sha256 } from '../lib/crypto.js';
 import { runWorkflow } from '../workflow/runner.js';
 import { requireVisibleAgent, requireVisibleWorkflow } from '../lib/agentaccess.js';
+import { prepareWorkflowInput } from '../workflow/input.js';
 
 export const TriggerSchema = z
   .object({
@@ -90,6 +91,7 @@ export function serializeWorkflowSummary(w: {
   description: string;
   enabled: boolean;
   trigger: unknown;
+  inputSchema: unknown;
   createdAt: Date;
   updatedAt: Date;
   _count?: { steps: number };
@@ -102,6 +104,7 @@ export function serializeWorkflowSummary(w: {
     description: w.description,
     enabled: w.enabled,
     trigger: w.trigger,
+    inputSchema: w.inputSchema,
     stepCount: w._count?.steps ?? 0,
     schedule: w.schedules?.[0] ?? null,
     createdAt: w.createdAt,
@@ -129,11 +132,24 @@ async function kickOffRun(
   input: Record<string, unknown>,
   triggeredBy: string,
 ): Promise<string> {
-  const workflow = await prisma.workflow.findUnique({ where: { id: workflowId } });
+  const workflow = await prisma.workflow.findUnique({
+    where: { id: workflowId },
+    include: { steps: { select: { config: true }, orderBy: { position: 'asc' } } },
+  });
   if (!workflow || workflow.deletedAt) throw errors.notFound(`Workflow not found: ${workflowId}`);
 
+  const prepared = prepareWorkflowInput(input, workflow.inputSchema, workflow.steps);
+  if (prepared.issues.length > 0) {
+    throw errors.badRequest('Workflow input does not match its required schema', {
+      workflowId: workflow.id,
+      workflowName: workflow.name,
+      issues: prepared.issues,
+      expectedInputSchema: prepared.schema,
+    });
+  }
+
   const runId = ulid();
-  runWorkflow(workflowId, input, triggeredBy, runId).catch((e) =>
+  runWorkflow(workflowId, prepared.input, triggeredBy, runId).catch((e) =>
     app.log.error({ err: e, workflowId, runId }, 'workflow run failed'),
   );
   return runId;
@@ -177,6 +193,7 @@ export async function workflowRoutes(app: FastifyInstance) {
           description: z.string().default(''),
           enabled: z.boolean().default(true),
           trigger: TriggerSchema,
+          inputSchema: z.record(z.unknown()).optional(),
         })
         .parse(req.body);
 
@@ -192,6 +209,7 @@ export async function workflowRoutes(app: FastifyInstance) {
           description: body.description,
           enabled: body.enabled,
           trigger: trigger as object,
+          inputSchema: body.inputSchema as object | undefined,
         },
       });
       await syncSchedule(created.id, trigger, body.enabled);
@@ -269,6 +287,7 @@ export async function workflowRoutes(app: FastifyInstance) {
           description: z.string().optional(),
           enabled: z.boolean().optional(),
           trigger: TriggerSchema.optional(),
+          inputSchema: z.record(z.unknown()).optional(),
         })
         .parse(req.body);
 
@@ -279,6 +298,7 @@ export async function workflowRoutes(app: FastifyInstance) {
       if (body.name !== undefined) data.name = body.name;
       if (body.description !== undefined) data.description = body.description;
       if (body.enabled !== undefined) data.enabled = body.enabled;
+      if (body.inputSchema !== undefined) data.inputSchema = body.inputSchema;
 
       let trigger: Record<string, unknown> | undefined;
       if (body.trigger !== undefined) {

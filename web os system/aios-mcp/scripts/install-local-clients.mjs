@@ -18,21 +18,18 @@ const claudeConfig = path.join(
 const cursorConfig = path.join(os.homedir(), '.cursor', 'mcp.json');
 const claudeCodeConfig = path.join(os.homedir(), '.claude.json');
 const claudeCodeSettings = path.join(os.homedir(), '.claude', 'settings.json');
+const localMcpName = 'aios-dev-local';
 const claudeCodeAiosToolRules = [
-  'mcp__aios__prepare_agent_build_prompt',
-  'mcp__aios__start_agent_build',
-  'mcp__aios__sync_agent_build_turn',
-  'mcp__aios__sync_agent_build_artifact',
-  'mcp__aios__upsert_agent_build_snapshot',
-  'mcp__aios__upload_agent_build_file',
-  'mcp__aios__guard_agent_build_stop',
-  'mcp__aios__get_agent_build',
-  'mcp__aios__list_agent_builds',
-  'mcp__aios__list_testable_agents',
-  'mcp__aios__chat_with_test_agent',
-  'mcp__aios__submit_agent_build_for_fde_review',
-  'mcp__aios__submit_agent_build_test_data',
-  'mcp__aios__run_agent_build_test',
+  'mcp__aios-dev-local__prepare_agent_build_prompt',
+  'mcp__aios-dev-local__start_agent_build',
+  'mcp__aios-dev-local__sync_agent_build_turn',
+  'mcp__aios-dev-local__sync_agent_build_artifact',
+  'mcp__aios-dev-local__upsert_agent_build_snapshot',
+  'mcp__aios-dev-local__upload_agent_build_file',
+  'mcp__aios-dev-local__guard_agent_build_stop',
+  'mcp__aios-dev-local__get_agent_build',
+  'mcp__aios-dev-local__list_agent_builds',
+  'mcp__aios-dev-local__activate_agent_build',
 ];
 
 async function requireFile(file, label) {
@@ -74,9 +71,20 @@ async function installMcpConfig(file) {
   const mcpServers = config.mcpServers && typeof config.mcpServers === 'object'
     ? config.mcpServers
     : {};
+  const nextServers = { ...mcpServers };
+  const legacyAios = nextServers.aios;
+  if (
+    legacyAios &&
+    typeof legacyAios === 'object' &&
+    legacyAios.command === process.execPath &&
+    Array.isArray(legacyAios.args) &&
+    legacyAios.args[0] === entrypoint
+  ) {
+    delete nextServers.aios;
+  }
   config.mcpServers = {
-    ...mcpServers,
-    aios: {
+    ...nextServers,
+    [localMcpName]: {
       command: process.execPath,
       args: [entrypoint],
     },
@@ -111,9 +119,10 @@ await mkdir(path.dirname(skillDestination), { recursive: true });
 await rm(skillDestination, { recursive: true, force: true });
 await cp(skillSource, skillDestination, { recursive: true });
 
-console.log(`Installed AIOS MCP in Claude Desktop: ${claudeConfig}`);
-console.log(`Installed AIOS MCP in Cursor: ${cursorConfig}`);
-console.log(`Installed AIOS MCP in Claude Code: ${claudeCodeConfig}`);
+console.log(`Installed development-only ${localMcpName} MCP in Claude Desktop: ${claudeConfig}`);
+console.log(`Installed development-only ${localMcpName} MCP in Cursor: ${cursorConfig}`);
+console.log(`Installed development-only ${localMcpName} MCP in Claude Code: ${claudeCodeConfig}`);
 console.log(`Installed AIOS-only tool permissions in Claude Code: ${claudeCodeSettings}`);
 console.log(`Installed the local Claude/Claude Code skill: ${skillDestination}`);
+console.log('The production/customer integration remains the hosted OAuth Plugin MCP named aurion_aios.');
 console.log('Restart Claude Desktop and Cursor so they reload MCP configuration.');

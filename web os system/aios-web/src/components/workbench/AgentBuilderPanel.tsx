@@ -23,7 +23,6 @@ import {
   Download,
 } from 'lucide-react';
 import { API, downloadToDevice } from '@/lib/api';
-import { useAuth, isFdeRole } from '@/lib/auth';
 import { Spinner } from '@/components/ui';
 import { cn } from '@/lib/cn';
 import {
@@ -77,15 +76,14 @@ function BuilderThinkingBubble({ elapsedSeconds }: { elapsedSeconds: number }) {
 
 export function AgentBuilderPanel(props: {
   onClose: () => void;
+  /** Existing employee to resume training in the same durable session. */
+  agentId?: string | null;
   /** Fired when session state changes (for right-rail checklist). */
   onSessionChange?: (session: BuilderSession | null) => void;
-  /** After ACTIVE finalize — open the built/reused agent. */
+  /** After direct activation — open the built/reused agent. */
   onActivated?: (agentId: string | null) => void;
 }) {
   const builderSessionStorageKey = 'aios.agentBuilderSessionId';
-  const { user } = useAuth();
-  const isFde = isFdeRole(user?.role);
-
   const [session, setSession] = useState<BuilderSession | null>(null);
   const [view, setView] = useState<'loading' | 'new' | 'starting' | 'session'>('loading');
   /** Unfinished flow we auto-resumed (or could resume). Not a chooser — a one-line switch. */
@@ -141,9 +139,14 @@ export function AgentBuilderPanel(props: {
         const unfinished = sessions.filter(
           (flow) => flow.status !== 'ACTIVE' && flow.status !== 'ABANDONED',
         );
+        const targeted = props.agentId
+          ? sessions.find((flow) => flow.agentId === props.agentId && flow.status !== 'ABANDONED')
+          : undefined;
         setNewDraft(savedDraft.reply);
-        const resume =
-          (lastId ? unfinished.find((flow) => flow.id === lastId) : undefined) ?? unfinished[0] ?? null;
+        const resume = targeted
+          ?? (lastId ? unfinished.find((flow) => flow.id === lastId) : undefined)
+          ?? unfinished[0]
+          ?? null;
         setResumeCandidate(resume);
         if (!resume) {
           publishSession(null);
@@ -177,7 +180,7 @@ export function AgentBuilderPanel(props: {
     return () => {
       cancelled = true;
     };
-  }, [publishSession]);
+  }, [props.agentId, publishSession]);
 
   const draftContext = view === 'new' ? 'new' : view === 'session' && session ? `session:${session.id}` : null;
 
@@ -279,8 +282,8 @@ export function AgentBuilderPanel(props: {
     return () => window.clearInterval(timer);
   }, [busy, pendingMessage]);
 
-  // Reuse the fixture already supplied during the interview. The dedicated
-  // submit step still requires an explicit click before any real test runs.
+  // Preserve legacy fixture drafts for old sessions, but the simplified
+  // Builder no longer requires a test before activation.
   useEffect(() => {
     if (!session?.brief) return;
     if (!testData && session.brief.testDataHint) setTestData(session.brief.testDataHint);
@@ -289,12 +292,7 @@ export function AgentBuilderPanel(props: {
     }
   }, [session?.brief, testData, testExpected]);
 
-  // The test endpoint starts a background real run and returns immediately.
-  // Poll the durable session until it leaves TESTING (or the panel unmounts).
-  const testingSessionId =
-    session && ['TESTING', 'AWAITING_FDE', 'PASSED'].includes(session.status)
-      ? session.id
-      : null;
+  const testingSessionId = session?.status === 'TESTING' ? session.id : null;
   useEffect(() => {
     if (!testingSessionId) return;
     let cancelled = false;
@@ -366,6 +364,7 @@ export function AgentBuilderPanel(props: {
     try {
       const result = await API.post<BuilderMessageResult>('/api/agent-builder/sessions', {
         message: text,
+        agentId: props.agentId ?? undefined,
       });
       applyResult(result);
       setPendingMessage(null);
@@ -414,7 +413,7 @@ export function AgentBuilderPanel(props: {
 
   async function authorize(strategy: 'reuse' | 'create') {
     if (!session || locked) return;
-    if (session.status !== 'PLAN_READY' && session.status !== 'AWAITING_FDE') return;
+    if (!['PLAN_READY', 'AWAITING_FDE', 'AWAITING_TEST_DATA', 'TESTING', 'PASSED', 'FAILED'].includes(session.status)) return;
     setBusy(true);
     setError(null);
     try {
@@ -427,6 +426,9 @@ export function AgentBuilderPanel(props: {
         { strategy, targetAgentId },
       );
       applyResult(result);
+      if (result.session.status === 'ACTIVE') {
+        props.onActivated?.(result.session.agentId ?? result.session.builtAgentId ?? result.session.targetAgentId);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -517,25 +519,6 @@ export function AgentBuilderPanel(props: {
     }
   }
 
-  async function finalize() {
-    if (!session || locked || !isFde) return;
-    if (session.status !== 'PASSED') return;
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await API.post<BuilderMessageResult>(
-        `/api/agent-builder/sessions/${session.id}/finalize`,
-      );
-      applyResult(result);
-      const agentId = result.session.builtAgentId ?? result.session.targetAgentId;
-      props.onActivated?.(agentId);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function exportAgent() {
     if (!session || session.status !== 'ACTIVE' || exporting) return;
     setExporting(true);
@@ -569,9 +552,8 @@ export function AgentBuilderPanel(props: {
       status === 'ACTIVE' ||
       status === 'BUILDING');
 
-  const showAuthorize = status === 'PLAN_READY' || (status === 'AWAITING_FDE' && isFde);
-  const showTestPanel =
-    status === 'AWAITING_TEST_DATA' || status === 'FAILED' || status === 'PASSED';
+  const showAuthorize = ['PLAN_READY', 'AWAITING_FDE', 'AWAITING_TEST_DATA', 'TESTING', 'PASSED', 'FAILED'].includes(status ?? '');
+  const showTestPanel = false;
   const canReuse = (plan?.reuseCandidates?.length ?? 0) > 0;
   const recommendedReuse = plan?.strategyRecommendation === 'reuse' && canReuse;
 
@@ -624,7 +606,7 @@ export function AgentBuilderPanel(props: {
                 告訴我你想請一位 AI 員工做什麼
               </h2>
               <p className="text-sm text-muted">
-                用日常語言描述業務目標即可。我會一次只問一個關鍵問題，幫你規劃、試跑，再交給訓練師啟用。
+                用日常語言描述業務目標即可。我會一次只問一個關鍵問題；整理出第一份可用內容後，就能直接交代工作。
               </p>
             </div>
 
@@ -946,7 +928,7 @@ export function AgentBuilderPanel(props: {
           <div className="flex justify-start">
             <div className="max-w-[90%] rounded-2xl rounded-bl-md border border-amber-500/25 bg-amber-500/10 px-3 py-3 text-sm">
               <div className="font-medium text-amber-600 dark:text-amber-300">這次學習草稿尚未整理完成</div>
-              <p className="mt-1 text-xs text-muted">對話內容已保存，你可以繼續聊天；FDE 後臺會保留這次失敗紀錄。</p>
+              <p className="mt-1 text-xs text-muted">對話內容已保存，你可以繼續聊天，系統會重新整理下一版訓練內容。</p>
             </div>
           </div>
         )}
@@ -1144,7 +1126,7 @@ export function AgentBuilderPanel(props: {
 
             {showAuthorize && (
               <div className="space-y-2 border-t border-border pt-3">
-                <div className="text-xs font-medium text-muted">請選擇如何建立</div>
+                <div className="text-xs font-medium text-muted">同步中斷時重新套用</div>
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <button
                     type="button"
@@ -1161,7 +1143,7 @@ export function AgentBuilderPanel(props: {
                     ) : (
                       <Users className="h-4 w-4" />
                     )}
-                    沿用建議員工
+                    更新既有員工
                     {recommendedReuse ? '（建議）' : ''}
                   </button>
                   <button
@@ -1178,30 +1160,19 @@ export function AgentBuilderPanel(props: {
                     ) : (
                       <UserPlus className="h-4 w-4" />
                     )}
-                    建立新的員工
+                    重新建立可用員工
                     {!recommendedReuse ? '（建議）' : ''}
                   </button>
                 </div>
-                {!isFde ? (
-                  <p className="text-[11px] leading-relaxed text-muted">
-                    你是操作者：送出後會交給訓練師（FDE）審核。核准前不會建立或修改任何員工／技能。
-                  </p>
-                ) : (
-                  <p className="text-[11px] leading-relaxed text-muted">
-                    你是訓練師：確認後會建立暫停中的員工草稿與待確認技能（不會自動啟用）。
-                  </p>
-                )}
+                <p className="text-[11px] leading-relaxed text-muted">
+                  正常訓練不需要按這裡；第一份完整內容會自動成為可使用的員工。只有舊版資料或同步中斷時才需要重新套用。
+                </p>
               </div>
             )}
 
-            {status === 'AWAITING_FDE' && !isFde && (
+            {status === 'AWAITING_FDE' && (
               <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
-                已送交訓練師核准。在核准前不會建立任何員工或技能。
-              </p>
-            )}
-            {status === 'AWAITING_FDE' && isFde && (
-              <p className="text-xs text-muted">
-                此請求等待核准。請上方選擇沿用或新建後建立草稿。
+                這是舊版留下的待啟用狀態。請按上方按鈕直接完成啟用。
               </p>
             )}
           </div>
@@ -1377,33 +1348,11 @@ export function AgentBuilderPanel(props: {
           </div>
         )}
 
-        {status === 'PASSED' && isFde && (
-          <button
-            type="button"
-            className="btn-primary w-full justify-center"
-            disabled={locked}
-            onClick={() => void finalize()}
-          >
-            {busy ? (
-              <Spinner className="border-white/40 border-t-white" />
-            ) : (
-              <CheckCircle2 className="h-4 w-4" />
-            )}
-            確認技能並啟用
-          </button>
-        )}
-
-        {status === 'PASSED' && !isFde && (
-          <p className="rounded-lg border border-border bg-panel/50 px-3 py-3 text-center text-sm text-muted">
-            試跑已通過。等待 FDE 最終確認
-          </p>
-        )}
-
         {status === 'ACTIVE' && (
           <div className="space-y-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-4 text-center">
             <div className="flex items-center justify-center gap-2 text-sm font-medium text-emerald-900 dark:text-emerald-100">
               <CheckCircle2 className="h-4 w-4" />
-              已啟用，可以開始交代工作
+              現在可以使用，也可以繼續教它
             </div>
             {openAgentId ? (
               <div className="flex flex-wrap justify-center gap-2">
@@ -1437,8 +1386,8 @@ export function AgentBuilderPanel(props: {
         <div ref={endRef} />
       </div>
 
-      {/* Ongoing co-design composer: an activated employee can re-enter a new
-          shadow evolution without changing its live behavior. */}
+      {/* Ongoing co-design composer: a callable employee can keep learning in
+          the same durable session. Each complete snapshot updates it in place. */}
       {(status === 'DISCOVERY' || status === 'ACTIVE') && (
         <div className="border-t border-border p-3">
           {error && <p className="mb-2 text-sm text-rose-400">{error}</p>}
@@ -1673,7 +1622,7 @@ export function AgentBuilderRail({ session }: { session: BuilderSession | null }
 
       <div className="mt-auto space-y-2 p-4 text-[11px] leading-relaxed text-muted">
         <p>不會自動開通寄信、雲端寫入或不可逆操作。</p>
-        <p>技能需訓練師確認後才會生效。</p>
+        <p>完整訓練內容同步後，技能會直接套用到同一位員工。</p>
       </div>
     </div>
   );

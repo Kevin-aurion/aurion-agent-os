@@ -420,7 +420,7 @@ test('factory sections assemble evolution with migrated rules + notBuildTurn', (
   assert.match(text, /工具只有 realCatalog 明確存在且健康時才能標 AVAILABLE/);
   assert.match(text, /所有技能 status 必須是 DRAFT/);
   assert.match(text, /若本輪內容明顯不是建置對話，輸出 `\{"notBuildTurn": true\}`，不得硬編草稿/);
-  assert.match(text, /輸出純 JSON，鍵為 understanding、changes、harness、userSummary、fdeSummary、suggestTest/);
+  assert.match(text, /輸出純 JSON，鍵為 understanding、changes、harness、userSummary、maintenanceSummary、suggestTest/);
   assert.doesNotMatch(text, /Grill 訪談顧問/);
   assert.doesNotMatch(text, /禁止使用任何工具、網路、Shell、Computer Use/);
 });

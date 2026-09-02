@@ -19,9 +19,6 @@ import {
 } from 'lucide-react';
 import { AppShell } from '@/components/AppShell';
 import { PageHeader, EmptyState, StatusBadge, Spinner } from '@/components/ui';
-import { SkillQualityPanel } from '@/components/admin/SkillQualityPanel';
-import { McpRegistryPanel } from '@/components/admin/McpRegistryPanel';
-import { A2APeersPanel } from '@/components/admin/A2APeersPanel';
 import { API } from '@/lib/api';
 import { useAwp } from '@/lib/awp';
 import { cn } from '@/lib/cn';
@@ -168,7 +165,7 @@ export default function DashboardPage() {
 
   return (
     <AppShell>
-      <PageHeader title="總覽 Dashboard" subtitle="FDE 管理中心 · AIOS 代理工作站即時狀態" />
+      <PageHeader title="總覽 Dashboard" subtitle="AIOS 系統設定與即時狀態" />
 
       {summaryQuery.isLoading ? (
         <div className="flex h-40 items-center justify-center">
@@ -183,7 +180,7 @@ export default function DashboardPage() {
             icon={Wrench}
             label="技能 Skills"
             value={skillsConfirmed}
-            hint={skillsPending > 0 ? `${skillsPending} 待審核` : '全部已確認'}
+            hint={skillsPending > 0 ? `${skillsPending} 待確認` : '全部已確認'}
           />
           <StatCard icon={Workflow} label="工作流 Workflows" value={summary?.workflows?.enabled ?? 0} />
           <StatCard
@@ -347,10 +344,6 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Slice 2 — skill quality / release gate (FDE) */}
-      <SkillQualityPanel />
-      <McpRegistryPanel />
-      <A2APeersPanel />
     </AppShell>
   );
 }

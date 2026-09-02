@@ -32,7 +32,7 @@ npm run typecheck  # tsc --noEmit
 員工列表與詳情（概況/技能/雲端檔案/工作流/執行紀錄/訓練/記憶/對話）、工作流編輯、技能、設定（連動帳號）、組織圖與權限、提案審核、中文稽核。即時更新靠 `lib/awp` 訂閱 WS 主題。
 
 ## 狀態
-本輪：Agent Workbench Phase 1（雙表面 + 工作台 Work/Teach）＋ **建立 AI 員工**（Agent Builder 前端，接既有 backend）。不改 Prisma、不弱化治理閘。
+目前：Agent Workbench + **建立／再訓練 AI 員工**。Web 與 Claude MCP／Plugin 共用後端 Agent Builder session；session owner 確認完成後直接啟用，不顯示 FDE、Shadow 試教、Builder test 或錄製訓練入口。執行期權限、預算與高風險守門不變。
 
 ## 登入續期
 - Access Token 為短效憑證；`lib/api.ts` 以單一進行中請求 + Web Locks 跨分頁序列化 Refresh Token 輪替，避免多個 401 互相撤銷而提前登出。

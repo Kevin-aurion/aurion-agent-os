@@ -36,7 +36,7 @@
 - 每 **10 分鐘** 用單次 refresh token **主動輪替**；持久化於 `AIOS_MCP_STATE_DIR`（預設 `~/.aios-mcp`）
 - 遇 **401** 強制刷新後**重試一次**
 - 憑證在 `.env`：`AIOS_MCP_EMAIL` / `AIOS_MCP_PASSWORD`（**MEMBER 角色即足夠**）
-- 客戶端用途設定 `AIOS_MCP_PROFILE=builder`，只註冊 22 個 Agent Builder／Hook／Runtime 工具與 Builder resources（15 builder + 7 runtime）；`full` 才註冊完整 provider 能力
+- 客戶端用途設定 `AIOS_MCP_PROFILE=builder`，只註冊 18 個簡化工具（11 Builder／同步 + 7 Runtime）與 Builder resources；`full` 才註冊完整 provider 能力
 
 ## 工具模組（`src/tools/`）
 
@@ -48,14 +48,14 @@
 | `conversations` / `memory` / `system` | 對話、記憶、健康／總覽 |
 | **`recording`**（slice4） | 錄製起停／狀態／轉技能 → aios-server 錄製 API（如 `/api/recording/*`、`/api/agents/:id/recording/to-skill`）；產物仍停在 **待確認**、依 **user 隔離**；不接受前端任意本機路徑 |
 | **`googleworkspace`** | Gmail／Drive 唯讀工具；草稿／寄信／Drive 寫入另走 FDE + 真核准 Run + Agent restriction 的 fail-closed route |
-| **`agentbuilder`** | ChatGPT/Claude/Codex/Cursor 建置對話逐輪同步、檔案、完整 shadow draft、`list_testable_agents` + `chat_with_test_agent` 免 FDE 隔離試教、每回合反思、送 FDE 審核與最後驗證；不得 approve／confirm／activate |
+| **`agentbuilder`** | ChatGPT／Claude／Codex／Cursor 以 durable session 逐輪同步訓練對話、檔案與完整 draft；既有 `agentId` 續接同一後端 session；使用者確認完成後呼叫 `activate_agent_build` 直接建立／更新並啟用，不經 FDE、Shadow 試教或 Builder test |
 | **`agentruntime`** | 列出登入帳號自己的 ACTIVE Agent、讀能力、冪等呼叫與查 Run；排程與封存只建立 ChangeProposal，FDE 核准前不生效；封存核准後停用 Agent／Workflow／Schedule 並拒絕調用 |
 
 Resources 在 `src/resources/`（agents / skills / workflows / memory / system / agentbuilder）；prompt `build-aios-agent` 與 `use-aios-agent` 在 `src/prompts/`。
 
 外部 Builder 逐輪同步用 `externalEventId` 去重；檔案只能傳內容，不接受主機路徑。完整安裝與操作見 `docs/INSTALLATION.zh-TW.md`。
 
-Claude Plugin 使用 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PermissionRequest`、`PostToolUse`、`Stop` command hooks 維護不含對話內容的本機同步狀態。明確 Agent 建置第一輪要求 `start_agent_build`，每輪要求 `prepare_agent_build_prompt`，Stop 要求 `guard_agent_build_stop`；`PreToolUse`／`PermissionRequest` 只能自動允許目前 Claude session 的三個 lifecycle 工具，以及 Build ID 完全吻合的三個 inert draft-sync 工具。上傳、送審、測試、啟用與發布不得加入自動白名單。只有嚴格白名單的 Plugin scoped／Claude Desktop Connector 名稱成功 `PostToolUse` 才能關閉 lifecycle 旗標。Hook 不持有 credential、不得讀取 OAuth cache、一般對話必須 no-op；Stop 重試最多兩次後 fail-safe，禁止無限迴圈。現行 Claude Code loader 不接受此 Plugin 原先使用的 `mcp_tool` handler，因此不得重新加入該格式，除非先以實際版本驗證 loader schema。
+Claude Plugin 目前以 `SessionStart` 載入 Skill；訓練對話由 Skill 明確呼叫 `start_agent_build`、逐輪同步工具與 `activate_agent_build`。Hook 不持有 credential、不得讀取 OAuth cache；一般對話不得擅自啟動 Builder。不要重新加入未經現行 Claude Code 實機驗證的 hook schema。
 
 ## 指令
 

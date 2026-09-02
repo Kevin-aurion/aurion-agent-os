@@ -9,6 +9,7 @@ import { audit } from './audit.js';
 import { redactSecrets } from '../memory/redactor.js';
 import {
   mcpSessions,
+  McpToolResultError,
   type McpCallOptions,
   type McpSession,
   type McpTransportConfig,
@@ -17,6 +18,7 @@ import {
   assertLoopbackUrl,
   getServerByServerId,
   toTransportConfig,
+  updateHealthFields,
 } from './mcpregistry.js';
 import { issueMcpCapability } from './mcpcapability.js';
 
@@ -183,12 +185,30 @@ export async function brokerDispatch(
           }),
         }
       : req.args;
-  const raw = await session.call(req.tool, callArgs, {
-    timeoutMs: req.timeoutMs ?? entry.timeoutMs,
-    idempotencyKey: req.idempotencyKey,
-    signal: req.signal,
-    onProgress: req.onProgress,
-  });
+  let raw: unknown;
+  try {
+    raw = await session.call(req.tool, callArgs, {
+      timeoutMs: req.timeoutMs ?? entry.timeoutMs,
+      idempotencyKey: req.idempotencyKey,
+      signal: req.signal,
+      onProgress: req.onProgress,
+    });
+    // Connection state is operational data, not a model-authored claim. Keep
+    // it fresh after real calls so Agent capability cards do not say a working
+    // MCP is still waiting for setup.
+    await updateHealthFields(entry.id, {
+      healthStatus: 'healthy',
+      lastHealthAt: new Date(deps?.now?.() ?? Date.now()),
+    }).catch(() => {});
+  } catch (error) {
+    await updateHealthFields(entry.id, {
+      // A structured tool rejection proves the transport/server responded;
+      // malformed input must not make a connected MCP look disconnected.
+      healthStatus: error instanceof McpToolResultError ? 'healthy' : 'error',
+      lastHealthAt: new Date(deps?.now?.() ?? Date.now()),
+    }).catch(() => {});
+    throw error;
+  }
 
   // 7. redact
   const redacted = redactValue(raw);

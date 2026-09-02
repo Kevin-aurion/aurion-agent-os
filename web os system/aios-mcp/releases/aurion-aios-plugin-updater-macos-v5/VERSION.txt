@@ -1,0 +1,2 @@
+Aurion AIOS Mac 安裝／更新工具 v5
+電腦沒有 Claude Code 或 Codex 時，會先安裝官方 Codex CLI，再安裝 Plugin 並完成 MCP 授權。

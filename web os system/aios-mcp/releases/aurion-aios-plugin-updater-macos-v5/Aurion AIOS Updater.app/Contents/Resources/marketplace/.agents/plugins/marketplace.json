@@ -1,0 +1,20 @@
+{
+  "name": "aurion-aios-updater",
+  "interface": {
+    "displayName": "Aurion Aios Updater"
+  },
+  "plugins": [
+    {
+      "name": "aurion-aios-builder",
+      "source": {
+        "source": "local",
+        "path": "./plugins/aurion-aios-builder"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

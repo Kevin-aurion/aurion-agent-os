@@ -8,6 +8,10 @@ import { audit } from '../lib/audit.js';
 import { hub } from '../ws/hub.js';
 import { slugify } from '../lib/slug.js';
 import { buildAgentSkillCatalog } from '../lib/skillmanifest.js';
+import {
+  isBuilderAgentReleased,
+  rejectUnreleasedBuilderAgents,
+} from '../lib/builderrelease.js';
 
 const EngineEnum = z.enum(['CLAUDE_CODE', 'CODEX', 'GROK']);
 
@@ -90,8 +94,9 @@ export async function agentRoutes(app: FastifyInstance) {
           _count: { select: { skills: true, workflows: { where: { deletedAt: null } } } },
         },
       });
+      const visible = await rejectUnreleasedBuilderAgents(agents);
       return ok(
-        agents.map((a) => ({
+        visible.map((a) => ({
           ...a,
           skillCount: a._count.skills,
           workflowCount: a._count.workflows,
@@ -181,6 +186,7 @@ export async function agentRoutes(app: FastifyInstance) {
         },
       });
       if (!agent) throw errors.notFound('Agent not found');
+      if (!(await isBuilderAgentReleased(agent.id))) throw errors.notFound('Agent not found');
       return ok(agent);
     } catch (e) {
       return sendError(reply, e);

@@ -1,10 +1,12 @@
 // External Agent Builder ingress for Claude, ChatGPT, Codex and Cursor.
 //
 // MCP clients can synchronize exact transcript turns, parsed source files and a
-// complete draft artifact. All writes are owner-scoped and deep-redacted. A new
-// conversation gets an immediately usable least-privilege Agent container, but
-// external clients can never approve Skills, enable tools, or activate elevated
-// Workflow/MCP capabilities through these functions.
+// complete artifact. All writes are owner-scoped and deep-redacted. A new
+// conversation starts as DISCOVERY with no Agent row (create strategy keeps
+// agentId / targetAgentId / builtAgentId null). The first complete artifact is
+// immediately materialized as a callable Agent; later artifacts hot-update the
+// same Agent and durable session. Training never expands runtime tool grants,
+// schedules, or elevated Workflow/MCP capabilities.
 import path from 'node:path';
 import { ulid } from 'ulid';
 import { Prisma, PrismaClient, type AgentBuildIteration, type AgentBuildSession, type AgentBuildSessionStatus, type UserRole } from '@prisma/client';
@@ -16,6 +18,7 @@ import { deepRedactSecrets } from '../memory/deepredact.js';
 import { hub } from '../ws/hub.js';
 import {
   assertBuilderAgentBindingAvailable,
+  authorizeBuilderSession,
   buildCapabilityPlan,
   buildProgress,
   getBuilderSession,
@@ -39,10 +42,9 @@ import {
   normalizeTestInputRequirements,
   type BuilderTestInputRequirement,
 } from './buildertestinputs.js';
-import { createBuilderWorkingAgent } from './builderworkingagent.js';
 import { assemblePrompt } from './promptassembly.js';
 
-export type ExternalBuilderSource = 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CHATGPT' | 'CURSOR' | 'OTHER';
+export type ExternalBuilderSource = 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CODEX' | 'CHATGPT' | 'CURSOR' | 'OTHER';
 
 export type ExternalTurn = {
   role: 'user' | 'assistant' | 'system';
@@ -53,6 +55,7 @@ export type ExternalArtifactInput = {
   identity: {
     name: string;
     purpose: string;
+    department?: string;
     workingStyle?: string[];
   };
   agentMarkdown?: string;
@@ -75,7 +78,7 @@ export type ExternalArtifactInput = {
   tools?: Array<{
     name: string;
     purpose?: string;
-    status?: 'AVAILABLE' | 'NEEDS_FDE' | 'NOT_NEEDED';
+    status?: 'AVAILABLE' | 'NEEDS_SETUP' | 'NEEDS_FDE' | 'NOT_NEEDED';
   }>;
   policies?: {
     allowed?: string[];
@@ -130,6 +133,27 @@ export type ExternalPromptHookResult = {
 const MAX_TRANSCRIPT_ENTRIES = 1_000;
 const MAX_MEMORY_DOCUMENTS = 24;
 const MAX_WORKFLOWS = 12;
+
+async function reopenRetiredReviewState<T extends AgentBuildSession>(row: T): Promise<T> {
+  if (row.status === 'AWAITING_FDE') {
+    await prisma.agentBuildSession.update({
+      where: { id: row.id },
+      data: { status: 'DISCOVERY', plan: Prisma.DbNull },
+    });
+    return { ...row, status: 'DISCOVERY', plan: null } as T;
+  }
+  if (!['AWAITING_TEST_DATA', 'TESTING', 'PASSED', 'FAILED'].includes(row.status)) return row;
+  await authorizeBuilderSession({
+    sessionId: row.id,
+    userId: row.userId,
+    role: 'MEMBER',
+    strategy: row.strategy === 'reuse' ? 'reuse' : 'create',
+    targetAgentId: row.targetAgentId ?? undefined,
+  });
+  const refreshed = await prisma.agentBuildSession.findUnique({ where: { id: row.id } });
+  if (!refreshed) throw errors.notFound('Session not found');
+  return { ...row, ...refreshed } as T;
+}
 
 /** Internal compiler/test prompts must never recursively open a Builder session. */
 const AGENT_BUILD_INTERNAL_RE =
@@ -210,10 +234,6 @@ export function isExplicitAgentBuildPrompt(prompt: string): boolean {
   const sentences = normalized.split(/[。！？!?\n]+/).filter((sentence) => sentence.trim());
   if (sentences.some(sentenceHasBuildIntent)) return true;
   return nearbyBuildIntent(normalized);
-}
-
-function isFde(role: UserRole | string): boolean {
-  return role === 'OWNER' || role === 'TRAINER';
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
@@ -351,13 +371,13 @@ function normalizeHarness(
     name: cleanString(tool.name, 180),
     purpose: cleanString(tool.purpose, 800),
     // Never trust a desktop model's assertion that a connection or permission exists.
-    status: tool.status === 'NOT_NEEDED' ? 'NOT_NEEDED' as const : 'NEEDS_FDE' as const,
+    status: tool.status === 'NOT_NEEDED' ? 'NOT_NEEDED' as const : 'NEEDS_SETUP' as const,
   })).filter((tool) => tool.name);
 
   const requiredApprovals = new Set([
     ...cleanStrings(input.policies?.requiresApproval, 30, 800),
     '寄信、雲端寫入、電腦操作、Shell、付款、刪除與其他不可逆動作',
-    '新增或修改 Agent、Skill、Workflow、工具連線與權限後的正式生效',
+    '外部工具連線與高風險權限必須先由使用者完成設定',
   ]);
   const testIdeas = (input.tests ?? []).slice(0, 20).map((test, index) => ({
     name: cleanString(test.name, 180) || `測試 ${index + 1}`,
@@ -370,6 +390,7 @@ function normalizeHarness(
     identity: {
       name,
       purpose,
+      department: cleanString(input.identity?.department, 80) || undefined,
       workingStyle: cleanStrings(input.identity?.workingStyle, 20, 800),
     },
     agentMarkdown: input.agentMarkdown ? cleanString(input.agentMarkdown, 60_000) : undefined,
@@ -471,13 +492,13 @@ function defaultChanges(input: ExternalArtifactInput, previous: AgentBuildIterat
     area: 'workflow',
     action: previous ? 'updated' : 'added',
     summary: `同步 ${input.workflows.length} 個工作流程草稿`,
-    reason: '流程只進入審核草稿，尚未啟用。',
+    reason: '流程隨完整訓練快照同步，立即套用到同一位可呼叫員工。',
   });
   if (input.tests?.length) changes.push({
     area: 'test',
     action: previous ? 'updated' : 'added',
     summary: `同步 ${input.tests.length} 個測試案例`,
-    reason: '作為 FDE 建立後的試跑候選資料。',
+    reason: '作為訓練內容中的範例與回歸案例。',
   });
   return changes;
 }
@@ -613,6 +634,7 @@ export async function prepareExternalBuilderPrompt(opts: {
     // classifier false-positive durable. start_agent_build is the sole create path.
     return hookResultForUnstartedBuild(prompt);
   }
+  row = await reopenRetiredReviewState(row);
 
   if (!['DISCOVERY', 'PLAN_READY', 'ACTIVE'].includes(row.status)) {
     return {
@@ -718,6 +740,7 @@ export async function guardExternalBuilderStop(opts: {
     created = !result.deduplicated;
   }
   if (!row) return { matched: false };
+  row = await reopenRetiredReviewState(row);
 
   if (!['DISCOVERY', 'PLAN_READY', 'ACTIVE'].includes(row.status)) {
     return {
@@ -728,7 +751,7 @@ export async function guardExternalBuilderStop(opts: {
       userMessageSynced: false,
       finalMessageSynced: false,
       backgroundBuildQueued: false,
-      systemMessage: `AIOS 建置 ${row.id} 目前為 ${row.status}；本輪未修改待審或測試中的版本。`,
+      systemMessage: `AIOS 訓練 ${row.id} 目前為 ${row.status}；請先完成目前的啟用操作。`,
     };
   }
 
@@ -863,6 +886,10 @@ export async function guardExternalBuilderStop(opts: {
   };
 }
 
+// Inert start: DISCOVERY session. Create strategy writes no Agent row and
+// keeps agentId / targetAgentId / builtAgentId null. Reuse may bind an
+// existing Agent id without mutating that row. Same owner+conversation
+// retries return the existing session (deduplicated).
 export async function createExternalBuilderSession(opts: {
   userId: string;
   source: ExternalBuilderSource;
@@ -952,24 +979,17 @@ export async function createExternalBuilderSession(opts: {
         agentId: target.id,
       }, tx);
     }
-    const workingAgent = target ?? await createBuilderWorkingAgent(tx, {
-      userId: opts.userId,
-      name: brief.requestedAgentName || conversationTitle,
-      objective: brief.objective,
-      process: brief.process,
-      tags: brief.tags,
-    });
     const row = await tx.agentBuildSession.create({
       data: {
         id,
         userId: opts.userId,
-        status: 'ACTIVE',
+        status: 'DISCOVERY',
         transcript: transcript as Prisma.InputJsonValue,
         brief: brief as Prisma.InputJsonValue,
         progress: buildProgress(inference.answered, null) as Prisma.InputJsonValue,
-        targetAgentId: workingAgent.id,
-        agentId: workingAgent.id,
-        builtAgentId: target ? null : workingAgent.id,
+        targetAgentId: target?.id ?? null,
+        agentId: target?.id ?? null,
+        builtAgentId: null,
         strategy: target ? 'reuse' : 'create',
         externalSource: opts.source,
         externalConversationId: conversationId,
@@ -980,7 +1000,8 @@ export async function createExternalBuilderSession(opts: {
     return { row, created: true as const };
   });
   if (!persisted.created) {
-    return { session: toSessionDto(persisted.row), deduplicated: true };
+    const resumed = await reopenRetiredReviewState(persisted.row);
+    return { session: toSessionDto(resumed), deduplicated: true };
   }
   const row = persisted.row;
   await audit(opts.userId, 'agent_builder.external_session_created', 'AgentBuildSession', id, {
@@ -988,15 +1009,6 @@ export async function createExternalBuilderSession(opts: {
     externalConversationId: conversationId,
     agentId: row.agentId,
   });
-  if (row.builtAgentId) {
-    await audit(opts.userId, 'agent_builder.working_agent_created', 'Agent', row.builtAgentId, {
-      sessionId: id,
-      source: opts.source,
-      status: 'ACTIVE',
-      leastPrivilege: true,
-    });
-    hub.publish('agent.status', { id: row.builtAgentId, status: 'ACTIVE', event: 'created' });
-  }
   // Local evolution ledger: first message seeds a background iteration so
   // reflection/training history stays continuous after remote idempotency merge.
   const iteration = await createBuilderEvolutionIteration({
@@ -1021,8 +1033,9 @@ export async function syncExternalBuilderTurn(opts: {
   turns: ExternalTurn[];
   summary?: string;
 }): Promise<{ session: SessionDto; deduplicated: boolean; iteration: IterationDto | null }> {
-  const row = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
+  let row = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
   if (row.userId !== opts.userId) throw errors.notFound('Session not found');
+  row = await reopenRetiredReviewState(row);
   if (!['DISCOVERY', 'PLAN_READY', 'ACTIVE'].includes(row.status)) {
     throw errors.conflict(`Session does not accept external turns (status=${row.status})`);
   }
@@ -1109,7 +1122,7 @@ export async function upsertExternalBuilderSnapshot(opts: {
 }): Promise<{
   session: SessionDto;
   turn: { deduplicated: boolean; iteration: IterationDto | null };
-  artifact: { deduplicated: boolean; iteration: IterationDto };
+  artifact: { deduplicated: boolean; iteration: IterationDto; becameCallable: boolean };
 }> {
   const rootEventId = cleanString(opts.externalEventId, 120);
   if (!rootEventId) throw errors.badRequest('externalEventId is required');
@@ -1124,7 +1137,11 @@ export async function upsertExternalBuilderSnapshot(opts: {
   return {
     session: artifact.session,
     turn: { deduplicated: turn.deduplicated, iteration: turn.iteration },
-    artifact: { deduplicated: artifact.deduplicated, iteration: artifact.iteration },
+    artifact: {
+      deduplicated: artifact.deduplicated,
+      iteration: artifact.iteration,
+      becameCallable: artifact.becameCallable,
+    },
   };
 }
 
@@ -1144,9 +1161,15 @@ export async function importExternalBuilderArtifact(opts: {
   source: ExternalBuilderSource;
   externalEventId: string;
   artifact: ExternalArtifactInput;
-}): Promise<{ session: SessionDto; iteration: IterationDto; deduplicated: boolean }> {
-  const session = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
+}): Promise<{
+  session: SessionDto;
+  iteration: IterationDto;
+  deduplicated: boolean;
+  becameCallable: boolean;
+}> {
+  let session = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
   if (session.userId !== opts.userId) throw errors.notFound('Session not found');
+  session = await reopenRetiredReviewState(session);
   if (!['DISCOVERY', 'PLAN_READY', 'ACTIVE'].includes(session.status)) {
     throw errors.conflict(`Session does not accept external artifacts (status=${session.status})`);
   }
@@ -1163,10 +1186,19 @@ export async function importExternalBuilderArtifact(opts: {
     return provenance?.source === opts.source && provenance?.externalEventId === eventId;
   });
   if (duplicate) {
+    const becameCallable = session.status !== 'ACTIVE';
+    const activated = await activateExternalBuilderSession({
+      sessionId: session.id,
+      userId: opts.userId,
+      role: opts.role,
+      strategy: session.strategy === 'reuse' ? 'reuse' : 'create',
+      targetAgentId: session.targetAgentId ?? undefined,
+    });
     return {
-      session: await hydratedSession(session.id),
+      session: activated,
       iteration: toIterationDto(duplicate),
       deduplicated: true,
+      becameCallable,
     };
   }
 
@@ -1184,7 +1216,7 @@ export async function importExternalBuilderArtifact(opts: {
     `外部來源：${opts.source}`,
     `Agent：${harness.identity.name}`,
     `技能：${harness.skills.length}；記憶文件：${harness.memory.documents?.length ?? 0}；流程：${harness.workflows?.length ?? 0}；測試：${harness.testIdeas.length}`,
-    '所有內容仍為 shadow draft，尚未建立、掛載、確認或啟用。',
+    '完整快照同步後會立即套用到同一位可呼叫員工；未連線的外部工具仍維持 NEEDS_SETUP。',
   ].join('\n');
 
   let created: AgentBuildIteration | null = null;
@@ -1262,14 +1294,23 @@ export async function importExternalBuilderArtifact(opts: {
     source: opts.source,
     at: new Date().toISOString(),
   });
+  const becameCallable = session.status !== 'ACTIVE';
+  const activated = await activateExternalBuilderSession({
+    sessionId: session.id,
+    userId: opts.userId,
+    role: opts.role,
+    strategy: session.strategy === 'reuse' ? 'reuse' : 'create',
+    targetAgentId: session.targetAgentId ?? undefined,
+  });
   return {
-    session: await hydratedSession(session.id),
+    session: activated,
     iteration: toIterationDto(created),
     deduplicated: false,
+    becameCallable,
   };
 }
 
-export async function submitExternalBuilderForReview(opts: {
+export async function activateExternalBuilderSession(opts: {
   sessionId: string;
   userId: string;
   role: UserRole | string;
@@ -1278,31 +1319,51 @@ export async function submitExternalBuilderForReview(opts: {
 }): Promise<SessionDto> {
   const row = await loadOwnedSession(opts.sessionId, opts.userId, opts.role);
   if (row.userId !== opts.userId) throw errors.notFound('Session not found');
-  if (!['DISCOVERY', 'PLAN_READY', 'ACTIVE'].includes(row.status)) {
-    throw errors.conflict(`Cannot submit external build from status=${row.status}`);
+  const strategy: 'create' | 'reuse' =
+    row.strategy === 'reuse' || (!row.builtAgentId && Boolean(row.targetAgentId))
+      ? 'reuse'
+      : opts.strategy;
+  if (!['DISCOVERY', 'PLAN_READY', 'ACTIVE', 'AWAITING_FDE', 'AWAITING_TEST_DATA', 'TESTING', 'PASSED', 'FAILED'].includes(row.status)) {
+    throw errors.conflict(`Cannot activate external build from status=${row.status}`);
+  }
+  if (['AWAITING_TEST_DATA', 'TESTING', 'PASSED', 'FAILED'].includes(row.status)) {
+    const result = await authorizeBuilderSession({
+      sessionId: row.id,
+      userId: opts.userId,
+      role: opts.role,
+      strategy,
+      targetAgentId: row.targetAgentId ?? undefined,
+    });
+    return result.session;
   }
   const latest = await prisma.agentBuildIteration.findFirst({
     where: { sessionId: row.id, status: 'READY' },
     orderBy: { sequence: 'desc' },
   });
   if (!latest?.artifactSnapshot) {
-    throw errors.badRequest('A READY synchronized artifact is required before FDE review');
+    throw errors.badRequest('A READY synchronized artifact is required before activation');
+  }
+  if (
+    row.status === 'ACTIVE'
+    && asObject(row.plan)?.activatedIterationId === latest.id
+  ) {
+    return hydratedSession(row.id);
   }
   const harness = latest.artifactSnapshot as HarnessSnapshot;
   const brief = deepRedactSecrets({
     ...asBrief(row.brief),
     objective: harness.identity.purpose,
     requestedAgentName: harness.identity.name,
-    requestedStrategy: opts.strategy,
+    requestedStrategy: strategy,
   }) as Brief;
   const plan = await buildCapabilityPlan(brief, row.userId);
   plan.summary = `建立「${harness.identity.name}」：${harness.identity.purpose}`;
   plan.proposedAgentName = harness.identity.name;
   plan.proposedSkillName = harness.skills[0]?.name ?? `${harness.identity.name}核心能力`;
-  plan.strategyRecommendation = opts.strategy;
+  plan.strategyRecommendation = strategy;
 
   let targetAgentId: string | null = null;
-  if (opts.strategy === 'reuse') {
+  if (strategy === 'reuse') {
     targetAgentId = opts.targetAgentId ?? row.builtAgentId ?? row.targetAgentId ?? row.agentId;
     if (!targetAgentId) throw errors.badRequest('targetAgentId is required for reuse strategy');
     const target = await prisma.agent.findFirst({
@@ -1324,7 +1385,7 @@ export async function submitExternalBuilderForReview(opts: {
     });
   }
 
-  const assistantMessage = '最新訓練草稿已送交 FDE；核准前不會建立、修改或啟用任何正式 Agent、Skill 或 Workflow。';
+  const assistantMessage = '最新訓練內容已完成同步，正在建立或更新這位 AI 員工。';
   const transcript = asTranscript(row.transcript);
   if (transcript.length >= MAX_TRANSCRIPT_ENTRIES) {
     throw errors.badRequest(`Builder transcript exceeds ${MAX_TRANSCRIPT_ENTRIES} entries`);
@@ -1334,28 +1395,34 @@ export async function submitExternalBuilderForReview(opts: {
     content: assistantMessage,
     at: new Date().toISOString(),
     source: asBrief(row.brief).externalSource ?? 'OTHER',
-    externalEventId: `review:${latest.id}`,
+    externalEventId: `activate:${latest.id}`,
   });
   await prisma.agentBuildSession.update({
     where: { id: row.id },
     data: {
-      status: 'AWAITING_FDE',
+      status: 'PLAN_READY',
       brief: brief as Prisma.InputJsonValue,
       plan: deepRedactSecrets(plan) as Prisma.InputJsonValue,
-      strategy: opts.strategy,
+      strategy,
       targetAgentId,
       agentId: targetAgentId ?? row.agentId,
       transcript: deepRedactSecrets(transcript) as Prisma.InputJsonValue,
       lastAssistantMessage: assistantMessage,
     },
   });
-  await audit(opts.userId, 'agent_builder.external_awaiting_fde', 'AgentBuildSession', row.id, {
-    strategy: opts.strategy,
+  await audit(opts.userId, 'agent_builder.direct_activation_requested', 'AgentBuildSession', row.id, {
+    strategy,
     targetAgentId,
     iterationId: latest.id,
     callerRole: opts.role,
-    // Explicitly demonstrate that an OWNER credential did not bypass review.
-    forcedReviewGate: isFde(opts.role),
+    releaseMode: 'SIMPLE_DIRECT',
   });
-  return getBuilderSession({ sessionId: row.id, userId: opts.userId, role: opts.role });
+  const activated = await authorizeBuilderSession({
+    sessionId: row.id,
+    userId: opts.userId,
+    role: opts.role,
+    strategy,
+    targetAgentId: targetAgentId ?? undefined,
+  });
+  return activated.session;
 }

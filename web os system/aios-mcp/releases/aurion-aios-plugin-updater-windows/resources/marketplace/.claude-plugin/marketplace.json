@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "aurion-aios-updater",
+  "description": "Aurion AIOS bundled installer and updater for Claude Code.",
+  "owner": {
+    "name": "Aurion"
+  },
+  "plugins": [
+    {
+      "name": "aurion-aios-builder",
+      "description": "Create, improve, and use Aurion AIOS employees through the hosted OAuth MCP.",
+      "version": "1.8.2",
+      "author": {
+        "name": "Aurion"
+      },
+      "source": "./plugins/aurion-aios-builder",
+      "category": "productivity",
+      "homepage": "https://aurion-aios.lazyoffice.app/agent-builds"
+    }
+  ]
+}

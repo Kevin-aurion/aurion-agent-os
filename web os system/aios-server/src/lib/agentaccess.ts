@@ -1,5 +1,6 @@
 import type { Agent, Prisma } from '@prisma/client';
 import type { AccessClaims } from './auth.js';
+import { isBuilderAgentReleased } from './builderrelease.js';
 import { prisma } from './db.js';
 import { errors } from './http.js';
 
@@ -34,6 +35,7 @@ export async function requireVisibleAgent(
     },
   });
   if (!agent) throw errors.notFound('Agent not found');
+  if (!(await isBuilderAgentReleased(agent.id))) throw errors.notFound('Agent not found');
   return agent;
 }
 

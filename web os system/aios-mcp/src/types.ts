@@ -100,6 +100,14 @@ export interface AgentRuntimeDetail {
     understanding: unknown;
   }>;
   workflows: AgentRuntimeWorkflow[];
+  toolConnections: Array<{
+    serverId: string;
+    name: string;
+    healthStatus: string;
+    lastHealthAt: string | null;
+    toolAllowlist: string[];
+    readWriteClass: string;
+  }>;
 }
 
 export interface AgentRuntimeRun {
@@ -124,18 +132,18 @@ export interface AgentRuntimeRun {
   }>;
 }
 
-export interface ScheduleProposalResponse {
-  proposalId: string;
-  status: 'PENDING';
-  deduplicated: boolean;
-  note: string;
+export interface ScheduleMutationResponse {
+  action: 'UPSERT' | 'PAUSE' | 'RESUME' | 'DELETE';
+  workflowId: string;
+  scheduleId: string | null;
+  enabled: boolean;
 }
 
-export interface AgentArchiveProposalResponse {
-  proposalId: string;
-  status: 'PENDING';
-  deduplicated: boolean;
-  note: string;
+export interface AgentArchiveResponse {
+  agentId: string;
+  status: 'ARCHIVED';
+  disabledWorkflowCount: number;
+  disabledScheduleCount: number;
 }
 
 /** Shape of GET /api/agents/:agentId/workflows items (serializeWorkflowSummary). */
@@ -271,7 +279,7 @@ export interface Preflight {
   integrations: { microsoft: boolean; google: boolean; line: boolean };
 }
 
-export type ExternalBuilderSource = 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CHATGPT' | 'CURSOR' | 'OTHER';
+export type ExternalBuilderSource = 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CODEX' | 'CHATGPT' | 'CURSOR' | 'OTHER';
 
 export interface AgentBuildIteration {
   id: string;

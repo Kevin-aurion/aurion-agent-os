@@ -1,6 +1,5 @@
-// Governed Agent archival for account-scoped MCP callers. A caller may only
-// create a PENDING proposal for an Agent it owns; an FDE approval is the sole
-// path that changes Agent.status to ARCHIVED.
+// Account-scoped Agent archival for MCP callers. A caller may archive only an
+// Agent it owns and must provide an exact-name confirmation plus a stable key.
 import { createHash } from 'node:crypto';
 import type { ChangeProposal, Prisma } from '@prisma/client';
 import { z } from 'zod';
@@ -97,4 +96,77 @@ export async function createAgentArchiveProposal(args: {
     });
     return { proposal, deduplicated: false };
   });
+}
+
+/** Archive one account-owned Agent immediately after exact-name confirmation. */
+export async function archiveOwnedAgent(args: {
+  agentId: string;
+  userId: string;
+  input: unknown;
+}): Promise<{
+  agentId: string;
+  status: 'ARCHIVED';
+  disabledWorkflowCount: number;
+  disabledScheduleCount: number;
+}> {
+  const input = AgentArchiveProposalSchema.parse(args.input);
+  const result = await prisma.$transaction(async (tx) => {
+    const agent = await tx.agent.findFirst({
+      where: {
+        id: args.agentId,
+        createdBy: args.userId,
+        systemManaged: false,
+        deletedAt: null,
+      },
+      select: { id: true, name: true, status: true },
+    });
+    if (!agent) throw errors.notFound('Agent not found');
+    if (agent.status === 'ARCHIVED') throw errors.conflict('Agent is already archived');
+    if (input.confirmAgentName !== agent.name) {
+      throw errors.badRequest('Agent name confirmation does not match the selected Agent');
+    }
+
+    const workflows = await tx.workflow.findMany({
+      where: { agentId: agent.id, deletedAt: null },
+      select: { id: true },
+    });
+    const workflowIds = workflows.map((workflow) => workflow.id);
+    const enabledSchedules = workflowIds.length
+      ? await tx.schedule.findMany({
+          where: { workflowId: { in: workflowIds }, enabled: true },
+          select: { id: true },
+        })
+      : [];
+    const disabledSchedules = enabledSchedules.length
+      ? await tx.schedule.updateMany({
+          where: { id: { in: enabledSchedules.map((schedule) => schedule.id) } },
+          data: { enabled: false, nextFireAt: null },
+        })
+      : { count: 0 };
+    const disabledWorkflows = await tx.workflow.updateMany({
+      where: { agentId: agent.id, deletedAt: null, enabled: true },
+      data: { enabled: false },
+    });
+    await tx.agent.update({
+      where: { id: agent.id },
+      data: { status: 'ARCHIVED' },
+    });
+    return {
+      agentId: agent.id,
+      disabledScheduleIds: enabledSchedules.map((schedule) => schedule.id),
+      disabledWorkflowCount: disabledWorkflows.count,
+      disabledScheduleCount: disabledSchedules.count,
+    };
+  });
+
+  const scheduler = await import('../scheduler/index.js').catch(() => null);
+  for (const scheduleId of result.disabledScheduleIds) {
+    await scheduler?.removeSchedule?.(scheduleId).catch(() => {});
+  }
+  return {
+    agentId: result.agentId,
+    status: 'ARCHIVED',
+    disabledWorkflowCount: result.disabledWorkflowCount,
+    disabledScheduleCount: result.disabledScheduleCount,
+  };
 }

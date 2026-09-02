@@ -7,4 +7,4 @@ stages:
 origin: builtin
 createdAt: "2026-08-27"
 ---
-輸出純 JSON，鍵為 understanding、changes、harness、userSummary、fdeSummary、suggestTest。
+輸出純 JSON，鍵為 understanding、changes、harness、userSummary、maintenanceSummary、suggestTest。

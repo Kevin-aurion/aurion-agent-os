@@ -7,7 +7,7 @@ import { Spinner } from '@/components/ui';
 
 /**
  * Root entry: after auth loads, everyone goes to the Agent Workbench (`/work`).
- * FDE manage surface lives at `/admin` (and existing /employees, /skills, …).
+ * Advanced system settings remain under `/admin`.
  */
 export default function RootRedirectPage() {
   const { user, loading } = useAuth();

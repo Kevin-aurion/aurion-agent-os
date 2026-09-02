@@ -43,11 +43,24 @@ type DownloadItem = {
 
 const downloads: DownloadItem[] = [
   {
+    title: 'macOS 雙擊安裝／更新工具',
+    filename: 'aurion-aios-plugin-updater-macos-v5.zip',
+    description: '解壓縮後雙擊 App；若沒有支援的 AI 程式，會先安裝官方 Codex CLI，再安裝 Plugin、檢查 MCP 並開啟授權網頁。',
+    icon: RefreshCw,
+    primary: true,
+  },
+  {
+    title: 'Windows 雙擊安裝／更新工具',
+    filename: 'aurion-aios-plugin-updater-windows-v4.zip',
+    description: '雙擊 VBS 即可；從 ZIP 預覽開啟時會自動補齊套件，沒有支援的 AI 程式時會先安裝官方 Codex CLI。',
+    icon: RefreshCw,
+    primary: true,
+  },
+  {
     title: 'Universal Plugin',
     filename: 'aurion-aios-builder-plugin.zip',
     description: 'ChatGPT／Codex 與 Claude Plugin 共用套件，包含 Skill、Remote MCP 設定與 Claude Hooks。',
     icon: PackageCheck,
-    primary: true,
   },
   {
     title: '跨平台一鍵安裝包',
@@ -216,8 +229,8 @@ export default function AgentBuilderInstallPage() {
           {[
             { icon: MessageSquareText, title: '自然對話', text: '動態理解需求，不走固定問卷' },
             { icon: RefreshCw, title: '背景迭代', text: '每輪持續更新完整草稿' },
-            { icon: ShieldCheck, title: '安全試用', text: '免 FDE 對話，外部動作仍隔離' },
-            { icon: Workflow, title: '正式治理', text: '上線前保留跨模型驗證與紀錄' },
+            { icon: ShieldCheck, title: '權限邊界', text: '只能使用已連線且允許的工具' },
+            { icon: Workflow, title: '直接使用', text: '第一份完整內容同步後立即可調度' },
           ].map(({ icon: Icon, title, text }, index) => (
             <div key={title} className={`p-6 ${index > 0 ? 'border-t border-white/10 md:border-l md:border-t-0' : ''}`}>
               <Icon className="h-5 w-5 text-indigo-300" />
@@ -289,7 +302,7 @@ export default function AgentBuilderInstallPage() {
             <div className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-300">Downloads</div>
             <h2 className="mt-3 text-3xl font-semibold tracking-tight text-white">安裝檔與說明文件</h2>
             <p className="mt-4 text-sm leading-7 text-slate-400">
-              網站建置時會從正式 MCP release 自動同步這些檔案；壓縮包不包含帳號、密碼、Token 或客戶端 AIOS Server。
+              已經安裝過 Plugin 的使用者，直接下載對應系統的「雙擊更新工具」即可，不需要開啟 Command Line。壓縮包不包含帳號、密碼、Token 或客戶端 AIOS Server。
             </p>
           </div>
           <a
@@ -311,15 +324,15 @@ export default function AgentBuilderInstallPage() {
         <div className="mx-auto grid max-w-7xl gap-10 px-5 sm:px-8 lg:grid-cols-[0.8fr_1.2fr]">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.2em] text-indigo-300">Security boundary</div>
-            <h2 className="mt-3 text-3xl font-semibold tracking-tight text-white">可以立即試聊，正式執行仍有安全邊界</h2>
+            <h2 className="mt-3 text-3xl font-semibold tracking-tight text-white">不用另外啟用，執行仍有安全邊界</h2>
             <p className="mt-5 text-sm leading-7 text-slate-400">
-              READY Shadow Agent 不需 FDE 就能在 Claude、ChatGPT 或 Codex 裡直接對話；測試模式沒有工具、網路、電腦控制、排程或外部寫入。OAuth 連線仍無法自行確認 Skill、核准權限或啟用正式 Agent。
+              第一份完整訓練內容同步後，AIOS 會在同一個訓練 session 內建立可用的 Agent、Skill 與工作流；後續教學直接更新同一位。OAuth 依然只能存取該登入帳號自己的員工與訓練資料。
             </p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             {[
-              { icon: LockKeyhole, text: 'Skill 永遠停在待 FDE 確認' },
-              { icon: MessageSquareText, text: 'READY Agent 可免 FDE 安全試聊' },
+              { icon: LockKeyhole, text: '未連線工具會停在 NEEDS_SETUP' },
+              { icon: MessageSquareText, text: '完整內容同步後自動可用' },
               { icon: CircleUserRound, text: '每位使用者只看到自己的建置資料' },
               { icon: KeyRound, text: 'OAuth 不把帳號密碼放進安裝包' },
               { icon: ShieldCheck, text: '寄信、寫入與不可逆操作需人工核准' },
@@ -351,7 +364,7 @@ export default function AgentBuilderInstallPage() {
       <footer className="border-t border-white/10 py-8">
         <div className="mx-auto flex max-w-7xl flex-col gap-3 px-5 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between sm:px-8">
           <div className="flex items-center gap-2"><span className="grid h-6 w-6 place-items-center rounded-md bg-brand text-[10px] font-bold text-white">A</span> Aurion AIOS Agent Builder</div>
-          <div>Remote MCP · OAuth 2.1 · FDE governed</div>
+          <div>Remote MCP · OAuth 2.1 · account scoped</div>
         </div>
       </footer>
     </main>

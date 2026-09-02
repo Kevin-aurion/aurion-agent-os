@@ -737,7 +737,6 @@ function OverviewTab({ agent }: { agent: AgentDetail }) {
 
       <WorkflowsOverviewCard agent={agent} />
       <MemoryCard agentId={agent.id} />
-      <DevicesTab agent={agent} />
     </div>
   );
 }
@@ -1266,6 +1265,10 @@ function WorkflowsOverviewCard({ agent }: { agent: AgentDetail }) {
 /** Translate a triggeredBy source string (e.g. "chat:abc") into zh-Hant. */
 function triggeredByZh(raw?: string | null): string {
   if (!raw) return '—';
+  // Direct MCP/REST invocations carry the authenticated user's ULID instead of
+  // a named source prefix. Showing that opaque value made every run row look
+  // as if it had the same run id, even though the real run ids were distinct.
+  if (/^[0-9A-HJKMNP-TV-Z]{26}$/i.test(raw)) return '使用者手動執行';
   const [prefix] = raw.split(':');
   switch (prefix) {
     case 'chat':
@@ -1345,6 +1348,9 @@ function RunRow({ run }: { run: RunListItem }) {
         <ChevronRight className={cn('h-4 w-4 shrink-0 text-muted transition-transform', expanded && 'rotate-90')} />
         <StatusBadge status={run.status} />
         <span className="text-sm text-muted">{triggeredByZh(run.triggeredBy)}</span>
+        <span className="font-mono text-xs text-muted" title={run.id}>
+          Run {run.id.length > 22 ? `${run.id.slice(0, 12)}…${run.id.slice(-6)}` : run.id}
+        </span>
         <span className="ml-auto text-xs text-muted" title={run.startedAt ? new Date(run.startedAt).toLocaleString('zh-Hant') : undefined}>
           {relativeTimeZh(run.startedAt)}
         </span>

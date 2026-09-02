@@ -10,6 +10,7 @@ import { hub } from '../ws/hub.js';
 import { assertLoopbackUrl } from '../lib/mcpregistry.js';
 import { redactSecrets } from '../memory/redactor.js';
 import { evaluateSloAlerts } from '../lib/slo.js';
+import { excludeUnreleasedBuilderAgentsWhere } from '../lib/builderrelease.js';
 
 // ── L9 health traffic lights (pure aggregation, shared by route + tests) ─────
 
@@ -689,6 +690,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
     try {
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
+      const unreleasedWhere = await excludeUnreleasedBuilderAgentsWhere();
 
       const [
         agentsActive,
@@ -697,7 +699,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
         runsTodayByStatus,
         accountsByProviderStatus,
       ] = await Promise.all([
-        prisma.agent.count({ where: { status: 'ACTIVE', deletedAt: null } }),
+        prisma.agent.count({ where: { status: 'ACTIVE', deletedAt: null, ...unreleasedWhere } }),
         prisma.skill.groupBy({
           by: ['reviewStatus'],
           where: { deletedAt: null },
@@ -784,6 +786,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
   // ── Org chart: owner / trainers / members + agents grouped by department ──
   app.get('/api/org', { preHandler: requireAuth }, async (_req, reply) => {
     try {
+      const unreleasedWhere = await excludeUnreleasedBuilderAgentsWhere();
       const [users, agents] = await Promise.all([
         prisma.user.findMany({
           where: { deletedAt: null },
@@ -791,7 +794,7 @@ export async function dashboardRoutes(app: FastifyInstance) {
           select: { id: true, displayName: true, email: true, role: true },
         }),
         prisma.agent.findMany({
-          where: { deletedAt: null },
+          where: { deletedAt: null, ...unreleasedWhere },
           orderBy: { createdAt: 'asc' },
           include: { _count: { select: { skills: true, workflows: { where: { deletedAt: null } } } } },
         }),

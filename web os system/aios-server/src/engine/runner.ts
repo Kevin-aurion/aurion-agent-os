@@ -15,6 +15,7 @@ import { paths } from '../config.js';
 import { hub } from '../ws/hub.js';
 import { audit } from '../lib/audit.js';
 import { errors } from '../lib/http.js';
+import { assertBuilderAgentReleased } from '../lib/builderrelease.js';
 import { requiresApproval, createApproval, isRunApproved } from '../lib/approval.js';
 import { materializeAgent } from './materialize.js';
 import { runClaude, runClaudeStream } from './claude.js';
@@ -1798,6 +1799,14 @@ export async function runAgent(opts: RunAgentOptions): Promise<RunOutcome> {
   if (agentRow.status !== 'ACTIVE' && !opts.builderTestSessionId) {
     throw errors.conflict(`Agent is not active: ${opts.agentId}`);
   }
+
+  // Production release gate: Builder-created Agents need finalized audit
+  // evidence. Isolated builderTestSessionId trials skip this check; HITL,
+  // materialize, cost, and CLI must not run for an unreleased production call.
+  await assertBuilderAgentReleased({
+    agentId: agentRow.id,
+    builderTestSessionId: opts.builderTestSessionId,
+  });
 
   // Pre-execution HITL gate: high-risk agents OR LINE send tools halt before any engine call.
   // Only a real DB ApprovalRequest with status APPROVED counts (fail-closed).

@@ -1,0 +1,47 @@
+#!/bin/bash
+
+# Finder-launched macOS app executable. Progress is written to a user-readable
+# log while OAuth is handled by the official Claude/Codex browser flow.
+
+set -u
+
+CONTENTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+RESOURCES_DIR="${CONTENTS_DIR}/Resources"
+UPDATER="${RESOURCES_DIR}/update-aios-plugins.sh"
+BUNDLED_MARKETPLACE="${RESOURCES_DIR}/marketplace"
+PLUGIN_SOURCE="${BUNDLED_MARKETPLACE}/plugins/aurion-aios-builder"
+USER_PROFILE_DIR="${HOME:?找不到目前使用者的個人資料夾}"
+LOG_DIR="${USER_PROFILE_DIR}/Library/Logs"
+LOG_FILE="${LOG_DIR}/Aurion AIOS Updater.log"
+
+export PATH="${USER_PROFILE_DIR}/.local/bin:${USER_PROFILE_DIR}/.local/node/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+mkdir -p "$LOG_DIR"
+
+/usr/bin/osascript -e 'display notification "正在安裝或更新 Plugin 並檢查 MCP；需要授權時瀏覽器會自動開啟。" with title "Aurion AIOS Updater"' >/dev/null 2>&1 || true
+
+if [ ! -f "$UPDATER" ] || [ ! -d "$PLUGIN_SOURCE" ]; then
+  printf 'Updater package is incomplete.\n' > "$LOG_FILE"
+  RESULT=1
+else
+  # Do not directly exec a quarantined nested shell script. The system bash
+  # reads it as data after Finder has approved this app launcher, avoiding the
+  # second Gatekeeper check that can terminate it with SIGKILL ("Killed: 9").
+  AURION_BUNDLED_MARKETPLACE="$BUNDLED_MARKETPLACE" AURION_PLUGIN_SOURCE="$PLUGIN_SOURCE" /bin/bash "$UPDATER" > "$LOG_FILE" 2>&1
+  RESULT=$?
+fi
+
+if [ "$RESULT" -eq 0 ]; then
+  /usr/bin/osascript <<'APPLESCRIPT' >/dev/null 2>&1
+display dialog "安裝／更新與 MCP 檢查都已完成。\n\n請重新開啟 Claude／Codex，並建立一個新對話。" with title "Aurion AIOS Updater" buttons {"完成"} default button "完成" with icon note
+APPLESCRIPT
+else
+  CHOICE="$(/usr/bin/osascript <<'APPLESCRIPT' 2>/dev/null || true
+button returned of (display dialog "有項目尚未完成。你可以查看記錄，或把記錄交給管理人員。" with title "Aurion AIOS Updater" buttons {"關閉", "查看記錄"} default button "查看記錄" with icon caution)
+APPLESCRIPT
+)"
+  if [ "$CHOICE" = "查看記錄" ]; then
+    /usr/bin/open "$LOG_FILE"
+  fi
+fi
+
+exit "$RESULT"

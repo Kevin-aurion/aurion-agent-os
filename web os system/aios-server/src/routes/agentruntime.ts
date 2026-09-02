@@ -9,13 +9,23 @@ import { prisma } from '../lib/db.js';
 import { requireAuth } from '../lib/guard.js';
 import { audit } from '../lib/audit.js';
 import { errors, ok, sendError } from '../lib/http.js';
-import { createScheduleProposal } from '../lib/scheduleproposal.js';
+import {
+  isBuilderAgentReleased,
+  rejectUnreleasedBuilderAgents,
+} from '../lib/builderrelease.js';
+import { applyOwnedScheduleChange } from '../lib/scheduleproposal.js';
 import {
   AgentArchiveProposalSchema,
-  createAgentArchiveProposal,
+  archiveOwnedAgent,
 } from '../lib/agentarchive.js';
+import { hub } from '../ws/hub.js';
 import { runWorkflow } from '../workflow/runner.js';
 import { runAgent } from '../engine/index.js';
+import {
+  effectiveWorkflowInputSchema,
+  prepareWorkflowInput,
+  selectAutomaticWorkflow,
+} from '../workflow/input.js';
 
 const invocationBodySchema = z
   .object({
@@ -61,6 +71,7 @@ async function requireOwnedCallableAgent(agentId: string, userId: string) {
     },
   });
   if (!agent) throw errors.notFound('Callable Agent not found');
+  if (!(await isBuilderAgentReleased(agent.id))) throw errors.notFound('Callable Agent not found');
   return agent;
 }
 
@@ -71,6 +82,7 @@ function serializeWorkflow(workflow: {
   enabled: boolean;
   inputSchema: unknown;
   trigger: unknown;
+  steps: Array<{ config: unknown }>;
   _count: { steps: number };
   schedules: Array<{
     id: string;
@@ -86,7 +98,7 @@ function serializeWorkflow(workflow: {
     name: workflow.name,
     description: workflow.description,
     enabled: workflow.enabled,
-    inputSchema: workflow.inputSchema,
+    inputSchema: effectiveWorkflowInputSchema(workflow.inputSchema, workflow.steps),
     stepCount: workflow._count.steps,
     triggerType:
       workflow.trigger && typeof workflow.trigger === 'object' && !Array.isArray(workflow.trigger)
@@ -115,6 +127,7 @@ export async function agentRuntimeRoutes(app: FastifyInstance) {
             where: { deletedAt: null, enabled: true },
             include: {
               _count: { select: { steps: true } },
+              steps: { select: { config: true }, orderBy: { position: 'asc' } },
               schedules: { orderBy: { id: 'asc' }, take: 1 },
             },
             orderBy: { createdAt: 'asc' },
@@ -122,9 +135,10 @@ export async function agentRuntimeRoutes(app: FastifyInstance) {
         },
         orderBy: { updatedAt: 'desc' },
       });
+      const visible = await rejectUnreleasedBuilderAgents(agents);
       return reply.send(
         ok(
-          agents.map((agent) => ({
+          visible.map((agent) => ({
             id: agent.id,
             name: agent.name,
             description: agent.description,
@@ -146,7 +160,7 @@ export async function agentRuntimeRoutes(app: FastifyInstance) {
     try {
       const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
       const agent = await requireOwnedCallableAgent(id, req.user!.sub);
-      const [skills, workflows] = await Promise.all([
+      const [skills, workflows, toolConnections] = await Promise.all([
         prisma.agentSkill.findMany({
           where: {
             agentId: agent.id,
@@ -169,9 +183,22 @@ export async function agentRuntimeRoutes(app: FastifyInstance) {
           where: { agentId: agent.id, deletedAt: null, enabled: true },
           include: {
             _count: { select: { steps: true } },
+            steps: { select: { config: true }, orderBy: { position: 'asc' } },
             schedules: { orderBy: { id: 'asc' }, take: 1 },
           },
           orderBy: { createdAt: 'asc' },
+        }),
+        prisma.mcpServerRegistry.findMany({
+          where: { enabled: true, allowedAgentIds: { has: agent.id } },
+          select: {
+            serverId: true,
+            name: true,
+            healthStatus: true,
+            lastHealthAt: true,
+            toolAllowlist: true,
+            readWriteClass: true,
+          },
+          orderBy: { serverId: 'asc' },
         }),
       ]);
       return reply.send(
@@ -185,6 +212,7 @@ export async function agentRuntimeRoutes(app: FastifyInstance) {
           approvalRequired: agent.riskTier === 'high',
           skills: skills.map(({ skill }) => skill),
           workflows: workflows.map(serializeWorkflow),
+          toolConnections,
         }),
       );
     } catch (error) {
@@ -199,22 +227,62 @@ export async function agentRuntimeRoutes(app: FastifyInstance) {
       assertJsonSize(body.input, 'Agent input');
       const agent = await requireOwnedCallableAgent(id, req.user!.sub);
 
-      if (body.workflowId) {
-        const workflow = await prisma.workflow.findFirst({
-          where: {
-            id: body.workflowId,
-            agentId: agent.id,
-            enabled: true,
-            deletedAt: null,
-            steps: { some: {} },
-          },
-          select: { id: true },
-        });
-        if (!workflow) throw errors.notFound('Enabled Agent workflow not found');
+      const workflows = await prisma.workflow.findMany({
+        where: {
+          agentId: agent.id,
+          enabled: true,
+          deletedAt: null,
+          steps: { some: {} },
+        },
+        select: {
+          id: true,
+          name: true,
+          trigger: true,
+          inputSchema: true,
+          steps: { select: { config: true }, orderBy: { position: 'asc' } },
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+
+      let workflow = body.workflowId
+        ? workflows.find((candidate) => candidate.id === body.workflowId) ?? null
+        : null;
+      let selectionReason: 'explicit' | 'keyword' | 'sole_message_workflow' | 'none' = body.workflowId
+        ? 'explicit'
+        : 'none';
+
+      if (body.workflowId && !workflow) throw errors.notFound('Enabled Agent workflow not found');
+      if (!body.workflowId) {
+        const selection = selectAutomaticWorkflow(workflows, body.input);
+        if (selection.reason === 'ambiguous') {
+          throw errors.badRequest('More than one Agent workflow matches this request; choose workflowId explicitly', {
+            matches: selection.ambiguous.map((candidate) => ({ id: candidate.id, name: candidate.name })),
+          });
+        }
+        workflow = selection.workflow;
+        if (selection.reason === 'keyword' || selection.reason === 'sole_message_workflow') {
+          selectionReason = selection.reason;
+        }
       }
 
+      let effectiveInput = body.input;
+      if (workflow) {
+        const prepared = prepareWorkflowInput(body.input, workflow.inputSchema, workflow.steps);
+        if (prepared.issues.length > 0) {
+          throw errors.badRequest('Workflow input does not match its required schema', {
+            workflowId: workflow.id,
+            workflowName: workflow.name,
+            issues: prepared.issues,
+            expectedInputSchema: prepared.schema,
+          });
+        }
+        effectiveInput = prepared.input;
+      }
+
+      const effectiveWorkflowId = workflow?.id;
+
       const runId = body.idempotencyKey
-        ? runtimeRunId(req.user!.sub, agent.id, body.workflowId, body.idempotencyKey)
+        ? runtimeRunId(req.user!.sub, agent.id, effectiveWorkflowId, body.idempotencyKey)
         : ulid();
       const existing = await prisma.run.findUnique({
         where: { id: runId },
@@ -222,19 +290,31 @@ export async function agentRuntimeRoutes(app: FastifyInstance) {
       });
       if (existing) {
         if (existing.agentId !== agent.id) throw errors.conflict('Idempotency key collision');
-        return reply.send(ok({ runId, status: existing.status, deduplicated: true }));
+        return reply.send(ok({
+          runId,
+          status: existing.status,
+          deduplicated: true,
+          workflowId: effectiveWorkflowId ?? null,
+          workflowSelection: selectionReason,
+        }));
       }
       if (pendingRuntimeRuns.has(runId)) {
-        return reply.code(202).send(ok({ runId, status: 'QUEUED', deduplicated: true }));
+        return reply.code(202).send(ok({
+          runId,
+          status: 'QUEUED',
+          deduplicated: true,
+          workflowId: effectiveWorkflowId ?? null,
+          workflowSelection: selectionReason,
+        }));
       }
 
       pendingRuntimeRuns.add(runId);
-      const execution = body.workflowId
-        ? runWorkflow(body.workflowId, body.input, req.user!.sub, runId)
+      const execution = effectiveWorkflowId
+        ? runWorkflow(effectiveWorkflowId, effectiveInput, req.user!.sub, runId)
         : runAgent({
             runId,
             agentId: agent.id,
-            input: body.input,
+            input: effectiveInput,
             triggeredBy: req.user!.sub,
           });
       void execution
@@ -245,9 +325,16 @@ export async function agentRuntimeRoutes(app: FastifyInstance) {
 
       await audit(req.user!.sub, 'agent.runtime.invoke', 'Agent', agent.id, {
         runId,
-        workflowId: body.workflowId ?? null,
+        workflowId: effectiveWorkflowId ?? null,
+        workflowSelection: selectionReason,
       });
-      return reply.code(202).send(ok({ runId, status: 'QUEUED', deduplicated: false }));
+      return reply.code(202).send(ok({
+        runId,
+        status: 'QUEUED',
+        deduplicated: false,
+        workflowId: effectiveWorkflowId ?? null,
+        workflowSelection: selectionReason,
+      }));
     } catch (error) {
       return sendError(reply, error);
     }
@@ -301,6 +388,7 @@ export async function agentRuntimeRoutes(app: FastifyInstance) {
         where: { agentId: agent.id, deletedAt: null, enabled: true },
         include: {
           _count: { select: { steps: true } },
+          steps: { select: { config: true }, orderBy: { position: 'asc' } },
           schedules: { orderBy: { id: 'asc' }, take: 1 },
         },
         orderBy: { createdAt: 'asc' },
@@ -316,26 +404,20 @@ export async function agentRuntimeRoutes(app: FastifyInstance) {
       const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
       const body = scheduleBodySchema.parse(req.body);
       const agent = await requireOwnedCallableAgent(id, req.user!.sub);
-      const result = await createScheduleProposal({
+      const result = await applyOwnedScheduleChange({
         agentId: agent.id,
         workflowId: body.workflowId,
-        proposedBy: req.user!.sub,
+        userId: req.user!.sub,
         change: body,
       });
-      await audit(req.user!.sub, 'schedule.proposal.created', 'ChangeProposal', result.proposal.id, {
+      await audit(req.user!.sub, 'schedule.updated', 'Workflow', result.workflowId, {
         agentId: agent.id,
         workflowId: body.workflowId,
         action: body.action,
-        deduplicated: result.deduplicated,
+        scheduleId: result.scheduleId,
+        enabled: result.enabled,
       });
-      return reply.code(result.deduplicated ? 200 : 202).send(
-        ok({
-          proposalId: result.proposal.id,
-          status: result.proposal.status,
-          deduplicated: result.deduplicated,
-          note: 'The schedule is not active until an FDE approves this proposal.',
-        }),
-      );
+      return reply.send(ok(result));
     } catch (error) {
       return sendError(reply, error);
     }
@@ -345,23 +427,18 @@ export async function agentRuntimeRoutes(app: FastifyInstance) {
     try {
       const { id } = z.object({ id: z.string().min(1) }).parse(req.params);
       const body = AgentArchiveProposalSchema.parse(req.body);
-      const result = await createAgentArchiveProposal({
+      const result = await archiveOwnedAgent({
         agentId: id,
-        proposedBy: req.user!.sub,
+        userId: req.user!.sub,
         input: body,
       });
-      await audit(req.user!.sub, 'agent.archive.proposal.created', 'ChangeProposal', result.proposal.id, {
+      await audit(req.user!.sub, 'agent.archived', 'Agent', id, {
         agentId: id,
-        deduplicated: result.deduplicated,
+        disabledWorkflowCount: result.disabledWorkflowCount,
+        disabledScheduleCount: result.disabledScheduleCount,
       });
-      return reply.code(result.deduplicated ? 200 : 202).send(
-        ok({
-          proposalId: result.proposal.id,
-          status: result.proposal.status,
-          deduplicated: result.deduplicated,
-          note: 'The Agent remains callable until an FDE approves this archive proposal.',
-        }),
-      );
+      hub.publish('agent.status', { id, status: 'ARCHIVED', event: 'archived' });
+      return reply.send(ok(result));
     } catch (error) {
       return sendError(reply, error);
     }

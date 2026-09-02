@@ -9,7 +9,7 @@ export function registerAgentBuilderResources(server: McpServer, client: HttpCli
     'aios-builds://list',
     {
       title: 'AIOS Agent Builder sessions',
-      description: 'Owned external and web Agent Builder sessions, including current review/test status.',
+      description: 'Owned external and web Agent training sessions, including current activation state and Agent id.',
       mimeType: 'application/json',
     },
     async (uri) => jsonResource(uri, await client.get<AgentBuildSession[]>('/api/agent-builder/sessions')),

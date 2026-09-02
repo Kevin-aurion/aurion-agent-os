@@ -1086,7 +1086,7 @@ model A2ATask {
   @@index([status])
 }
 
-// ── Agent Builder (CEO-friendly requirements interview → plan → authorize → test → finalize) ──
+// ── Agent Builder (durable training interview → plan → owner direct activation) ──
 
 /// Lifecycle of a durable Agent Builder interview/build session.
 enum AgentBuildSessionStatus {
@@ -1102,9 +1102,9 @@ enum AgentBuildSessionStatus {
   ABANDONED
 }
 
-/// A non-effective, reviewable Harness evolution produced while the user is
-/// still talking. READY means the draft compiled successfully — never that it
-/// has been approved, attached or activated.
+/// A durable Harness evolution produced while the user is still talking.
+/// READY means the draft compiled successfully and can be directly activated by
+/// the session owner; it does not mutate the live Agent by itself.
 enum AgentBuildIterationStatus {
   QUEUED
   ANALYZING
@@ -1117,7 +1117,7 @@ enum AgentBuildIterationStatus {
 /// Durable Agent Builder session. Transcript/brief/plan/test evidence are always redacted before persist.
 model AgentBuildSession {
   id                   String                  @id
-  /// Session owner (creator). Only owner + FDE may read; foreign users get 404.
+  /// Session owner (creator). Only the owner may train or activate; foreign users get 404.
   userId               String
   /// 外部 client 綁定：來源 + 對話 id 構成穩定身分（建置初期用）。
   externalSource            String?
@@ -1134,13 +1134,13 @@ model AgentBuildSession {
   plan                 Json?
   /// Discovery progress { answeredKeys[], currentKey?, total }.
   progress             Json?
-  /// FDE-chosen build strategy: reuse | create.
+  /// Owner-chosen build strategy: reuse | create.
   strategy             String?
   /// When strategy=reuse, the existing agent to attach the draft skill to.
   targetAgentId        String?
-  /// Agent created by this session (create strategy) — remains PAUSED until finalize.
+  /// Agent created or reused by this session; callable only after the session is ACTIVE.
   builtAgentId         String?
-  /// Builder-owned draft skill ids (AWAITING_USER_CONFIRM until FDE finalize).
+  /// Builder-owned draft skill ids; confirmed atomically during owner activation.
   draftSkillIds        String[]                @default([])
   /// Redacted manual fixture payload for the real runAgent test.
   testData             Json?
@@ -1167,8 +1167,8 @@ model AgentBuildSession {
 }
 
 /// Append-only history of how a Builder conversation changed the proposed
-/// Agent. The artifact snapshot is a shadow draft and cannot execute until the
-/// existing FDE authorization/finalization gates compile it into live rows.
+/// Agent. The artifact snapshot is a draft and cannot execute until the session
+/// owner directly activates it into live rows.
 model AgentBuildIteration {
   id                 String                    @id
   sessionId          String
@@ -1181,7 +1181,7 @@ model AgentBuildIteration {
   status             AgentBuildIterationStatus @default(QUEUED)
   /// Dynamic decision graph: facts, hypotheses, decisions, contradictions and open branches.
   understanding      Json?
-  /// Business-facing change list for the end user and detailed change list for FDE.
+  /// Business-facing change list plus detailed implementation notes.
   proposedChanges    Json?
   /// Shadow Harness snapshot: identity, skills, memory, tools, policies and test ideas.
   artifactSnapshot   Json?

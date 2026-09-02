@@ -9,6 +9,7 @@ Read this reference before the first `sync_agent_build_artifact` call. Send a co
   "identity": {
     "name": "客戶回款追蹤員",
     "purpose": "每天整理到期應收帳款，標示異常並產生可人工覆核的追蹤清單。",
+    "department": "財務",
     "workingStyle": [
       "先核對原始資料，再提出結論",
       "資料不完整時列入待確認，不自行猜測"
@@ -17,11 +18,13 @@ Read this reference before the first `sync_agent_build_artifact` call. Send a co
 }
 ```
 
+`department` 應填實際業務部門或職能（例如「專案管理」「營運」「財務」）；只有真的無法判斷時才填「未分類」。
+
 `agentMarkdown` and `claudeMarkdown` are optional complete Markdown drafts. Do not put secrets in them.
 
 ## Skills
 
-Provide structured fields and, when available, the complete `contentMd` that should become `SKILL.md` after testing and FDE approval.
+Provide structured fields and, when available, the complete `contentMd` that should become `SKILL.md` when the owner activates this training snapshot.
 
 ```json
 {
@@ -64,16 +67,16 @@ Facts are stable business facts. Preferences describe how this user wants work p
 }
 ```
 
-Absolute paths and `..` traversal are rejected. AIOS writes these files only after tests and FDE finalization.
+Absolute paths and `..` traversal are rejected. AIOS writes these files when the owner activates the training snapshot.
 
 ## Tools and policies
 
-Do not claim a tool is authorized merely because the user requested it. AIOS downgrades unverified tool availability to `NEEDS_FDE`.
+Do not claim a tool is connected merely because the user requested it. AIOS marks unverified tool availability as `NEEDS_SETUP`.
 
 ```json
 {
   "tools": [
-    {"name": "Gmail MCP", "purpose": "讀取付款通知", "status": "NEEDS_FDE"}
+    {"name": "Gmail MCP", "purpose": "讀取付款通知", "status": "NEEDS_SETUP"}
   ],
   "policies": {
     "allowed": ["讀取使用者提供的測試資料", "產生可覆核草稿"],
@@ -114,7 +117,7 @@ Use only these step types: `DO`, `TOOL`, `AGENT`, `CONDITION`, `NOTIFY`, `COMPUT
 }
 ```
 
-Imported workflows remain disabled after finalization until an FDE separately checks triggers and connections.
+Imported workflows remain disabled until the user completes trigger and connection setup.
 
 ## Tests and understanding
 
@@ -142,7 +145,7 @@ Each test needs concrete input and an observable expected result. Include positi
     "confidence": 80
   },
   "userSummary": "我已加入一對多的人工確認規則與測試。",
-  "fdeSummary": "新增模糊配對 guardrail；Gmail 與 ERP 連線仍需 FDE 驗證。"
+  "fdeSummary": "相容欄位：新增模糊配對 guardrail；Gmail 與 ERP 連線仍需使用者設定。"
 }
 ```
 

@@ -35,9 +35,7 @@ export function UnderstandingList({
 }
 
 /**
- * Skill draft card: shows understanding + role-gated actions.
- * - FDE: confirm + attach (trainer APIs)
- * - MEMBER: propose only (never auto-confirm)
+ * Skill draft card: the employee owner can directly confirm and attach it.
  */
 export function SkillDraftCard({
   skillId,
@@ -45,27 +43,21 @@ export function SkillDraftCard({
   reviewStatus,
   understanding,
   statusNote,
-  isFde,
   confirming,
-  proposing,
   onConfirm,
-  onPropose,
 }: {
   skillId: string;
   name: string;
   reviewStatus: string;
   understanding: SkillUnderstanding | null;
   statusNote?: string;
-  isFde: boolean;
   confirming?: boolean;
-  proposing?: boolean;
   onConfirm: (skillId: string) => void;
-  onPropose: (skillId: string, name: string) => void;
 }) {
   const u = understanding;
   const gaps = deriveDraftGaps(u);
-  const nextAction = draftNextAction({ reviewStatus, isFde, statusNote });
-  const { showConfirm, showPropose } = draftCardActions({ isFde, reviewStatus, statusNote });
+  const nextAction = draftNextAction({ reviewStatus, statusNote });
+  const { showConfirm } = draftCardActions({ reviewStatus, statusNote });
 
   return (
     <div className="card space-y-3 border-brand/20 p-4">
@@ -113,7 +105,7 @@ export function SkillDraftCard({
         </div>
       )}
       {statusNote && <p className="text-sm text-emerald-400">{statusNote}</p>}
-      {(showConfirm || showPropose) && (
+      {showConfirm && (
         <div className="flex justify-end gap-2 pt-1">
           {showConfirm && (
             <button
@@ -124,17 +116,6 @@ export function SkillDraftCard({
             >
               {confirming && <Spinner className="border-white/40 border-t-white" />}
               ✅ 確認掛載
-            </button>
-          )}
-          {showPropose && (
-            <button
-              type="button"
-              className="btn-primary"
-              disabled={proposing}
-              onClick={() => onPropose(skillId, name)}
-            >
-              {proposing && <Spinner className="border-white/40 border-t-white" />}
-              送出提案
             </button>
           )}
         </div>

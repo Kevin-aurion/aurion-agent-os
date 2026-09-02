@@ -2,7 +2,6 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, type ReactNode } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import {
   Users,
   Wrench,
@@ -13,20 +12,16 @@ import {
   Wifi,
   WifiOff,
   Network,
-  FileCheck2,
   MessageSquare,
-  Shield,
-  ArrowLeftRight,
   GitBranch,
   BookOpen,
 } from 'lucide-react';
 import { useAuth, isFdeRole } from '@/lib/auth';
 import { useAwp } from '@/lib/awp';
-import { API } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { Spinner } from './ui';
 
-/** FDE management routes — MEMBER must not remain here (frontend gate only). */
+/** Advanced administration routes — MEMBER must not remain here. */
 const ADMIN_PREFIXES = [
   '/admin',
   '/employees',
@@ -35,30 +30,23 @@ const ADMIN_PREFIXES = [
   '/workflows',
   '/settings',
   '/audit',
-  '/proposals',
 ] as const;
 
-/** FDE admin nav (S1-4b). Pages under /admin/* and /org remain; they are not listed here. */
+/** Advanced administration nav. Review/FDE surfaces are intentionally absent. */
 const ADMIN_NAV: Array<{
   href: string;
   label: string;
   icon: typeof Users;
-  pending?: boolean;
 }> = [
   { href: '/work', label: '工作台', icon: MessageSquare },
   { href: '/employees', label: '員工', icon: Users },
   { href: '/skills', label: '技能', icon: Wrench },
   { href: '/workflows', label: '工作流', icon: Workflow },
-  { href: '/agent-builds', label: '建置治理', icon: GitBranch },
-  { href: '/proposals', label: '審核', icon: FileCheck2, pending: true },
+  { href: '/agent-builds', label: '訓練紀錄', icon: GitBranch },
   { href: '/audit', label: '稽核', icon: ScrollText },
   { href: '/settings', label: '設定', icon: Plug },
   { href: '/org', label: '組織', icon: Network },
 ];
-
-interface PendingProposalRow {
-  id: string;
-}
 
 export function isAdminRoute(pathname: string): boolean {
   return ADMIN_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
@@ -81,15 +69,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const onAdmin = isAdminRoute(pathname);
   const onWork = isWorkRoute(pathname);
   const onAgentBuilds = isAgentBuildsRoute(pathname);
-
-  // Shared key with /proposals page — badge reuses cache when available.
-  const proposalsQ = useQuery({
-    queryKey: ['proposals'],
-    queryFn: () => API.get<PendingProposalRow[]>('/api/proposals'),
-    enabled: !!user && isFde && onAdmin,
-    staleTime: 30_000,
-  });
-  const pendingCount = isFde && Array.isArray(proposalsQ.data) ? proposalsQ.data.length : null;
 
   useEffect(() => {
     if (!loading && !user) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
@@ -187,17 +166,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                 工作台
               </span>
             </div>
-            {isFde && (
-              <Link
-                href="/admin"
-                className="btn-ghost ml-2 h-8 gap-1.5 px-2.5 text-xs"
-                title="切換到 FDE 管理中心"
-              >
-                <Shield className="h-3.5 w-3.5" />
-                管理中心
-                <ArrowLeftRight className="h-3 w-3 opacity-60" />
-              </Link>
-            )}
           </div>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-1.5 text-xs text-muted">
@@ -222,7 +190,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     );
   }
 
-  // FDE admin surface (and any non-work authenticated page).
+  // Advanced administration surface (and any non-work authenticated page).
   return (
     <div className="flex h-screen">
       <aside className="flex w-64 flex-col border-r border-border bg-panel">
@@ -230,7 +198,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <div className="grid h-8 w-8 place-items-center rounded-lg bg-brand text-white font-bold">A</div>
           <div>
             <div className="text-sm font-semibold leading-tight">AIOS</div>
-            <div className="text-[11px] text-muted">FDE 管理中心</div>
+            <div className="text-[11px] text-muted">系統設定</div>
           </div>
         </div>
         <nav className="flex-1 space-y-1 px-3">
@@ -247,9 +215,6 @@ export function AppShell({ children }: { children: ReactNode }) {
               >
                 <n.icon className="h-4 w-4" />
                 <span className="flex-1">{n.label}</span>
-                {n.pending && pendingCount !== null && pendingCount > 0 && (
-                  <span className="badge bg-brand/15 text-brand tabular-nums">{pendingCount}</span>
-                )}
               </Link>
             );
           })}

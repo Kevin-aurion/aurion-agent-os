@@ -4,11 +4,12 @@
 // worker compiles the latest redacted understanding into a non-effective
 // Harness snapshot (identity / skills / memory / tools / policies / tests).
 // These snapshots are review evidence only: they never mutate live Agent or
-// Skill rows and therefore never bypass the existing FDE gates.
+// Skill rows until the owner explicitly activates the latest training snapshot.
 import { ulid } from 'ulid';
 import type { AgentBuildIteration, AgentBuildIterationStatus } from '@prisma/client';
 import { prisma } from './db.js';
 import { audit } from './audit.js';
+import { excludeUnreleasedBuilderAgentsWhere } from './builderrelease.js';
 import { deepRedactSecrets } from '../memory/deepredact.js';
 import { runClaude } from '../engine/claude.js';
 import { looseParseJson } from '../engine/draft.js';
@@ -61,11 +62,12 @@ export type HarnessSnapshot = {
   identity: {
     name: string;
     purpose: string;
+    department?: string;
     workingStyle: string[];
   };
   /** Optional full markdown authored by an external Builder such as Claude. */
   agentMarkdown?: string;
-  /** Optional companion operating notes; remains draft evidence until FDE promotion. */
+  /** Optional companion operating notes; remains draft evidence until owner activation. */
   claudeMarkdown?: string;
   skills: Array<{
     name: string;
@@ -91,7 +93,7 @@ export type HarnessSnapshot = {
   tools: Array<{
     name: string;
     purpose: string;
-    status: 'AVAILABLE' | 'NEEDS_FDE' | 'NOT_NEEDED';
+    status: 'AVAILABLE' | 'NEEDS_SETUP' | 'NOT_NEEDED';
   }>;
   policies: {
     allowed: string[];
@@ -119,7 +121,7 @@ export type HarnessSnapshot = {
     }>;
   }>;
   provenance?: {
-    source: 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CHATGPT' | 'CURSOR' | 'OTHER';
+    source: 'CLAUDE_DESKTOP' | 'CLAUDE_CODE' | 'CODEX' | 'CHATGPT' | 'CURSOR' | 'OTHER';
     externalEventId: string;
     syncedAt: string;
   };
@@ -252,9 +254,10 @@ function harnessSnapshot(value: unknown, fallback: HarnessSnapshot): HarnessSnap
   const tools = Array.isArray(obj.tools)
     ? obj.tools.slice(0, 16).map((item) => {
         const row = asObject(item);
-        const status = ['AVAILABLE', 'NEEDS_FDE', 'NOT_NEEDED'].includes(String(row?.status))
-          ? String(row?.status) as 'AVAILABLE' | 'NEEDS_FDE' | 'NOT_NEEDED'
-          : 'NEEDS_FDE';
+        const rawStatus = String(row?.status);
+        const status = rawStatus === 'AVAILABLE' || rawStatus === 'NOT_NEEDED'
+          ? rawStatus as 'AVAILABLE' | 'NOT_NEEDED'
+          : 'NEEDS_SETUP' as const;
         return {
           name: String(row?.name ?? '').trim().slice(0, 160),
           purpose: String(row?.purpose ?? '').trim().slice(0, 500),
@@ -286,6 +289,7 @@ function harnessSnapshot(value: unknown, fallback: HarnessSnapshot): HarnessSnap
     identity: {
       name: String(identity?.name ?? fallback.identity.name).trim().slice(0, 120),
       purpose: String(identity?.purpose ?? fallback.identity.purpose).trim().slice(0, 1200),
+      department: String(identity?.department ?? fallback.identity.department ?? '').trim().slice(0, 80) || undefined,
       workingStyle: strings(identity?.workingStyle, 12, 500),
     },
     skills,
@@ -453,7 +457,7 @@ export function fallbackPayload(session: {
     policies: {
       allowed: ['讀取使用者明確提供的資訊', '產生草稿與分析'],
       requiresApproval: ['寄送、寫入外部系統與不可逆操作'],
-      forbidden: ['未經 FDE 核准即啟用新能力'],
+      forbidden: ['未經使用者連線或授權即宣稱外部工具可用'],
     },
     testIdeas: [],
     testInputRequirements: inferTestInputRequirements({
@@ -532,9 +536,10 @@ export function fallbackPayload(session: {
 }
 
 async function catalogContext(userId: string) {
+  const unreleasedWhere = await excludeUnreleasedBuilderAgentsWhere();
   const [agents, skills, accounts, mcp] = await Promise.all([
     prisma.agent.findMany({
-      where: { deletedAt: null, systemManaged: false },
+      where: { deletedAt: null, systemManaged: false, ...unreleasedWhere },
       select: { name: true, description: true, status: true },
       take: 30,
     }),
@@ -566,8 +571,11 @@ function validatePayload(raw: unknown, fallback: EvolutionPayload): EvolutionPay
   const userSummary = typeof obj.userSummary === 'string' && obj.userSummary.trim()
     ? obj.userSummary.trim().slice(0, 1200)
     : fallback.userSummary;
-  const fdeSummary = typeof obj.fdeSummary === 'string' && obj.fdeSummary.trim()
-    ? obj.fdeSummary.trim().slice(0, 3000)
+  const maintenanceSummary = typeof obj.maintenanceSummary === 'string'
+    ? obj.maintenanceSummary
+    : obj.fdeSummary;
+  const fdeSummary = typeof maintenanceSummary === 'string' && maintenanceSummary.trim()
+    ? maintenanceSummary.trim().slice(0, 3000)
     : fallback.fdeSummary;
   return deepRedactSecrets({
     understanding: decisionGraph(obj.understanding, fallback.understanding),

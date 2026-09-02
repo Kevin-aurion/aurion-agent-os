@@ -1,0 +1,2 @@
+Aurion AIOS Windows 安裝／更新工具 v4
+可從 ZIP 預覽自動補齊完整套件；沒有 Claude Code 或 Codex 時，會先安裝官方 Codex CLI。

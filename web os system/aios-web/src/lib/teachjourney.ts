@@ -87,19 +87,12 @@ export function deriveDraftGaps(u: SkillUnderstanding | null): string[] {
  */
 export function draftNextAction(input: {
   reviewStatus: string;
-  isFde: boolean;
   statusNote?: string;
 }): string {
   if (input.reviewStatus === 'CONFIRMED') {
     return '已確認並掛載，可以開始交代工作';
   }
-  if (input.statusNote?.includes('提案')) {
-    return '提案已送出，等待訓練師審核後才會生效';
-  }
-  if (input.isFde) {
-    return '由你確認掛載，或退回請對方補充';
-  }
-  return '送出提案，交給訓練師審核後才會生效';
+  return '由員工擁有者確認掛載，或繼續補充訓練內容';
 }
 
 /**
@@ -107,17 +100,13 @@ export function draftNextAction(input: {
  * showConfirm is only ever true for FDE; MEMBER is always false.
  */
 export function draftCardActions(input: {
-  isFde: boolean;
   reviewStatus: string;
   statusNote?: string;
 }): { showConfirm: boolean; showPropose: boolean } {
-  if (input.reviewStatus === 'CONFIRMED' || input.statusNote?.includes('提案')) {
+  if (input.reviewStatus === 'CONFIRMED') {
     return { showConfirm: false, showPropose: false };
   }
-  if (input.isFde) {
-    return { showConfirm: true, showPropose: false };
-  }
-  return { showConfirm: false, showPropose: true };
+  return { showConfirm: true, showPropose: false };
 }
 
 /**

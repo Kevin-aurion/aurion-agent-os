@@ -1,7 +1,7 @@
 # AGENTS.md — Aurion AIOS 交接文件（給 Codex / 任何協同 AI）
 
 > **這份是給「接手開發的 AI」看的權威現況文件**（Codex 讀 `AGENTS.md`，Claude 讀 `CLAUDE.md`；兩者內容以本檔為最新）。
-> 最後更新：2026-07-27。對應分支 `feat/agentic-os-p0-p1`；Agent Workbench Phase 1 目前在本機工作樹驗收中，尚未提交。
+> 最後更新：2026-08-30。現行分支 `main`。Agent Builder 採簡化直啟模式；歷史 FDE／測試狀態僅供資料相容。
 > 用語與領域模型見 [`CONTEXT.md`](CONTEXT.md)；架構決策見 [`docs/adr/`](docs/adr/)。
 
 ---
@@ -11,8 +11,8 @@
 1. **跨模型驗證閘不可弱化**：執行引擎 ≠ 驗證引擎，於 `compileManifest()` 載入時強制（`autoVerify` 取對面）；判決 oracle `isApproved()` 是 **fail-closed**（`REJECTED_RE` 先於 `APPROVED_RE`）。任何改動都要證明零回歸。
 2. **安全與成本是硬約束，不靠模型自覺**：限制與預算在**程式碼層攔截**（throw／拒絕），不是只在 prompt 寫「請不要」。判不準時一律**拒絕**（fail-closed）。
 3. **紅線 redactor 永遠生效**：任何記憶／技能／稽核內容落地前一律經 `redactSecrets()` 遮罩密鑰與個資，不受任何旗標影響。
-4. **技能永不自動確認**：新／改的 Skill 一律停在 `AWAITING_USER_CONFIRM`，只有 **FDE**（`TRAINER`/`OWNER`）人工確認才 `CONFIRMED` 並可掛載。
-5. **變更生效唯一路徑是 FDE**：操作者（`MEMBER`）只能**提案**（`ChangeProposal`），不能讓任何變更生效。
+4. **Agent Builder 是直接啟用的單一路徑**：session owner 可把 Builder 在同一 durable session 訓練出的 Agent 與 Builder-owned Skills 直接啟用；不經 FDE、Shadow 試教或測試閘。一般手動／錄製 Skill 仍維持既有確認規則。
+5. **不要把 Builder 直接啟用擴張成執行權限旁路**：Agent 建好後仍須遵守限制、預算、工具 allowlist、高風險 HITL 與帳號隔離；非 Builder 的治理變更仍走既有 `ChangeProposal`。
 
 **fail-closed vs fail-safe 的分工**（新增功能前先問自己是哪一種）：
 - **閘門類**（限制、預算、核准、路徑守門）→ **fail-closed**：出錯就拒絕。
@@ -188,7 +188,7 @@ temporal server start-dev               # 耐久執行用（loopback；未進 co
 | **越矩偵測** | 硬攔截→自動提案（去重、fail-safe）／語意越矩審查 | `faa89d3` |
 | **Codex 整合** | Computer Use MCP 橋接／錄製→技能（**委派 Codex 自產**） | `b5f7297` |
 | **前端** | 聊天式技能工廠（訓練 tab）＋語音轉錄／**FDE 提案審核頁** | `866d8cc` `0c5deee` |
-| **Agent Workbench Phase 1（未提交）** | `/work` 使用者工作台（Agent／Thread／交代工作／口述與錄製訓練）＋ `/admin` FDE 管理殼；MEMBER 訓練只產生待確認技能或提案；對話 REST 與 WebSocket 即時／重播皆依 user 隔離 | 本機工作樹 |
+| **Agent Workbench + Simple Builder（目前未提交）** | `/work` 使用者工作台；建立／再訓練一律續接 owner-scoped Builder session 並由 owner 直接啟用。Web／MCP／Claude Plugin 不顯示 FDE、Shadow 試教、Builder test 或錄製訓練入口；執行期安全閘維持。 | 本機工作樹 |
 
 ---
 

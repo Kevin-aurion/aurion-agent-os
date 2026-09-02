@@ -14,7 +14,6 @@ import {
   Paperclip,
   Plus,
   Send,
-  Shield,
   Sparkles,
   Square,
   Video,
@@ -96,6 +95,7 @@ function WorkbenchInner() {
   const [activeConvId, setActiveConvId] = useState<string | null>(convFromUrl);
   /** Agent Builder surface — independent of selecting an existing Agent. Left-rail only. */
   const [builderOpen, setBuilderOpen] = useState(modeFromUrl === 'builder');
+  const [builderTargetAgentId, setBuilderTargetAgentId] = useState<string | null>(null);
   /** Live builder session for right-rail checklist (no technical settings). */
   const [builderSession, setBuilderSession] = useState<BuilderSession | null>(null);
   const [draft, setDraft] = useState('');
@@ -117,7 +117,6 @@ function WorkbenchInner() {
   const [teachSending, setTeachSending] = useState(false);
   const [teachError, setTeachError] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  const [proposingId, setProposingId] = useState<string | null>(null);
   const [recordingWanted, setRecordingWanted] = useState(false);
   const [recBusy, setRecBusy] = useState(false);
   const [recordingConsentOpen, setRecordingConsentOpen] = useState(false);
@@ -503,7 +502,8 @@ function WorkbenchInner() {
     return () => window.removeEventListener('keydown', onKey);
   }, [leftDrawerOpen, rightDrawerOpen]);
 
-  function openBuilder() {
+  function openBuilder(agentId?: string | null) {
+    setBuilderTargetAgentId(agentId ?? null);
     setBuilderOpen(true);
     setSendError(null);
     setTeachError(null);
@@ -513,6 +513,7 @@ function WorkbenchInner() {
   function closeBuilder() {
     setBuilderOpen(false);
     setBuilderSession(null);
+    setBuilderTargetAgentId(null);
     syncUrl({ builder: false });
   }
 
@@ -685,7 +686,7 @@ function WorkbenchInner() {
   }
 
   async function confirmSkill(skillId: string) {
-    if (!selectedAgentId || !isFde) return;
+    if (!selectedAgentId) return;
     setConfirmingId(skillId);
     setTeachError(null);
     try {
@@ -714,36 +715,6 @@ function WorkbenchInner() {
       setTeachError(e instanceof Error ? e.message : String(e));
     } finally {
       setConfirmingId(null);
-    }
-  }
-
-  async function proposeSkill(skillId: string, name: string) {
-    if (!selectedAgentId) return;
-    setProposingId(skillId);
-    setTeachError(null);
-    try {
-      await API.post(`/api/agents/${selectedAgentId}/proposals`, {
-        targetType: 'SKILL',
-        targetId: skillId,
-        proposedChange: {
-          action: 'confirm_skill',
-          skillId,
-          name,
-          note: '操作者從工作台對話送出：請 FDE 確認並掛載此技能草稿',
-        },
-        severity: 'medium',
-      });
-      setTeachMessages((prev) =>
-        prev.map((m) =>
-          m.kind === 'draft' && m.skillId === skillId
-            ? { ...m, statusNote: '已送出提案，等待 FDE 審核' }
-            : m,
-        ),
-      );
-    } catch (e) {
-      setTeachError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setProposingId(null);
     }
   }
 
@@ -862,11 +833,31 @@ function WorkbenchInner() {
   const busy = busyWork || teachSending;
   const showSessionRail = !!workSession.runId;
 
+  async function startSelectedAgentTraining(content: string) {
+    if (!selectedAgentId || teachSending) return;
+    setTeachSending(true);
+    setTeachError(null);
+    try {
+      const result = await API.post<{ session: BuilderSession }>('/api/agent-builder/sessions', {
+        message: content,
+        agentId: selectedAgentId,
+      });
+      window.localStorage.setItem('aios.agentBuilderSessionId', result.session.id);
+      setDraft('');
+      openBuilder(selectedAgentId);
+      setBuilderSession(result.session);
+    } catch (error) {
+      setTeachError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setTeachSending(false);
+    }
+  }
+
   function submitComposer(asTrain: boolean) {
     const content = draft.trim();
     if (!content || !selectedAgentId || busy) return;
     if (asTrain || isTrainIntent(content) || isFlowsIntent(content)) {
-      void sendTrainMessage(content);
+      void startSelectedAgentTraining(content);
       return;
     }
     submitWork(content);
@@ -911,6 +902,26 @@ function WorkbenchInner() {
             )}
             新任務
           </button>
+          <div className="grid grid-cols-2 gap-2">
+            <a
+              href="https://aurion-aios-guides.pages.dev/guide.html"
+              target="_blank"
+              rel="noreferrer"
+              className="btn-ghost justify-center border border-border text-xs"
+            >
+              <GraduationCap className="h-3.5 w-3.5" />
+              使用教學
+            </a>
+            <a
+              href="https://aurion-aios-guides.pages.dev/"
+              target="_blank"
+              rel="noreferrer"
+              className="btn-ghost justify-center border border-border text-xs"
+            >
+              <List className="h-3.5 w-3.5" />
+              驗收報告
+            </a>
+          </div>
         </div>
 
         <div className="border-b border-border px-3 py-2">
@@ -928,7 +939,7 @@ function WorkbenchInner() {
             </p>
           )}
           {!agentsQ.isLoading && agents.length === 0 && (
-            <p className="px-1 text-xs text-muted">尚無 Agent。請 FDE 在管理中心建立員工。</p>
+            <p className="px-1 text-xs text-muted">尚無 Agent。請點上方「建立 AI 員工」開始訓練。</p>
           )}
           <div className="max-h-40 space-y-0.5 overflow-y-auto">
             {agents.map((a) => (
@@ -1082,21 +1093,12 @@ function WorkbenchInner() {
             <div className="flex-1 space-y-3 overflow-y-auto p-4 text-xs text-muted">
               <div className="text-[11px] font-medium uppercase tracking-wide">工作台提示</div>
               <ul className="list-disc space-y-1.5 pl-4 leading-relaxed">
-                <li>用「建立 AI 員工」從業務目標訪談、規劃、試跑到啟用。</li>
+                <li>用「建立 AI 員工」從業務目標開始訪談；第一份完整內容會自動變成可使用的員工。</li>
                 <li>在同一個對話裡交代工作；回覆會即時出現。</li>
-                <li>以「教你」開頭、問「有哪些流程？」、上傳或錄製，會產生技能草稿。</li>
-                <li>技能不會自動確認；MEMBER 只能送提案／送交 FDE。</li>
+                <li>點「訓練這位員工」或以「教你」開頭，會續接這位員工原本的訓練 session。</li>
+                <li>不需要另外啟用、送審或試跑；可以先用，再繼續教同一位員工。</li>
                 <li>不會顯示引擎、工作流編排等技術設定。</li>
               </ul>
-              {isFde && (
-                <Link
-                  href="/admin"
-                  className="btn-ghost mt-2 w-full justify-center border border-border text-xs"
-                >
-                  <Shield className="h-3.5 w-3.5" />
-                  開啟 FDE 管理中心
-                </Link>
-              )}
               {isFde && selectedAgentId && (
                 <Link
                   href={`/employees/${selectedAgentId}`}
@@ -1153,6 +1155,7 @@ function WorkbenchInner() {
           {builderOpen ? (
             <AgentBuilderPanel
               onClose={() => closeBuilder()}
+              agentId={builderTargetAgentId}
               onSessionChange={setBuilderSession}
               onActivated={(agentId) => {
                 void qc.invalidateQueries({ queryKey: ['agents'] });
@@ -1161,6 +1164,7 @@ function WorkbenchInner() {
                   setSelectedAgentId(agentId);
                   setBuilderOpen(false);
                   setBuilderSession(null);
+                  setBuilderTargetAgentId(null);
                   setActiveConvId(null);
                   setWorkSession(createWorkSession(null));
                   syncUrl({ agent: agentId, conversation: null, builder: false });
@@ -1211,7 +1215,7 @@ function WorkbenchInner() {
           <div className="border-b border-border px-4 py-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-xs text-muted">
-                交代工作會立即執行。以「教你」開頭、問流程、上傳或錄製，會產生技能草稿。
+                交代工作會立即執行；需要教新流程時，請進入同一套對話式訓練。
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -1222,42 +1226,22 @@ function WorkbenchInner() {
                 >
                   <List className="h-3.5 w-3.5" /> 有哪些流程？
                 </button>
-                {!recordingOn ? (
-                  <button
-                    type="button"
-                    className="btn-ghost text-xs"
-                    disabled={!selectedAgentId || recBusy || teachSending}
-                    onClick={() => setRecordingConsentOpen(true)}
-                  >
-                    {recBusy ? (
-                      <Spinner className="h-3.5 w-3.5" />
-                    ) : (
-                      <Video className="h-3.5 w-3.5" />
-                    )}
-                    錄製操作示範
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn-primary bg-rose-600 text-xs hover:bg-rose-500"
-                    disabled={recBusy}
-                    onClick={() => void stopRecordingAndImport()}
-                  >
-                    {recBusy ? (
-                      <Spinner className="border-white/40 border-t-white" />
-                    ) : (
-                      <Square className="h-3 w-3" />
-                    )}
-                    結束錄製
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="btn-ghost text-xs"
+                  disabled={!selectedAgentId || teachSending}
+                  onClick={() => openBuilder(selectedAgentId)}
+                >
+                  <GraduationCap className="h-3.5 w-3.5" />
+                  訓練這位員工
+                </button>
               </div>
             </div>
-            {recordingConsentOpen && !recordingOn && (
+            {false && recordingConsentOpen && !recordingOn && (
               <div className="mt-3 rounded-xl border border-brand/35 bg-brand/10 p-3 text-sm">
                 <div className="font-semibold">開始錄製前，先確認這次要教什麼</div>
                 <p className="mt-1 text-xs leading-5 text-muted">
-                  系統會擷取這台電腦上的畫面與操作事件。請先關閉含密碼、驗證碼、個資或帳號資訊的視窗；完成後只會建立技能草稿，仍需 FDE 審核才會生效。
+                  系統會擷取這台電腦上的畫面與操作事件。請先關閉含密碼、驗證碼、個資或帳號資訊的視窗；完成後會建立技能草稿，由你確認掛載。
                 </p>
                 <textarea
                   className="input mt-3 min-h-[72px] w-full resize-y text-sm"
@@ -1288,7 +1272,7 @@ function WorkbenchInner() {
                 </div>
               </div>
             )}
-            {recordingOn && (
+            {false && recordingOn && (
               <div className="mt-2 flex items-center gap-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300">
                 <span className="relative flex h-2 w-2">
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
@@ -1297,7 +1281,7 @@ function WorkbenchInner() {
                 正在錄製這台電腦的操作 — 單次上限 30 分鐘
               </div>
             )}
-            {recSessionStatus === 'INTERRUPTED' && !interruptedDismissed && (
+            {false && recSessionStatus === 'INTERRUPTED' && !interruptedDismissed && (
               <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200">
                 <span>上次錄製因伺服器重啟而中斷，請重新開始錄製。</span>
                 <button
@@ -1312,12 +1296,12 @@ function WorkbenchInner() {
                 </button>
               </div>
             )}
-            {recSessionStatus === 'COMPILING' && (
+            {false && recSessionStatus === 'COMPILING' && (
               <div className="mt-2 rounded-md border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs text-sky-200">
                 正在把錄製編譯為技能草稿…
               </div>
             )}
-            {recSessionStatus === 'FAILED' && (
+            {false && recSessionStatus === 'FAILED' && (
               <div className="mt-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-1.5 text-xs text-rose-300">
                 錄製編譯失敗，請重試。
               </div>
@@ -1503,11 +1487,8 @@ function WorkbenchInner() {
                   reviewStatus={m.reviewStatus}
                   understanding={m.understanding}
                   statusNote={m.statusNote}
-                  isFde={isFde}
                   confirming={confirmingId === m.skillId}
-                  proposing={proposingId === m.skillId}
                   onConfirm={(id) => void confirmSkill(id)}
-                  onPropose={(id, name) => void proposeSkill(id, name)}
                 />
               );
             })}
@@ -1529,7 +1510,7 @@ function WorkbenchInner() {
                 className="input min-h-[44px] max-h-32 flex-1 resize-y"
                 placeholder={
                   selectedAgentId
-                    ? `告訴 ${selectedAgent?.name ?? 'Agent'} 要做什麼，或以「教你」開頭訓練技能…`
+                    ? `告訴 ${selectedAgent?.name ?? 'Agent'} 要做什麼；以「教你」開頭會切到對話式訓練…`
                     : '請先選擇 Agent'
                 }
                 value={draft}
@@ -1549,7 +1530,7 @@ function WorkbenchInner() {
                   setDraft((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
                 }}
               />
-              <input
+              {false && <input
                 ref={teachFileInputRef}
                 type="file"
                 className="hidden"
@@ -1559,8 +1540,8 @@ function WorkbenchInner() {
                   e.target.value = '';
                   void handleTeachUpload(file);
                 }}
-              />
-              <button
+              />}
+              {false && <button
                 type="button"
                 className="btn-ghost h-9 shrink-0"
                 title="上傳教學文件"
@@ -1568,8 +1549,8 @@ function WorkbenchInner() {
                 onClick={() => teachFileInputRef.current?.click()}
               >
                 <Paperclip className="h-4 w-4" />
-              </button>
-              <button
+              </button>}
+              {false && <button
                 type="button"
                 className="btn-ghost h-9 shrink-0"
                 title="教它這件事（產生技能草稿，不會自動確認）"
@@ -1578,7 +1559,7 @@ function WorkbenchInner() {
               >
                 <GraduationCap className="h-4 w-4" />
                 <span className="hidden sm:inline">{draftSkillId ? '補充草稿' : '教它'}</span>
-              </button>
+              </button>}
               <button
                 type="submit"
                 className="btn-primary h-9 shrink-0"
@@ -1591,11 +1572,6 @@ function WorkbenchInner() {
                 )}
               </button>
             </form>
-            {!isFde && (
-              <p className="mt-2 text-[11px] text-muted">
-                你是操作者：技能草稿只能送出提案，由 FDE 確認後才會掛載。
-              </p>
-            )}
           </div>
             </>
           )}

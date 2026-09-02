@@ -176,20 +176,20 @@ const originalQueue = process.env.AIOS_BUILDER_EVOLUTION_QUEUE;
 process.env.AIOS_BUILDER_EVOLUTION_QUEUE = 'off';
 useRoots('_default');
 
-await test('source: finalizeBuilderSession and abandonBuilderSession enqueue self-reflection', () => {
+await test('source: direct activation and abandonBuilderSession enqueue self-reflection', () => {
   const src = fs.readFileSync(AGENTBUILDER_SRC, 'utf8');
   assert.match(src, /async function enqueueBuilderSelfReflectionSafe/);
   assert.match(src, /await enqueueBuilderSelfReflectionSafe\(row\.id\)/);
   const abandonIdx = src.indexOf('export async function abandonBuilderSession');
-  const finalizeIdx = src.indexOf('export async function finalizeBuilderSession');
+  const activateIdx = src.indexOf('async function activateBuilderArtifacts');
   const abandonCall = src.indexOf('enqueueBuilderSelfReflectionSafe(row.id)', abandonIdx);
-  const finalizeCall = src.indexOf('enqueueBuilderSelfReflectionSafe(row.id)', finalizeIdx);
+  const activateCall = src.indexOf('enqueueBuilderSelfReflectionSafe(row.id)', activateIdx);
   assert.ok(abandonIdx >= 0 && abandonCall > abandonIdx, 'abandon must enqueue after success');
-  assert.ok(finalizeIdx >= 0 && finalizeCall > finalizeIdx, 'finalize must enqueue after success');
-  assert.notEqual(abandonCall, finalizeCall);
+  assert.ok(activateIdx >= 0 && activateCall > activateIdx, 'activation must enqueue after success');
+  assert.notEqual(abandonCall, activateCall);
 });
 
-await test('(a) finalize/abandon 後產生 PENDING 提案且 dedupeKey 去重生效', async () => {
+await test('(a) activation/abandon 後產生 PENDING 提案且 dedupeKey 去重生效', async () => {
   const dir = useRoots('a-dedupe');
   const item = candidate({ dedupeKey: `dedupe-${ulid()}` });
   setBuilderLessonRunAgentForTest(mockRunAgent({ candidates: [item] }));
